@@ -1110,7 +1110,7 @@ export default function App() {
   const generateVencidaMessage = (nomeCompleto: string, p: any, diasAtraso: number, valorAtualizado: number) => {
     const nome = nomeCompleto ? nomeCompleto.split(" ")[0] : "Cliente";
     const dataStrVencimento = p.dataVencimento ? p.dataVencimento.split('T')[0].split('-').reverse().join('/') : "";
-    const valor40Porcento = formatCurrency(p.valor * 0.4);
+    const valor40Porcento = formatCurrency(valorAtualizado * 0.4);
 
     let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que sua Parcela ${p.numero} está VENCIDA desde ${dataStrVencimento}.\nNossa política de trabalho, permite congelar seus juros diários por até 7 dias, para isso precisa efetuar o pagamento de 40% do valor da parcela, que hoje é ${valor40Porcento}. Porém, se vencer esse prazo de 7 dias, seus juros serão atualizados e será abatido o que foi enviado.\n\n`;
 
