@@ -1,0 +1,5 @@
+{
+  "name": "GM-Empréstimo",
+  "description": "Formulário completo para cadastro de clientes com busca automática de CEP.",
+  "requestFramePermissions": []
+}
