@@ -1109,11 +1109,30 @@ export default function App() {
     return dateString;
   };
 
-  const generateVencidaMessage = (nomeCompleto: string, p: any, diasAtraso: number, valorAtualizado: number) => {
+  const generateVencidaMessage = (nomeCompleto: string, p: any, diasAtraso: number, valorAtualizado: number, prazo?: string) => {
     const nome = nomeCompleto ? nomeCompleto.split(" ")[0] : "Cliente";
     const dataStrVencimento = p.dataVencimento ? p.dataVencimento.split('T')[0].split('-').reverse().join('/') : "";
-    const valor40Porcento = formatCurrency(valorAtualizado * 0.4);
 
+    if (prazo === "abater") {
+      let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que hoje é dia de abater parte/ou total da sua dívida que está VENCIDA desde ${dataStrVencimento}.\n`;
+      mensagem += `O valor restante, sua dívida vencida há (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.\n\n`;
+
+      if (p.abatimentos && p.abatimentos.length > 0) {
+        mensagem += `Constam os seguintes pagamentos dessa dívida:\n\n`;
+        p.abatimentos.forEach((a: any) => {
+          const dataStr = a.data ? a.data.split('-').reverse().join('/') : "";
+          mensagem += `Dia: [${dataStr}] valor: [${formatCurrency(a.valor)}]\n`;
+        });
+        mensagem += `\nRestando ainda o valor: [${formatCurrency(valorAtualizado)}].\n`;
+      } else {
+        mensagem += `Restando ainda o valor: [${formatCurrency(valorAtualizado)}].\n`;
+      }
+      
+      mensagem += `Por favor, regularize o quanto antes.\n`;
+      return mensagem;
+    }
+
+    const valor40Porcento = formatCurrency(valorAtualizado * 0.4);
     let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que sua Parcela ${p.numero} está VENCIDA desde ${dataStrVencimento}.\nNossa política de trabalho, permite congelar seus juros diários por até 7 dias, para isso precisa efetuar o pagamento de 40% do valor da parcela, que hoje é ${valor40Porcento}. Porém, se vencer esse prazo de 7 dias, seus juros serão atualizados e será abatido o que foi enviado.\n\n`;
 
     if (p.abatimentos && p.abatimentos.length > 0) {
@@ -1134,6 +1153,7 @@ export default function App() {
     } else {
       mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.\n`;
     }
+
     mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
     
     return mensagem;
@@ -6900,7 +6920,7 @@ export default function App() {
                                         {isVencida && !isEditing && (
                                           <div className="mt-3 pt-3 border-t border-red-200 print:hidden">
                                             <a
-                                              href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado))}`}
+                                              href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado, sim.prazo))}`}
                                               target="_blank"
                                               rel="noopener noreferrer"
                                               className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -6948,7 +6968,7 @@ export default function App() {
                                       {addingParcela === simIndex ? (
                                         <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                                           <h5 className="font-semibold text-slate-700 mb-2">
-                                            Adicionar Nova Parcela
+                                            Adicionar Lembrete de Pagamento
                                           </h5>
                                           <div className="grid grid-cols-2 gap-2 mb-3">
                                             <div>
@@ -6999,7 +7019,7 @@ export default function App() {
                                               onClick={() => handleAddParcela(simIndex)}
                                               className="px-3 py-1 text-sm bg-yellow-500 text-white hover:bg-yellow-600 rounded"
                                             >
-                                              Salvar Parcela
+                                              Salvar Lembrete
                                             </button>
                                           </div>
                                         </div>
@@ -7009,7 +7029,7 @@ export default function App() {
                                           className="flex items-center gap-2 text-sm text-yellow-600 hover:text-yellow-700 font-medium"
                                         >
                                           <Plus size={16} />
-                                          Adicionar Parcela (Restante)
+                                          Adicionar Lembrete de Pagamento
                                         </button>
                                       )}
                                     </div>
@@ -7587,7 +7607,7 @@ export default function App() {
                                                   valorAtualizado -
                                                     abatimentosTotal,
                                                 );
-                                                return generateVencidaMessage(p.clientName, p, diasAtraso, valorAtualizado);
+                                                return generateVencidaMessage(p.clientName, p, diasAtraso, valorAtualizado, p.prazo);
                                               }
                                               return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo lembra que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vencerá em ${formatDate(p.dataVencimento)}.`;
                                             })(),
