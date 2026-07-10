@@ -372,6 +372,8 @@ export default function App() {
     parcelaIndex: number;
   } | null>(null);
   const [newAbatimento, setNewAbatimento] = useState({ data: "", valor: "" });
+  const [addingParcela, setAddingParcela] = useState<number | null>(null);
+  const [newParcela, setNewParcela] = useState({ dataVencimento: "", valor: "" });
 
   const [editingTransaction, setEditingTransaction] = useState<any | null>(
     null,
@@ -1361,7 +1363,7 @@ export default function App() {
 
     setSimulacao((prev) => ({
       ...prev,
-      taxaJuros: prev.taxaJuros || adminSettings.taxaJuros,
+      taxaJuros: prev.prazo === "abater" ? "0" : (prev.taxaJuros || adminSettings.taxaJuros),
       taxaAtrasoDia: prev.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
       tipoTaxa: prev.tipoTaxa || adminSettings.tipoTaxa || "diaria",
       parcelas: novasParcelas,
@@ -1756,10 +1758,7 @@ export default function App() {
             dataBase.getTime() - vencimento.getTime(),
           );
           const diasAtraso = Math.round(diffTime / (1000 * 60 * 60 * 24));
-          const taxaDia =
-            parseFloat(sim.taxaAtrasoDia) ||
-            parseFloat(adminSettings.taxaAtrasoDia) ||
-            1;
+          const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || parseFloat(adminSettings.taxaAtrasoDia) || 1;
           valorAtualizado = p.valor + p.valor * (taxaDia / 100) * diasAtraso;
         }
         valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
@@ -3140,8 +3139,7 @@ export default function App() {
                                 diasAtraso = Math.round(
                                   diffTime / (1000 * 60 * 60 * 24),
                                 );
-                                const taxaDia =
-                                  parseFloat(sim.taxaAtrasoDia) || 1;
+                                const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || 1;
                                 valorAtualizado =
                                   p.valor +
                                   p.valor * (taxaDia / 100) * diasAtraso;
@@ -3551,6 +3549,80 @@ export default function App() {
     }
   };
 
+  const handleAddParcela = async (simIndex: number) => {
+    if (!newParcela.dataVencimento || !newParcela.valor) {
+      toast.error("Preencha a data e o valor da parcela.");
+      return;
+    }
+
+    const valorNum = parseFloat(newParcela.valor);
+    if (isNaN(valorNum) || valorNum <= 0) {
+      toast.error("Valor inválido.");
+      return;
+    }
+
+    if (!selectedClient) return;
+
+    try {
+      const res = await fetch(`/api/clients/${selectedClient.id}`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      if (!res.ok) throw new Error("Failed to fetch latest client data");
+      const latestClient = await res.json();
+
+      const clientSimulacoes =
+        latestClient.simulacoes ||
+        (latestClient.simulacao ? [latestClient.simulacao] : []);
+      const updatedSimulacoes = [...clientSimulacoes];
+      const novasParcelas = [...(updatedSimulacoes[simIndex].parcelas || [])];
+
+      const maxNumero = novasParcelas.length > 0 
+        ? Math.max(...novasParcelas.map(p => p.numero)) 
+        : 0;
+
+      novasParcelas.push({
+        numero: maxNumero + 1,
+        dataVencimento: newParcela.dataVencimento,
+        valor: valorNum,
+        paga: false,
+      });
+
+      updatedSimulacoes[simIndex].parcelas = novasParcelas;
+      
+      // Also update quantidade
+      updatedSimulacoes[simIndex].quantidade = novasParcelas.length.toString();
+
+      const updatedClient = {
+        ...latestClient,
+        simulacoes: updatedSimulacoes,
+      };
+
+      const updateRes = await fetch(`/api/clients/${selectedClient.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(updatedClient),
+      });
+
+      if (updateRes.ok) {
+        setClients((prev) =>
+          prev.map((c) => (c.id === selectedClient.id ? updatedClient : c)),
+        );
+        setSelectedClient(updatedClient);
+        setAddingParcela(null);
+        setNewParcela({ dataVencimento: "", valor: "" });
+        toast.success("Parcela adicionada com sucesso!");
+      } else {
+        throw new Error("Failed to update");
+      }
+    } catch (error) {
+      console.error("Error adding parcela:", error);
+      toast.error("Erro ao adicionar parcela");
+    }
+  };
+
   const handleRemoveAbatimento = async (
     simIndex: number,
     parcelaIndex: number,
@@ -3818,6 +3890,7 @@ export default function App() {
                 simIndex: sIdx,
                 parcelaIndex: pIdx,
                 taxaAtrasoDia: s.taxaAtrasoDia,
+                prazo: s.prazo,
               };
             }),
           ),
@@ -5862,7 +5935,8 @@ export default function App() {
                                     </label>
                                     <input
                                       type="number"
-                                      value={editSimData.taxaJuros}
+                                      value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
+                                      disabled={editSimData.prazo === "abater"}
                                       onChange={(e) =>
                                         setEditSimData({
                                           ...editSimData,
@@ -6048,8 +6122,7 @@ export default function App() {
                                       diasAtraso = Math.round(
                                         diffTime / (1000 * 60 * 60 * 24),
                                       );
-                                      const taxaDia =
-                                        parseFloat(sim.taxaAtrasoDia) || 1;
+                                      const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || 1;
                                       valorAtualizado =
                                         p.valor +
                                         p.valor * (taxaDia / 100) * diasAtraso;
@@ -6812,11 +6885,7 @@ export default function App() {
                                               </div>
                                               <div>
                                                 Taxa:{" "}
-                                                {diasAtraso *
-                                                  (parseFloat(
-                                                    sim.taxaAtrasoDia,
-                                                  ) || 1)}
-                                                %
+                                                {sim.prazo === "abater" ? 0 : diasAtraso * (parseFloat(sim.taxaAtrasoDia) || 1)}%
                                               </div>
                                               <div className="col-span-2 font-bold text-sm mt-1">
                                                 Valor Atualizado:{" "}
@@ -6874,6 +6943,77 @@ export default function App() {
                                       </div>
                                     );
                                   })}
+                                  {(sim.prazo === "abater") && (
+                                    <div className="mt-4 pt-4 border-t border-slate-200">
+                                      {addingParcela === simIndex ? (
+                                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                          <h5 className="font-semibold text-slate-700 mb-2">
+                                            Adicionar Nova Parcela
+                                          </h5>
+                                          <div className="grid grid-cols-2 gap-2 mb-3">
+                                            <div>
+                                              <label className="block text-xs font-medium text-slate-600 mb-1">
+                                                Data de Vencimento
+                                              </label>
+                                              <input
+                                                type="date"
+                                                value={newParcela.dataVencimento}
+                                                onChange={(e) =>
+                                                  setNewParcela({
+                                                    ...newParcela,
+                                                    dataVencimento: e.target.value,
+                                                  })
+                                                }
+                                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-xs font-medium text-slate-600 mb-1">
+                                                Valor (R$)
+                                              </label>
+                                              <input
+                                                type="number"
+                                                step="0.01"
+                                                value={newParcela.valor}
+                                                onChange={(e) =>
+                                                  setNewParcela({
+                                                    ...newParcela,
+                                                    valor: e.target.value,
+                                                  })
+                                                }
+                                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                              />
+                                            </div>
+                                          </div>
+                                          <div className="flex justify-end gap-2">
+                                            <button
+                                              onClick={() => {
+                                                setAddingParcela(null);
+                                                setNewParcela({ dataVencimento: "", valor: "" });
+                                              }}
+                                              className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-200 rounded"
+                                            >
+                                              Cancelar
+                                            </button>
+                                            <button
+                                              onClick={() => handleAddParcela(simIndex)}
+                                              className="px-3 py-1 text-sm bg-yellow-500 text-white hover:bg-yellow-600 rounded"
+                                            >
+                                              Salvar Parcela
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          onClick={() => setAddingParcela(simIndex)}
+                                          className="flex items-center gap-2 text-sm text-yellow-600 hover:text-yellow-700 font-medium"
+                                        >
+                                          <Plus size={16} />
+                                          Adicionar Parcela (Restante)
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
 
                                 <div className="mt-6 pt-6 border-t border-slate-200 print:hidden">
@@ -7428,12 +7568,7 @@ export default function App() {
                                                   diffTime /
                                                     (1000 * 60 * 60 * 24),
                                                 );
-                                                const taxaDia =
-                                                  parseFloat(p.taxaAtrasoDia) ||
-                                                  parseFloat(
-                                                    adminSettings.taxaAtrasoDia,
-                                                  ) ||
-                                                  1;
+                                                const taxaDia = p.prazo === "abater" ? 0 : parseFloat(p.taxaAtrasoDia) || parseFloat(adminSettings.taxaAtrasoDia) || 1;
                                                 const abatimentosTotal =
                                                   p.abatimentos
                                                     ? p.abatimentos.reduce(
