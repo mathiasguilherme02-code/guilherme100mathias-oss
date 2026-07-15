@@ -3,7 +3,7 @@ const jsdom = require('jsdom');
 const { JSDOM } = jsdom;
 const html = fs.readFileSync('dist/index.html', 'utf8');
 
-const dom = new JSDOM(html, { runScripts: "dangerously", resources: "usable" });
+const dom = new JSDOM(html, { runScripts: "dangerously", resources: "usable", url: "http://localhost/" });
 dom.window.onerror = function(message, source, lineno, colno, error) {
   console.log("ERROR:", message, error);
 };
