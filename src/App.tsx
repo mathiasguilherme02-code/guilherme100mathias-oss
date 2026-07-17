@@ -9008,7 +9008,7 @@ export default function App() {
               Simulação de Empréstimo
             </h1>
             <p className="text-slate-500">
-"Preencha os dados abaixo para solicitar sua simulação."
+Preencha os dados abaixo para solicitar sua simulação.
             </p>
           </div>
 

@@ -1,8 +1,5 @@
 import express from "express";
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
 import path from "path";
-import { fileURLToPath } from "url";
 import admin from "firebase-admin";
 import { ZipArchive } from "archiver";
 import fs, { readFileSync, existsSync } from "fs";
@@ -10,8 +7,6 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Load service account
 const serviceAccountPath = path.join(process.cwd(), 'serviceAccountKey.json');
@@ -875,9 +870,9 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   startVite();
 } else if (!process.env.VERCEL) {
   // Serve static files in production (non-Vercel)
-  app.use(express.static(path.join(__dirname, "dist")));
+  app.use(express.static(path.join(process.cwd(), "dist")));
   app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "dist", "index.html"));
+    res.sendFile(path.join(process.cwd(), "dist", "index.html"));
   });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
