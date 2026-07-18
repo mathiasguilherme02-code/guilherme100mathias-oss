@@ -1,5 +1,6 @@
 {
   "name": "GM-Empréstimo",
   "description": "Formulário completo para cadastro de clientes com busca automática de CEP.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

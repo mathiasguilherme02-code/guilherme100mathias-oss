@@ -169,6 +169,9 @@ export default function App() {
   });
 
   useEffect(() => {
+    window.alert = (message: any) => {
+      toast(String(message));
+    };
     const handlePopState = (e: PopStateEvent) => {
       if (e.state?.view) {
         setView(e.state.view);
@@ -1345,7 +1348,12 @@ export default function App() {
       parseFloat(simulacao.taxaJuros) ||
       parseFloat(adminSettings.taxaJuros) ||
       1;
-    const isMensal = true; // Fixado mensalmente
+    const tipoTaxa = simulacao.prazo === "abater" ? "mensal" : (simulacao.tipoTaxa || adminSettings.tipoTaxa || "mensal");
+    let fatorDivisao = 30;
+    if (tipoTaxa === "diaria") fatorDivisao = 1;
+    else if (tipoTaxa === "semanal") fatorDivisao = 7;
+    else if (tipoTaxa === "quinzenal") fatorDivisao = 15;
+    else if (tipoTaxa === "mensal") fatorDivisao = 30;
 
     let diasTotais = 30;
     let dataAtual = simulacao.dataInicial 
@@ -1368,7 +1376,7 @@ export default function App() {
       diasTotais = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)));
     }
 
-    const fatorTempo = isMensal ? diasTotais / 30 : diasTotais;
+    const fatorTempo = diasTotais / fatorDivisao;
     const valorTotal = valor + valor * (taxa / 100) * fatorTempo;
     const valorParcela = valorTotal / qtd;
 
@@ -1400,7 +1408,7 @@ export default function App() {
       ...prev,
       taxaJuros: prev.prazo === "abater" ? "0" : (prev.taxaJuros || adminSettings.taxaJuros),
       taxaAtrasoDia: prev.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
-      tipoTaxa: prev.tipoTaxa || adminSettings.tipoTaxa || "diaria",
+      tipoTaxa: prev.tipoTaxa || adminSettings.tipoTaxa || "mensal",
       parcelas: novasParcelas,
     }));
   };
@@ -1861,7 +1869,7 @@ export default function App() {
       dataVencimentoUnica: "",
       taxaJuros: adminSettings.taxaJuros,
       taxaAtrasoDia: adminSettings.taxaAtrasoDia,
-      tipoTaxa: adminSettings.tipoTaxa || "diaria",
+      tipoTaxa: adminSettings.tipoTaxa || "mensal",
       parcelas: [],
       valorTotal: 0,
       valorParcela: 0,
@@ -3294,7 +3302,7 @@ export default function App() {
                     parcelas: [],
                     taxaJuros: adminSettings.taxaJuros,
                     taxaAtrasoDia: adminSettings.taxaAtrasoDia,
-                    tipoTaxa: adminSettings.tipoTaxa || "diaria",
+                    tipoTaxa: adminSettings.tipoTaxa || "mensal",
                     dataVencimentoUnica: "",
                     isRenegociacao: false,
                     renegociadoFromSimIndices: [],
@@ -5104,7 +5112,7 @@ export default function App() {
         quantidade: sim.quantidade || "1",
         taxaJuros: sim.taxaJuros || adminSettings.taxaJuros,
         taxaAtrasoDia: sim.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
-        tipoTaxa: sim.tipoTaxa || adminSettings.tipoTaxa || "diaria",
+        tipoTaxa: sim.tipoTaxa || adminSettings.tipoTaxa || "mensal",
         dataInicial: sim.dataInicial || (sim.dataCriacao
           ? sim.dataCriacao.split("T")[0]
           : getLocalISODate()),
@@ -5137,7 +5145,12 @@ export default function App() {
         parseFloat(editSimData.taxaJuros) ||
         parseFloat(adminSettings.taxaJuros) ||
         1;
-      const isMensal = true; // Fixado mensalmente
+      const tipoTaxa = editSimData.prazo === "abater" ? "mensal" : (editSimData.tipoTaxa || adminSettings.tipoTaxa || "mensal");
+      let fatorDivisao = 30;
+      if (tipoTaxa === "diaria") fatorDivisao = 1;
+      else if (tipoTaxa === "semanal") fatorDivisao = 7;
+      else if (tipoTaxa === "quinzenal") fatorDivisao = 15;
+      else if (tipoTaxa === "mensal") fatorDivisao = 30;
 
       let diasTotais = 30;
       let dataAtual = editSimData.dataInicial
@@ -5160,7 +5173,7 @@ export default function App() {
         diasTotais = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)));
       }
 
-      const fatorTempo = isMensal ? diasTotais / 30 : diasTotais;
+      const fatorTempo = diasTotais / fatorDivisao;
       const valorTotalCalculado = valor + valor * (taxa / 100) * fatorTempo;
 
       const valorParcelaManual = parseFloat(editSimData.valorParcela);
@@ -5662,22 +5675,61 @@ export default function App() {
                   Copiar Link do Cliente
                 </button>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Taxa de Juros ao Mês (%)
+                    Tipo de Taxa
                   </label>
-                  <input
-                    type="number"
-                    value={adminSettings.taxaJuros}
+                  <select
+                    value={adminSettings.tipoTaxa || "mensal"}
                     onChange={(e) =>
                       setAdminSettings({
                         ...adminSettings,
-                        taxaJuros: e.target.value,
+                        tipoTaxa: e.target.value,
                       })
                     }
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                  />
+                  >
+                    <option value="diaria">Diária</option>
+                    <option value="semanal">Semanal</option>
+                    <option value="quinzenal">Quinzenal</option>
+                    <option value="mensal">Mensal</option>
+                  </select>
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium text-slate-700">
+                      Taxa de Juros (%)
+                    </label>
+                    <span className="text-sm font-bold text-yellow-600">{adminSettings.taxaJuros}%</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={adminSettings.taxaJuros}
+                      onChange={(e) =>
+                        setAdminSettings({
+                          ...adminSettings,
+                          taxaJuros: e.target.value,
+                        })
+                      }
+                      className="w-full"
+                    />
+                    <input
+                      type="number"
+                      value={adminSettings.taxaJuros}
+                      onChange={(e) =>
+                        setAdminSettings({
+                          ...adminSettings,
+                          taxaJuros: e.target.value,
+                        })
+                      }
+                      className="w-20 px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -5770,7 +5822,7 @@ export default function App() {
                         parcelas: [],
                         taxaJuros: adminSettings.taxaJuros,
                         taxaAtrasoDia: adminSettings.taxaAtrasoDia,
-                        tipoTaxa: adminSettings.tipoTaxa || "diaria",
+                        tipoTaxa: adminSettings.tipoTaxa || "mensal",
                         dataVencimentoUnica: "",
                         isRenegociacao: false,
                         renegociadoFromSimIndices: [],
@@ -6391,20 +6443,61 @@ export default function App() {
                                   </div>
                                   <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                                      Taxa de Juros ao Mês (%)
+                                      Tipo de Taxa
                                     </label>
-                                    <input
-                                      type="number"
-                                      value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
+                                    <select
+                                      value={editSimData.tipoTaxa || adminSettings.tipoTaxa || "mensal"}
                                       disabled={editSimData.prazo === "abater"}
                                       onChange={(e) =>
                                         setEditSimData({
                                           ...editSimData,
-                                          taxaJuros: e.target.value,
+                                          tipoTaxa: e.target.value,
                                         })
                                       }
                                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                                    />
+                                    >
+                                      <option value="diaria">Diária</option>
+                                      <option value="semanal">Semanal</option>
+                                      <option value="quinzenal">Quinzenal</option>
+                                      <option value="mensal">Mensal</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <div className="flex justify-between items-center mb-1">
+                                      <label className="block text-sm font-medium text-slate-700">
+                                        Taxa de Juros (%)
+                                      </label>
+                                      <span className="text-sm font-bold text-indigo-600">{editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}%</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="range"
+                                        min="0"
+                                        max="100"
+                                        step="0.1"
+                                        value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
+                                        disabled={editSimData.prazo === "abater"}
+                                        onChange={(e) =>
+                                          setEditSimData({
+                                            ...editSimData,
+                                            taxaJuros: e.target.value,
+                                          })
+                                        }
+                                        className="w-full"
+                                      />
+                                      <input
+                                        type="number"
+                                        value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
+                                        disabled={editSimData.prazo === "abater"}
+                                        onChange={(e) =>
+                                          setEditSimData({
+                                            ...editSimData,
+                                            taxaJuros: e.target.value,
+                                          })
+                                        }
+                                        className="w-16 px-2 py-1 border border-slate-300 rounded text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                                      />
+                                    </div>
                                   </div>
                                   <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -6493,12 +6586,12 @@ export default function App() {
                                       Cálculo de Juros (Visão Admin)
                                     </p>
                                     <p className="text-sm text-yellow-900">
-                                      Taxa aplicada: {sim.taxaJuros}% ao mês
+                                      Taxa aplicada: {sim.taxaJuros}% ({sim.tipoTaxa || adminSettings.tipoTaxa || 'mensal'})
                                     </p>
                                     <p className="text-xs text-yellow-700 mt-1">
                                       Fórmula: Valor Solicitado + (Valor
                                       Solicitado * Taxa de Juros * (Dias Totais
-                                      / 30))
+                                      / Divisor do Tipo de Taxa))
                                     </p>
                                   </div>
                                 </div>
@@ -9111,6 +9204,71 @@ Preencha os dados abaixo para solicitar sua simulação.
                     </div>
                   )}
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Tipo de Taxa
+                    </label>
+                    <select
+                      value={simulacao.tipoTaxa || adminSettings.tipoTaxa || "mensal"}
+                      disabled={simulacao.prazo === "abater"}
+                      onChange={(e) =>
+                        setSimulacao({
+                          ...simulacao,
+                          tipoTaxa: e.target.value,
+                        })
+                      }
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-white"
+                    >
+                      <option value="diaria">Diária</option>
+                      <option value="semanal">Semanal</option>
+                      <option value="quinzenal">Quinzenal</option>
+                      <option value="mensal">Mensal</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Taxa de Juros (%)
+                      </label>
+                      <span className="text-sm font-bold text-yellow-600">
+                        {simulacao.prazo === "abater" ? 0 : (simulacao.taxaJuros || adminSettings.taxaJuros)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={simulacao.prazo === "abater" ? 0 : (simulacao.taxaJuros || adminSettings.taxaJuros)}
+                        disabled={simulacao.prazo === "abater"}
+                        onChange={(e) =>
+                          setSimulacao({
+                            ...simulacao,
+                            taxaJuros: e.target.value,
+                          })
+                        }
+                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                      />
+                      <input
+                        type="number"
+                        value={simulacao.prazo === "abater" ? 0 : (simulacao.taxaJuros || adminSettings.taxaJuros)}
+                        disabled={simulacao.prazo === "abater"}
+                        onChange={(e) =>
+                          setSimulacao({
+                            ...simulacao,
+                            taxaJuros: e.target.value,
+                          })
+                        }
+                        className="w-20 px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4"></div>
 
                 {adminToken ? (
                   <button
