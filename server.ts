@@ -142,6 +142,17 @@ app.post("/api/produtos", requireAdmin, async (req, res) => {
       return res.status(500).json({ error: "Banco de dados não inicializado" });
     }
     const produto = req.body;
+    
+    if (produto.imagemUrl && produto.imagemUrl.startsWith('data:')) {
+      try {
+        const fileRef = ref(storage, `produtos/${Date.now()}_imagem`);
+        await uploadString(fileRef, produto.imagemUrl, 'data_url');
+        produto.imagemUrl = await getDownloadURL(fileRef);
+      } catch (e) {
+        console.error("Error uploading produto image", e);
+      }
+    }
+
     const docRef = await addDoc(collection(db, "produtos"), produto);
     res.json({ id: docRef.id, ...produto });
   } catch (error) {
@@ -157,6 +168,17 @@ app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
     }
     const { id } = req.params;
     const produto = req.body;
+    
+    if (produto.imagemUrl && produto.imagemUrl.startsWith('data:')) {
+      try {
+        const fileRef = ref(storage, `produtos/${Date.now()}_imagem`);
+        await uploadString(fileRef, produto.imagemUrl, 'data_url');
+        produto.imagemUrl = await getDownloadURL(fileRef);
+      } catch (e) {
+        console.error("Error uploading produto image", e);
+      }
+    }
+
     await updateDoc(doc(db, "produtos", id), produto);
     res.json({ id, ...produto });
   } catch (error) {
