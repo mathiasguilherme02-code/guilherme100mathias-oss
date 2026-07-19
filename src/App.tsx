@@ -12,7 +12,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Eye,
-  ImageIcon,
   Download,
   Maximize,
   Minimize,
@@ -46,7 +45,19 @@ import {
   Send,
   MessageSquare,
   Printer,
+  ShoppingCart,
+  Minus,
+  Image as ImageIcon
 } from "lucide-react";
+
+export interface Produto {
+  id: string;
+  nome: string;
+  descricao: string;
+  preco: string;
+  precoOferta?: string;
+  imagemUrl?: string;
+}
 
 const initialFormData = {
   nomeCompleto: "",
@@ -159,6 +170,8 @@ export default function App() {
     | "produtos_lista"
     | "form_produtos"
     | "client_login_produtos"
+    | "produto_detalhes"
+    | "carrinho"
   >(() => {
     const params = new URLSearchParams(window.location.search);
     const v = params.get("v");
@@ -190,8 +203,36 @@ export default function App() {
   }, [view]);
 
   const [adminTab, setAdminTab] = useState<
-    "clientes" | "cronograma" | "fluxo_caixa" | "mensagens"
+    | "clientes"
+    | "cronograma"
+    | "fluxo_caixa"
+    | "mensagens"
+    | "produtos"
   >("clientes");
+// 
+
+  
+  const [produtos, setProdutos] = useState<Produto[]>([]);
+  const [carrinho, setCarrinho] = useState<{produto: Produto, quantidade: number}[]>([]);
+  const [selectedProduto, setSelectedProduto] = useState<Produto | null>(null);
+  const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
+
+  const fetchProdutos = async () => {
+    try {
+      const res = await fetch("/api/produtos");
+      if (res.ok) {
+        const data = await res.json();
+        setProdutos(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    fetchProdutos();
+  }, []);
+
   const [cronogramaDate, setCronogramaDate] = useState(getLocalISODate());
   const [cronogramaYear, setCronogramaYear] = useState(getLocalISOYear());
   const [cronogramaMonth, setCronogramaMonth] = useState(getLocalMonthDigits());
@@ -1132,44 +1173,63 @@ export default function App() {
     const dataStrVencimento = p.dataVencimento ? p.dataVencimento.split('T')[0].split('-').reverse().join('/') : "";
 
     if (prazo === "abater") {
-      let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde ${dataStrVencimento}.\n\n`;
+      let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde ${dataStrVencimento}.
+
+`;
       
       if (p.abatimentos && p.abatimentos.length > 0) {
-        mensagem += `Sua dívida (vencida há ${diasAtraso} dias) está no valor atualizado de ${formatCurrency(valorAtualizado)}.\n\n`;
-        mensagem += `Constam os seguintes pagamentos recentes abatidos dessa dívida:\n\n`;
+        mensagem += `Sua dívida (vencida há ${diasAtraso} dias) está no valor atualizado de ${formatCurrency(valorAtualizado)}.
+
+`;
+        mensagem += `Constam os seguintes pagamentos recentes abatidos dessa dívida:
+
+`;
         p.abatimentos.forEach((a: any) => {
           const dataStr = a.data ? a.data.split('-').reverse().join('/') : "";
-          mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrency(a.valor)}\n`;
+          mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrency(a.valor)}
+`;
         });
-        mensagem += `\nRestando ainda o saldo de: ${formatCurrency(valorAtualizado)}.\n`;
+        mensagem += `
+Restando ainda o saldo de: ${formatCurrency(valorAtualizado)}.
+`;
       } else {
-        mensagem += `O valor total da sua dívida (vencida há ${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.\n`;
+        mensagem += `O valor total da sua dívida (vencida há ${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
+`;
       }
       
-      mensagem += `\nPor favor, regularize o quanto antes para evitar maiores encargos.`;
+      mensagem += `
+Por favor, regularize o quanto antes para evitar maiores encargos.`;
       return mensagem;
     }
 
     const valor40Porcento = formatCurrency(valorAtualizado * 0.4);
-    let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que sua Parcela ${p.numero} está VENCIDA desde ${dataStrVencimento}.\nNossa política de trabalho, permite congelar seus juros diários por até 7 dias, para isso precisa efetuar o pagamento de 40% do valor da parcela, que hoje é ${valor40Porcento}. Porém, se vencer esse prazo de 7 dias, seus juros serão atualizados e será abatido o que foi enviado.\n\n`;
+    let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que sua Parcela ${p.numero} está VENCIDA desde ${dataStrVencimento}.
+Nossa política de trabalho, permite congelar seus juros diários por até 7 dias, para isso precisa efetuar o pagamento de 40% do valor da parcela, que hoje é ${valor40Porcento}. Porém, se vencer esse prazo de 7 dias, seus juros serão atualizados e será abatido o que foi enviado.
+
+`;
 
     if (p.abatimentos && p.abatimentos.length > 0) {
-      mensagem += `Você realizou os seguintes pagamentos/abatimentos nesta parcela:\n`;
+      mensagem += `Você realizou os seguintes pagamentos/abatimentos nesta parcela:
+`;
       const hoje = parseLocalDate(getLocalISODate());
       p.abatimentos.forEach((a: any) => {
         const dataA = parseLocalDate(a.data);
         const diff = Math.max(0, hoje.getTime() - dataA.getTime());
         const dias = Math.floor(diff / (1000 * 60 * 60 * 24));
         const dataStr = a.data ? a.data.split('-').reverse().join('/') : "";
-        mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? 's' : ''})\n`;
+        mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? 's' : ''})
+`;
       });
-      mensagem += `\n`;
+      mensagem += `
+`;
     }
 
     if (p.jurosCongelados) {
-      mensagem += `O valor restante para pagamento é de ${formatCurrency(valorAtualizado)}.\n`;
+      mensagem += `O valor restante para pagamento é de ${formatCurrency(valorAtualizado)}.
+`;
     } else {
-      mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.\n`;
+      mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
+`;
     }
 
     mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
@@ -1563,7 +1623,8 @@ export default function App() {
       );
       if (missingRequired.length > 0) {
         alert(
-          `Por favor, envie os seguintes anexos obrigatórios:\n${missingRequired.map((c) => `- ${c.label}`).join("\n")}`,
+          `Por favor, envie os seguintes anexos obrigatórios:
+${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         );
         return;
       }
@@ -1961,7 +2022,8 @@ export default function App() {
               arquivado: true,
               anotacoes:
                 (updatedSimulacoes[indexInLatest].anotacoes || "") +
-                `\n[${getLocalISODateTime()}] Renegociado para um novo empréstimo.`,
+                `
+[${getLocalISODateTime()}] Renegociado para um novo empréstimo.`,
             };
           }
         });
@@ -2093,7 +2155,7 @@ export default function App() {
               clientAccepted: "nao",
               arquivado: true,
               status: "reprovado",
-              observacoesAdmin: (s.observacoesAdmin ? s.observacoesAdmin + "\n" : "") + "Cancelada/arquivada automaticamente devido ao aceite de outra proposta pelo cliente.",
+              observacoesAdmin: (s.observacoesAdmin ? s.observacoesAdmin + "\\n" : "") + "Cancelada/arquivada automaticamente devido ao aceite de outra proposta pelo cliente.",
             };
           }
           return s;
@@ -2165,7 +2227,8 @@ export default function App() {
         clientAccepted: "nao",
         anotacoes:
           (updatedSimulacoes[simIndex].anotacoes || "") +
-          `\n[${getLocalISODateTime()}] Cancelado pelo próprio cliente durante a análise.`,
+          `
+[${getLocalISODateTime()}] Cancelado pelo próprio cliente durante a análise.`,
       };
 
       const updatedClient = { ...latestClient, simulacoes: updatedSimulacoes };
@@ -2775,13 +2838,7 @@ export default function App() {
           </button>
         </div>
         <div className="absolute top-4 right-4 flex gap-3">
-          <button
-            onClick={() => setShowHowItWorksModal(true)}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona
-          </button>
+          
           <a
             href="https://wa.me/5531972323040"
             target="_blank"
@@ -3117,34 +3174,290 @@ export default function App() {
     );
   }
 
+  
   if (view === "produtos_lista") {
+    const totalCarrinho = carrinho.reduce((acc, item) => acc + (parseFloat(item.produto.precoOferta || item.produto.preco) * item.quantidade), 0);
+    const numItensCarrinho = carrinho.reduce((acc, item) => acc + item.quantidade, 0);
+
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-        <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500">
-          <button
-            onClick={() => setView("produtos")}
-            className="text-slate-500 hover:text-slate-700 p-2 rounded-full hover:bg-slate-100 transition-colors"
-          >
-            <ArrowLeft size={24} />
-          </button>
-          <h1 className="text-xl font-bold text-slate-800">
-            Lista de Produtos
-          </h1>
-        </div>
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-          <div className="w-24 h-24 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
+        <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500 justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setView("produtos")}
+              className="text-slate-500 hover:text-slate-700 p-2 rounded-full hover:bg-slate-100 transition-colors"
+            >
+              <ArrowLeft size={24} />
+            </button>
+            <h1 className="text-xl font-bold text-slate-800">
+              Produtos
+            </h1>
           </div>
-          <h2 className="text-2xl font-bold text-slate-700 mb-2">Página em Construção</h2>
-          <p className="text-slate-500 max-w-md">
-            Esta seção será desenvolvida na próxima etapa. Estamos preparando tudo para oferecer a melhor experiência.
-          </p>
+          {numItensCarrinho > 0 && (
+            <button
+              onClick={() => setView("carrinho")}
+              className="relative p-2 bg-yellow-100 text-yellow-700 rounded-full hover:bg-yellow-200 transition-colors"
+            >
+              <ShoppingCart size={24} />
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full">
+                {numItensCarrinho}
+              </span>
+            </button>
+          )}
+        </div>
+        <div className="flex-1 p-6 max-w-7xl mx-auto w-full">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {produtos.map(p => (
+              <div 
+                key={p.id} 
+                className="bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow border border-slate-100 overflow-hidden cursor-pointer flex flex-col"
+                onClick={() => {
+                  setSelectedProduto(p);
+                  setView("produto_detalhes");
+                }}
+              >
+                {p.imagemUrl ? (
+                  <img src={p.imagemUrl} alt={p.nome} className="w-full h-48 object-cover" />
+                ) : (
+                  <div className="w-full h-48 bg-slate-200 flex items-center justify-center text-slate-400">
+                    <ImageIcon size={48} />
+                  </div>
+                )}
+                <div className="p-4 flex flex-col flex-1">
+                  <h3 className="font-bold text-lg text-slate-800 mb-1">{p.nome}</h3>
+                  <p className="text-slate-500 text-sm mb-4 line-clamp-2">{p.descricao}</p>
+                  <div className="mt-auto">
+                    {p.precoOferta ? (
+                      <div className="flex flex-col">
+                        <span className="text-slate-400 text-sm line-through">{formatCurrency(parseFloat(p.preco))}</span>
+                        <span className="text-green-600 font-bold text-lg">{formatCurrency(parseFloat(p.precoOferta))}</span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-800 font-bold text-lg">{formatCurrency(parseFloat(p.preco))}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {produtos.length === 0 && (
+              <div className="col-span-full py-12 text-center text-slate-500">
+                Nenhum produto cadastrado no momento.
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  if (view === "client_login") {
+  if (view === "produto_detalhes" && selectedProduto) {
+    const preco = parseFloat(selectedProduto.preco);
+    const precoOferta = selectedProduto.precoOferta ? parseFloat(selectedProduto.precoOferta) : null;
+    
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
+        <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500">
+          <button
+            onClick={() => setView("produtos_lista")}
+            className="text-slate-500 hover:text-slate-700 p-2 rounded-full hover:bg-slate-100 transition-colors"
+          >
+            <ArrowLeft size={24} />
+          </button>
+          <h1 className="text-xl font-bold text-slate-800">
+            Detalhes do Produto
+          </h1>
+        </div>
+        <div className="flex-1 p-6 max-w-4xl mx-auto w-full">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col md:flex-row">
+            <div className="md:w-1/2">
+              {selectedProduto.imagemUrl ? (
+                <img src={selectedProduto.imagemUrl} alt={selectedProduto.nome} className="w-full h-full object-cover min-h-[300px]" />
+              ) : (
+                <div className="w-full h-full min-h-[300px] bg-slate-200 flex items-center justify-center text-slate-400">
+                  <ImageIcon size={64} />
+                </div>
+              )}
+            </div>
+            <div className="p-8 md:w-1/2 flex flex-col">
+              <h2 className="text-3xl font-black text-slate-800 mb-4">{selectedProduto.nome}</h2>
+              <p className="text-slate-600 mb-6 text-lg">{selectedProduto.descricao}</p>
+              
+              <div className="mb-8">
+                {precoOferta ? (
+                  <div className="flex flex-col">
+                    <span className="text-slate-400 text-lg line-through">De: {formatCurrency(preco)}</span>
+                    <span className="text-green-600 font-bold text-4xl">Por: {formatCurrency(precoOferta)}</span>
+                  </div>
+                ) : (
+                  <span className="text-slate-800 font-bold text-4xl">{formatCurrency(preco)}</span>
+                )}
+              </div>
+              
+              <div className="mt-auto space-y-4">
+                <button
+                  onClick={() => {
+                    const existingItem = carrinho.find(i => i.produto.id === selectedProduto.id);
+                    if (existingItem) {
+                      setCarrinho(carrinho.map(i => i.produto.id === selectedProduto.id ? { ...i, quantidade: i.quantidade + 1 } : i));
+                    } else {
+                      setCarrinho([...carrinho, { produto: selectedProduto, quantidade: 1 }]);
+                    }
+                    toast.success("Produto adicionado ao carrinho!");
+                  }}
+                  className="w-full py-4 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold text-lg transition-colors flex justify-center items-center gap-2 shadow-lg"
+                >
+                  <ShoppingCart size={20} />
+                  Adicionar ao Carrinho
+                </button>
+                
+                <div className="flex gap-4 pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => {
+                       setView("client_login_produtos");
+                    }}
+                    className="flex-1 py-3 bg-white border-2 border-yellow-500 text-yellow-600 hover:bg-yellow-50 rounded-xl font-bold transition-colors shadow-sm flex items-center justify-center gap-2"
+                  >
+                    <User size={18} />
+                    Já sou cliente
+                  </button>
+                  <button
+                    onClick={() => {
+                       setView("form_produtos");
+                    }}
+                    className="flex-1 py-3 bg-yellow-500 hover:bg-yellow-600 text-slate-900 rounded-xl font-bold transition-colors shadow-md flex items-center justify-center gap-2"
+                  >
+                    <UserPlus size={18} />
+                    Cadastro
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "carrinho") {
+    const totalCarrinho = carrinho.reduce((acc, item) => acc + (parseFloat(item.produto.precoOferta || item.produto.preco) * item.quantidade), 0);
+    
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
+        <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500">
+          <button
+            onClick={() => setView("produtos_lista")}
+            className="text-slate-500 hover:text-slate-700 p-2 rounded-full hover:bg-slate-100 transition-colors"
+          >
+            <ArrowLeft size={24} />
+          </button>
+          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <ShoppingCart size={24} />
+            Meu Carrinho
+          </h1>
+        </div>
+        <div className="flex-1 p-6 max-w-3xl mx-auto w-full">
+          {carrinho.length === 0 ? (
+            <div className="text-center py-20 flex flex-col items-center">
+              <ShoppingCart size={64} className="text-slate-300 mb-4" />
+              <h2 className="text-2xl font-bold text-slate-700 mb-2">Seu carrinho está vazio</h2>
+              <p className="text-slate-500 mb-8">Navegue pelos nossos produtos e adicione itens ao carrinho.</p>
+              <button
+                onClick={() => setView("produtos_lista")}
+                className="px-8 py-3 bg-yellow-500 text-slate-900 font-bold rounded-xl hover:bg-yellow-600 transition-colors shadow-md"
+              >
+                Voltar aos Produtos
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+              <ul className="divide-y divide-slate-100">
+                {carrinho.map((item, index) => {
+                  const precoReal = parseFloat(item.produto.precoOferta || item.produto.preco);
+                  return (
+                    <li key={index} className="p-4 sm:p-6 flex items-center gap-4 sm:gap-6">
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 shrink-0 rounded-lg overflow-hidden bg-slate-100 border border-slate-200">
+                        {item.produto.imagemUrl ? (
+                          <img src={item.produto.imagemUrl} alt={item.produto.nome} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400">
+                            <ImageIcon size={24} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-slate-800 text-lg mb-1">{item.produto.nome}</h3>
+                        <p className="text-yellow-600 font-bold">{formatCurrency(precoReal)}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => {
+                            if (item.quantidade > 1) {
+                              setCarrinho(carrinho.map((c, i) => i === index ? { ...c, quantidade: c.quantidade - 1 } : c));
+                            } else {
+                              setCarrinho(carrinho.filter((c, i) => i !== index));
+                            }
+                          }}
+                          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200 transition-colors"
+                        >
+                          <Minus size={16} />
+                        </button>
+                        <span className="font-bold text-slate-800 w-4 text-center">{item.quantidade}</span>
+                        <button
+                          onClick={() => {
+                            setCarrinho(carrinho.map((c, i) => i === index ? { ...c, quantidade: c.quantidade + 1 } : c));
+                          }}
+                          className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200 transition-colors"
+                        >
+                          <Plus size={16} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setCarrinho(carrinho.filter((c, i) => i !== index));
+                            toast.info("Produto removido do carrinho");
+                          }}
+                          className="w-8 h-8 rounded-full text-red-500 hover:bg-red-50 flex items-center justify-center transition-colors ml-2"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="p-6 bg-slate-50 border-t border-slate-100">
+                <div className="flex justify-between items-center mb-6">
+                  <span className="text-slate-600 font-medium text-lg">Total do Pedido:</span>
+                  <span className="text-3xl font-black text-slate-800">{formatCurrency(totalCarrinho)}</span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button
+                    onClick={() => {
+                       setView("client_login_produtos");
+                    }}
+                    className="flex-1 py-4 bg-white border-2 border-yellow-500 text-yellow-600 hover:bg-yellow-50 rounded-xl font-bold transition-colors shadow-sm flex items-center justify-center gap-2 text-lg"
+                  >
+                    <User size={20} />
+                    Já sou cliente
+                  </button>
+                  <button
+                    onClick={() => {
+                       setView("form_produtos");
+                    }}
+                    className="flex-1 py-4 bg-yellow-500 hover:bg-yellow-600 text-slate-900 rounded-xl font-bold transition-colors shadow-md flex items-center justify-center gap-2 text-lg"
+                  >
+                    <UserPlus size={20} />
+                    Quero me Cadastrar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+if (view === "client_login") {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
         <button
@@ -5615,6 +5928,15 @@ export default function App() {
                   {unreadChatCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => {
+                setAdminTab("produtos");
+                setSelectedClient(null);
+              }}
+              className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "produtos" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Produtos
             </button>
             <div className="ml-auto flex items-center mb-3">
               <button
@@ -8652,7 +8974,155 @@ export default function App() {
             </div>
           )}
 
-          {adminTab === "mensagens" && (
+          
+          {adminTab === "produtos" && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h2 className="text-lg font-bold text-slate-800">Gerenciar Produtos</h2>
+                <button
+                  onClick={() => setEditingProduto({ nome: "", descricao: "", preco: "", precoOferta: "", imagemUrl: "" })}
+                  className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  Novo Produto
+                </button>
+              </div>
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {produtos.map(p => (
+                    <div key={p.id} className="border border-slate-200 rounded-lg p-4 flex flex-col">
+                      {p.imagemUrl && <img src={p.imagemUrl} alt={p.nome} className="w-full h-40 object-cover rounded-md mb-4" />}
+                      <h3 className="font-bold text-lg mb-2">{p.nome}</h3>
+                      <p className="text-slate-600 text-sm mb-4 flex-grow">{p.descricao}</p>
+                      <div className="flex justify-between items-end mb-4">
+                        <div>
+                          {p.precoOferta ? (
+                            <>
+                              <span className="line-through text-slate-400 text-sm mr-2">{formatCurrency(parseFloat(p.preco))}</span>
+                              <span className="font-bold text-green-600">{formatCurrency(parseFloat(p.precoOferta))}</span>
+                            </>
+                          ) : (
+                            <span className="font-bold text-slate-800">{formatCurrency(parseFloat(p.preco))}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-auto">
+                        <button
+                          onClick={() => setEditingProduto(p)}
+                          className="flex-1 border border-slate-300 rounded py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (window.confirm("Deseja realmente excluir este produto?")) {
+                              try {
+                                const res = await fetch(`/api/produtos/${p.id}`, {
+                                  method: "DELETE",
+                                  headers: { Authorization: `Bearer ${adminToken}` }
+                                });
+                                if (res.ok) fetchProdutos();
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }
+                          }}
+                          className="flex-1 border border-red-200 text-red-600 rounded py-2 text-sm font-medium hover:bg-red-50 transition-colors"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {editingProduto && (
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                  <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[90vh]">
+                    <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                      <h2 className="text-xl font-bold text-slate-800">{editingProduto.id ? "Editar Produto" : "Novo Produto"}</h2>
+                      <button onClick={() => setEditingProduto(null)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                    </div>
+                    <div className="p-6 overflow-y-auto space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Nome</label>
+                        <input
+                          type="text"
+                          value={editingProduto.nome}
+                          onChange={e => setEditingProduto({ ...editingProduto, nome: e.target.value })}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
+                        <textarea
+                          value={editingProduto.descricao}
+                          onChange={e => setEditingProduto({ ...editingProduto, descricao: e.target.value })}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                          rows={3}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Preço Normal</label>
+                          <input
+                            type="number"
+                            value={editingProduto.preco}
+                            onChange={e => setEditingProduto({ ...editingProduto, preco: e.target.value })}
+                            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Preço Oferta (Opcional)</label>
+                          <input
+                            type="number"
+                            value={editingProduto.precoOferta}
+                            onChange={e => setEditingProduto({ ...editingProduto, precoOferta: e.target.value })}
+                            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">URL da Imagem</label>
+                        <input
+                          type="text"
+                          value={editingProduto.imagemUrl}
+                          onChange={e => setEditingProduto({ ...editingProduto, imagemUrl: e.target.value })}
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
+                      <button onClick={() => setEditingProduto(null)} className="px-6 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium">Cancelar</button>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const method = editingProduto.id ? "PUT" : "POST";
+                            const url = editingProduto.id ? `/api/produtos/${editingProduto.id}` : "/api/produtos";
+                            const res = await fetch(url, {
+                              method,
+                              headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+                              body: JSON.stringify(editingProduto)
+                            });
+                            if (res.ok) {
+                              setEditingProduto(null);
+                              fetchProdutos();
+                            }
+                          } catch(e) {
+                            console.error(e);
+                          }
+                        }}
+                        className="px-6 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg font-medium transition-colors"
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+{adminTab === "mensagens" && (
             <div className="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row gap-6 h-[600px]">
               {/* Chat List */}
               <div className="w-full md:w-1/3 border-r border-slate-200 pr-6 flex flex-col">
@@ -9037,13 +9507,7 @@ export default function App() {
           </button>
         </div>
         <div className="absolute top-4 right-4 flex gap-3">
-          <button
-            onClick={() => setShowHowItWorksModal(true)}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona
-          </button>
+          
           <a
             href="https://wa.me/5531972323040"
             target="_blank"
@@ -9465,13 +9929,7 @@ Preencha os dados abaixo para solicitar sua simulação.
               <ArrowLeft size={16} />
               Voltar à página inicial
             </button>
-            <button
-              onClick={() => setShowHowItWorksModal(true)}
-              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <Info size={16} />
-              Como funciona
-            </button>
+            
             <a
               href="https://wa.me/5531972323040"
               target="_blank"

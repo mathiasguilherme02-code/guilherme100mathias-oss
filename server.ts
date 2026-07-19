@@ -116,7 +116,69 @@ const checkFirebaseConfig = (req: any, res: any, next: any) => {
 app.use('/api/clients', checkFirebaseConfig);
 app.use('/api/settings', checkFirebaseConfig);
 
-// Server-Sent Events for Real-time Updates
+//
+
+// --- PRODUTOS API ---
+
+app.get("/api/produtos", async (req, res) => {
+  try {
+    if (!db) {
+      return res.json([]);
+    }
+    const q = query(collection(db, "produtos"));
+    const querySnapshot = await getDocs(q);
+      
+    const produtos = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+    res.json(produtos);
+  } catch (error) {
+    console.error("Error fetching produtos:", error);
+    res.status(500).json({ error: "Falha ao buscar produtos" });
+  }
+});
+
+app.post("/api/produtos", requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ error: "Banco de dados não inicializado" });
+    }
+    const produto = req.body;
+    const docRef = await addDoc(collection(db, "produtos"), produto);
+    res.json({ id: docRef.id, ...produto });
+  } catch (error) {
+    console.error("Error adding produto:", error);
+    res.status(500).json({ error: "Falha ao adicionar produto" });
+  }
+});
+
+app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ error: "Banco de dados não inicializado" });
+    }
+    const { id } = req.params;
+    const produto = req.body;
+    await updateDoc(doc(db, "produtos", id), produto);
+    res.json({ id, ...produto });
+  } catch (error) {
+    console.error("Error updating produto:", error);
+    res.status(500).json({ error: "Falha ao atualizar produto" });
+  }
+});
+
+app.delete("/api/produtos/:id", requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(500).json({ error: "Banco de dados não inicializado" });
+    }
+    const { id } = req.params;
+    await deleteDoc(doc(db, "produtos", id));
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting produto:", error);
+    res.status(500).json({ error: "Falha ao excluir produto" });
+  }
+});
+ // Server-Sent Events for Real-time Updates
 const sseClients = new Set<express.Response>();
 
 app.get('/api/events', (req, res) => {

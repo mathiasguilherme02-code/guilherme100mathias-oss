@@ -1,19 +1,30 @@
 const fs = require('fs');
 let code = fs.readFileSync('src/App.tsx', 'utf8');
 
-const targetState = `  const [formData, setFormData] = useState(initialFormData);`;
-const replState = `  const [formData, setFormData] = useState(initialFormData);
-  const [produtoFormData, setProdutoFormData] = useState({
-    nomeCompleto: "",
-    telefone: "",
-    cep: "",
-    endereco: "",
-    numero: "",
-    complemento: "",
-    bairro: "",
-    cidade: "",
-    estado: ""
-  });`;
+const typeStr = `
+export interface Produto {
+  id?: string;
+  nome: string;
+  descricao: string;
+  preco: string;
+  precoOferta: string;
+  imagemUrl: string;
+}
+`;
 
-code = code.replace(targetState, replState);
+if (!code.includes('export interface Produto')) {
+  code = code.replace('export interface Client {', typeStr + '\nexport interface Client {');
+}
+
+const stateStr = `
+  const [produtos, setProdutos] = useState<Produto[]>([]);
+  const [carrinho, setCarrinho] = useState<{produto: Produto, quantidade: number}[]>([]);
+  const [selectedProduto, setSelectedProduto] = useState<Produto | null>(null);
+  const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
+`;
+
+if (!code.includes('const [produtos, setProdutos]')) {
+  code = code.replace('const [clients, setClients] = useState<Client[]>([]);', 'const [clients, setClients] = useState<Client[]>([]);\n' + stateStr);
+}
+
 fs.writeFileSync('src/App.tsx', code);

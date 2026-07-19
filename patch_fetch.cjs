@@ -1,31 +1,30 @@
 const fs = require('fs');
 let code = fs.readFileSync('src/App.tsx', 'utf8');
 
-const targetFetch = `  const fetchAddress = async (`;
-const replFetch = `  const fetchProdutoAddress = async (cep: string) => {
-    const cleanCep = cep.replace(/\\D/g, "");
-    if (cleanCep.length !== 8) return;
-    setLoadingCep(true);
+const fetchStr = `
+  const fetchProdutos = async () => {
     try {
-      const response = await fetch(\`https://viacep.com.br/ws/\${cleanCep}/json/\`);
-      const data = await response.json();
-      if (!data.erro) {
-        setProdutoFormData(prev => ({
-          ...prev,
-          endereco: data.logradouro || "",
-          bairro: data.bairro || "",
-          cidade: data.localidade || "",
-          estado: data.uf || ""
-        }));
+      const res = await fetch("/api/produtos");
+      if (res.ok) {
+        const data = await res.json();
+        setProdutos(data);
       }
-    } catch (error) {
-      console.error("Erro ao buscar CEP:", error);
-    } finally {
-      setLoadingCep(false);
+    } catch (err) {
+      console.error("Error fetching produtos:", err);
     }
   };
 
-  const fetchAddress = async (`;
+  useEffect(() => {
+    fetchProdutos();
+  }, []);
+`;
 
-code = code.replace(targetFetch, replFetch);
+if (!code.includes('const fetchProdutos')) {
+  // Find a useEffect to place it before
+  const fetchClientsIndex = code.indexOf('const fetchClients = async');
+  if (fetchClientsIndex !== -1) {
+    code = code.slice(0, fetchClientsIndex) + fetchStr + '\n' + code.slice(fetchClientsIndex);
+  }
+}
+
 fs.writeFileSync('src/App.tsx', code);
