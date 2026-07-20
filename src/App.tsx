@@ -9100,6 +9100,11 @@ if (view === "client_login") {
                             onChange={e => {
                               const file = e.target.files?.[0];
                               if (file) {
+                                if (file.size > 800 * 1024) {
+                                  alert("A imagem não pode ter mais de 800KB");
+                                  e.target.value = "";
+                                  return;
+                                }
                                 const reader = new FileReader();
                                 reader.onloadend = () => {
                                   setEditingProduto({ ...editingProduto, imagemUrl: reader.result as string });

@@ -23,6 +23,8 @@ try {
 
 let db: any;
 let storage: any;
+let mockProdutos: any[] = [];
+let mockClients: any[] = [];
 
 try {
   if (serviceAccount && !admin.apps.length) {
@@ -123,7 +125,7 @@ app.use('/api/settings', checkFirebaseConfig);
 app.get("/api/produtos", async (req, res) => {
   try {
     if (!db) {
-      return res.json([]);
+      return res.json(mockProdutos);
     }
     const q = query(collection(db, "produtos"));
     const querySnapshot = await getDocs(q);
@@ -138,10 +140,13 @@ app.get("/api/produtos", async (req, res) => {
 
 app.post("/api/produtos", requireAdmin, async (req, res) => {
   try {
-    if (!db) {
-      return res.status(500).json({ error: "Banco de dados não inicializado" });
-    }
     const produto = req.body;
+    
+    if (!db) {
+      const p = { id: Date.now().toString(), ...produto };
+      mockProdutos.push(p);
+      return res.json(p);
+    }
     
     if (produto.imagemUrl && produto.imagemUrl.startsWith('data:')) {
       try {
@@ -163,11 +168,14 @@ app.post("/api/produtos", requireAdmin, async (req, res) => {
 
 app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
   try {
-    if (!db) {
-      return res.status(500).json({ error: "Banco de dados não inicializado" });
-    }
     const { id } = req.params;
     const produto = req.body;
+    
+    if (!db) {
+      const idx = mockProdutos.findIndex(p => p.id === id);
+      if (idx !== -1) mockProdutos[idx] = { ...mockProdutos[idx], ...produto, id };
+      return res.json({ id, ...produto });
+    }
     
     if (produto.imagemUrl && produto.imagemUrl.startsWith('data:')) {
       try {
@@ -189,10 +197,12 @@ app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
 
 app.delete("/api/produtos/:id", requireAdmin, async (req, res) => {
   try {
-    if (!db) {
-      return res.status(500).json({ error: "Banco de dados não inicializado" });
-    }
     const { id } = req.params;
+    
+    if (!db) {
+      mockProdutos = mockProdutos.filter(p => p.id !== id);
+      return res.json({ success: true });
+    }
     await deleteDoc(doc(db, "produtos", id));
     res.json({ success: true });
   } catch (error) {
@@ -306,7 +316,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
 app.get("/api/clients", requireAdmin, async (req, res) => {
   try {
     if (!db) {
-      return res.json([]);
+      return res.json(mockClients.sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime()));
     }
     const q = query(collection(db, "clients"), orderBy("dataCadastro", "desc"));
     const querySnapshot = await getDocs(q);
@@ -375,7 +385,9 @@ async function processClientFiles(client: any) {
 app.post("/api/clients", async (req, res) => {
   try {
     if (!db) {
-      return res.json({ id: Date.now().toString(), ...req.body });
+      const client = { id: Date.now().toString(), ...req.body };
+      mockClients.push(client);
+      return res.json(client);
     }
     const client = req.body;
     if (!client || !client.cpf) {
