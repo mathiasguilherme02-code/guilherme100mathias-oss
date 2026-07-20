@@ -8987,6 +8987,11 @@ if (view === "client_login") {
                 </button>
               </div>
               <div className="p-6">
+                {produtos.length === 0 ? (
+                  <div className="text-center py-12 text-slate-500 bg-slate-50 rounded-lg border border-dashed border-slate-300">
+                    Nenhum produto cadastrado no momento. Clique em "Novo Produto" para começar.
+                  </div>
+                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {produtos.map(p => (
                     <div key={p.id} className="border border-slate-200 rounded-lg p-4 flex flex-col">
@@ -9034,6 +9039,7 @@ if (view === "client_login") {
                     </div>
                   ))}
                 </div>
+                )}
               </div>
               
               {editingProduto && (
@@ -9121,6 +9127,9 @@ if (view === "client_login") {
                             if (res.ok) {
                               setEditingProduto(null);
                               fetchProdutos();
+                            } else {
+                              const errorData = await res.json().catch(() => ({}));
+                              alert("Erro ao salvar produto: " + (errorData.error || res.statusText));
                             }
                           } catch(e) {
                             console.error(e);
