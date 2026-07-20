@@ -154,7 +154,8 @@ app.post("/api/produtos", requireAdmin, async (req, res) => {
         await uploadString(fileRef, produto.imagemUrl, 'data_url');
         produto.imagemUrl = await getDownloadURL(fileRef);
       } catch (e) {
-        console.error("Error uploading produto image", e);
+        console.error("Error uploading produto image:", e);
+        console.error("Data length:", produto.imagemUrl.length, "Starts with:", produto.imagemUrl.substring(0, 50));
       }
     }
 
@@ -183,7 +184,8 @@ app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
         await uploadString(fileRef, produto.imagemUrl, 'data_url');
         produto.imagemUrl = await getDownloadURL(fileRef);
       } catch (e) {
-        console.error("Error uploading produto image", e);
+        console.error("Error uploading produto image:", e);
+        console.error("Data length:", produto.imagemUrl.length, "Starts with:", produto.imagemUrl.substring(0, 50));
       }
     }
 
