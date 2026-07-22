@@ -93,10 +93,11 @@
       "simulacao": {
         "valorEmprestimo": 5000,
         "prazo": "mensal",
-        "parcelas": 12,
+        "parcelas": [],
         "taxaJuros": 5,
         "valorParcela": 450,
-        "total": 5400
+        "total": 5400,
+        "quantidade": "12"
       },
       "historicoStatus": [
         {
@@ -122,10 +123,11 @@
       "simulacao": {
         "valorEmprestimo": 10000,
         "prazo": "mensal",
-        "parcelas": 24,
+        "parcelas": [],
         "taxaJuros": 2,
         "valorParcela": 550,
-        "total": 13200
+        "total": 13200,
+        "quantidade": "24"
       },
       "historicoStatus": [
         {

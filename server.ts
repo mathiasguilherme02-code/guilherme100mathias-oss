@@ -347,6 +347,8 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/api/sysinfo", (req, res) => { res.json({ hasDb: !!db, firebaseConfig: !!process.env.FIREBASE_SERVICE_ACCOUNT }); });
+
 // Get All Clients (Protected)
 app.get("/api/clients", requireAdmin, async (req, res) => {
   try {

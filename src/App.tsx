@@ -3823,7 +3823,7 @@ if (view === "client_login") {
                         <>
                           {sim.status === "aprovado" &&
                             !sim.clientAccepted &&
-                            !sim.parcelas?.some((p: any) => p.paga) && (
+                            !(Array.isArray(sim.parcelas) ? sim.parcelas : [])?.some((p: any) => p.paga) && (
                               <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-8 text-center">
                                 <h3 className="text-xl font-bold text-blue-800 mb-2">
                                   Proposta Aprovada!
@@ -4085,7 +4085,7 @@ if (view === "client_login") {
 
                           {sim.status === "aprovado" &&
                             !sim.clientAccepted &&
-                            !sim.parcelas?.some((p: any) => p.paga) && (
+                            !(Array.isArray(sim.parcelas) ? sim.parcelas : [])?.some((p: any) => p.paga) && (
                               <div className="mt-8 pt-6 border-t border-slate-200">
                                 <div className="flex gap-4">
                                   <button
@@ -4652,7 +4652,7 @@ if (view === "client_login") {
               !s.arquivado,
           )
           .flatMap((s: any, sIdx: number) =>
-            (s.parcelas || []).map((p: any, pIdx: number) => {
+            (Array.isArray(s.parcelas) ? s.parcelas : []).map((p: any, pIdx: number) => {
               const abatimentosTotal = p.abatimentos
                 ? p.abatimentos.reduce(
                     (acc: number, a: any) => acc + a.valor,
@@ -5681,7 +5681,7 @@ if (view === "client_login") {
 
       const simulacao = selectedClient.simulacoes[simIndex];
 
-      if (aprovar && (!simulacao.parcelas || simulacao.parcelas.length === 0)) {
+      if (aprovar && (!simulacao.parcelas || (Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0) === 0)) {
         alert(
           "Por favor, edite a simulação para definir a taxa de juros e gerar as parcelas antes de aprovar.",
         );
@@ -6899,7 +6899,7 @@ if (view === "client_login") {
                                         Data de Pagamento
                                       </p>
                                       <p className="text-lg font-semibold text-slate-800">
-                                        {sim.dataVencimentoUnica ? formatDate(sim.dataVencimentoUnica) : (sim.parcelas?.[0]?.dataVencimento ? formatDate(sim.parcelas[0].dataVencimento) : "Pendente")}
+                                        {sim.dataVencimentoUnica ? formatDate(sim.dataVencimentoUnica) : ((Array.isArray(sim.parcelas) ? sim.parcelas : [])?.[0]?.dataVencimento ? formatDate(sim.parcelas[0].dataVencimento) : "Pendente")}
                                       </p>
                                     </div>
                                   )}
@@ -9721,6 +9721,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
+                  {adminToken && (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
                       Tipo de Taxa
@@ -9742,6 +9743,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                       <option value="mensal">Mensal</option>
                     </select>
                   </div>
+                  )}
                   {adminToken && (
                   <div>
                     <div className="flex justify-between items-center mb-1">
@@ -9832,7 +9834,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                   </button>
                 )}
 
-                {simulacao.parcelas.length > 0 && adminToken && (
+                {(Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0) > 0 && adminToken && (
                   <div className="mt-8 pt-8 border-t border-slate-200">
                     <h3 className="text-xl font-semibold text-slate-800 mb-4">
                       Resultado da Simulação
@@ -9852,7 +9854,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                             Total de Parcelas
                           </p>
                           <p className="text-lg font-semibold text-slate-800">
-                            {simulacao.parcelas.length}x de{" "}
+                            {(Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0)}x de{" "}
                             {formatCurrency(simulacao.parcelas[0].valor)}
                           </p>
                         </div>
