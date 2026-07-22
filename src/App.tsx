@@ -214,6 +214,7 @@ export default function App() {
   
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [carrinho, setCarrinho] = useState<{produto: Produto, quantidade: number}[]>([]);
+  const [formaPagamentoProduto, setFormaPagamentoProduto] = useState<string>("");
   const [selectedProduto, setSelectedProduto] = useState<Produto | null>(null);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
 
@@ -3131,9 +3132,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               setClientLoginError("Por favor, insira seu telefone.");
               return;
             }
-            // For now, mock successful login or show a toast
-            toast.success("Login realizado com sucesso! Em breve, você terá acesso à área de produtos.");
-            setView("produtos");
+            if (carrinho.length > 0) {
+              toast.success(`Pedido finalizado com sucesso! Forma de Pagamento: ${formaPagamentoProduto === 'dinheiro' ? 'Dinheiro' : formaPagamentoProduto === 'pix' ? 'Pix' : formaPagamentoProduto === 'debito' ? 'Cartão de Débito' : 'Cartão de Crédito'}. Entraremos em contato via WhatsApp.`);
+              setCarrinho([]);
+              setFormaPagamentoProduto("");
+            } else {
+              toast.success("Login realizado com sucesso!");
+            }
+            setView("produtos_lista");
           }}>
             <div>
               <label htmlFor="telefone" className="block text-sm font-medium text-slate-700 mb-2">
@@ -3386,7 +3392,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       </div>
                       <div className="flex-1">
                         <h3 className="font-bold text-slate-800 text-lg mb-1">{item.produto.nome}</h3>
-                        <p className="text-yellow-600 font-bold">{formatCurrency(precoReal)}</p>
+                        <p className="text-slate-500 text-sm">{formatCurrency(precoReal)} unid.</p>
+                        {item.quantidade > 1 && (
+                           <p className="text-yellow-600 font-bold mt-1">Subtotal: {formatCurrency(precoReal * item.quantidade)}</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         <button
@@ -3425,6 +3434,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 })}
               </ul>
               <div className="p-6 bg-slate-50 border-t border-slate-100">
+                <div className="mb-6">
+                  <label className="block text-slate-700 font-bold mb-2">Forma de Pagamento:</label>
+                  <select 
+                    value={formaPagamentoProduto} 
+                    onChange={(e) => setFormaPagamentoProduto(e.target.value)}
+                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
+                  >
+                    <option value="">Selecione uma forma de pagamento</option>
+                    <option value="dinheiro">Dinheiro</option>
+                    <option value="pix">Pix</option>
+                    <option value="debito">Cartão de Débito</option>
+                    <option value="credito">Cartão de Crédito</option>
+                  </select>
+                </div>
                 <div className="flex justify-between items-center mb-6">
                   <span className="text-slate-600 font-medium text-lg">Total do Pedido:</span>
                   <span className="text-3xl font-black text-slate-800">{formatCurrency(totalCarrinho)}</span>
@@ -3432,6 +3455,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 <div className="flex flex-col sm:flex-row gap-4">
                   <button
                     onClick={() => {
+                       if (!formaPagamentoProduto) {
+                         toast.error("Por favor, selecione uma forma de pagamento antes de continuar.");
+                         return;
+                       }
                        setView("client_login_produtos");
                     }}
                     className="flex-1 py-4 bg-white border-2 border-yellow-500 text-yellow-600 hover:bg-yellow-50 rounded-xl font-bold transition-colors shadow-sm flex items-center justify-center gap-2 text-lg"
@@ -3441,6 +3468,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </button>
                   <button
                     onClick={() => {
+                       if (!formaPagamentoProduto) {
+                         toast.error("Por favor, selecione uma forma de pagamento antes de continuar.");
+                         return;
+                       }
                        setView("form_produtos");
                     }}
                     className="flex-1 py-4 bg-yellow-500 hover:bg-yellow-600 text-slate-900 rounded-xl font-bold transition-colors shadow-md flex items-center justify-center gap-2 text-lg"

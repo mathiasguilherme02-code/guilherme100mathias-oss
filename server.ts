@@ -160,10 +160,8 @@ app.get("/api/produtos", async (req, res) => {
     if (!db) {
       return res.json(mockProdutos);
     }
-    const q = query(collection(db, "produtos"));
-    const querySnapshot = await getDocs(q);
-      
-    const produtos = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+    const querySnapshot = await db.collection("produtos").get();
+    const produtos = querySnapshot.docs.map((doc: any) => ({ ...doc.data(), id: doc.id }));
     res.json(produtos);
   } catch (error) {
     console.error("Error fetching produtos:", error);
@@ -233,12 +231,11 @@ app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
 app.delete("/api/produtos/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    
     if (!db) {
       mockProdutos = mockProdutos.filter(p => p.id !== id); syncData();
       return res.json({ success: true });
     }
-    await deleteDoc(doc(db, "produtos", id));
+    await db.collection("produtos").doc(id).delete();
     res.json({ success: true });
   } catch (error) {
     console.error("Error deleting produto:", error);
