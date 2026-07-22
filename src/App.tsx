@@ -9742,6 +9742,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                       <option value="mensal">Mensal</option>
                     </select>
                   </div>
+                  {adminToken && (
                   <div>
                     <div className="flex justify-between items-center mb-1">
                       <label className="block text-sm font-medium text-slate-700">
@@ -9781,6 +9782,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                       />
                     </div>
                   </div>
+                  )}
                 </div>
 
                 <div className="pt-4"></div>
