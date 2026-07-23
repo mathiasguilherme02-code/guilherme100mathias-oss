@@ -9190,8 +9190,9 @@ if (view === "client_login") {
                               const errorData = await res.json().catch(() => ({}));
                               alert("Erro ao salvar produto: " + (errorData.error || res.statusText));
                             }
-                          } catch(e) {
+                          } catch(e: any) {
                             console.error(e);
+                            alert("Erro de conexão ao salvar produto: " + (e.message || "Erro desconhecido"));
                           }
                         }}
                         className="px-6 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg font-medium transition-colors"
