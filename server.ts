@@ -126,7 +126,8 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Gustavo@01';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'secret-admin-token-123';
 
 const requireAdmin = (req: any, res: any, next: any) => {
-  const authHeader = req.headers.authorization;
+  const authHeader = req.headers.authorization || req.headers.Authorization;
+  console.log('Auth header:', authHeader);
   if (authHeader === `Bearer ${ADMIN_TOKEN}`) {
     next();
   } else {
@@ -373,7 +374,9 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
 app.get("/api/clients/:id", async (req, res) => {
   try {
     if (!db) {
-      return res.status(500).json({ error: "Database not initialized" });
+      const client = mockClients.find(c => c.id === req.params.id);
+      if (client) return res.json(client);
+      return res.status(404).json({ error: "Cliente não encontrado" });
     }
     const docRef = doc(db, "clients", req.params.id);
     const docSnap = await getDoc(docRef);
@@ -473,7 +476,13 @@ app.post("/api/clients", async (req, res) => {
 app.put("/api/clients/:id", async (req, res) => {
   try {
     if (!db) {
-      return res.json({ success: true });
+      const idx = mockClients.findIndex(c => c.id === req.params.id);
+      if (idx !== -1) {
+         mockClients[idx] = { ...mockClients[idx], ...req.body };
+         syncData();
+         return res.json({ success: true });
+      }
+      return res.status(404).json({ error: "Cliente não encontrado" });
     }
     const { id } = req.params;
     const client = req.body;

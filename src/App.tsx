@@ -7131,21 +7131,29 @@ if (view === "client_login") {
                                                       simIndex
                                                     ].parcelas,
                                                   ];
-                                                  const isNowPaid =
-                                                    !novasParcelas[i].paga;
+                                                  const isNowPaid = !novasParcelas[i].paga;
+                                                  
+                                                  let computedDataPagamento = null;
+                                                  if (isNowPaid) {
+                                                    const todayStr = getLocalISODateTime().split("T")[0];
+                                                    const vencimentoStr = (p.dataVencimento || "").split("T")[0];
+                                                    
+                                                    if (vencimentoStr && new Date(todayStr + "T00:00:00") > new Date(vencimentoStr + "T00:00:00")) {
+                                                      computedDataPagamento = p.dataVencimento; // acionado em data atrasada -> vencimento
+                                                    } else {
+                                                      computedDataPagamento = getLocalISODateTime(); // antecipado ou em dia -> hoje
+                                                    }
+                                                  }
+
                                                   novasParcelas[i] = {
                                                     ...novasParcelas[i],
                                                     paga: isNowPaid,
-                                                    status: isNowPaid
-                                                      ? "pago"
-                                                      : "pendente",
-                                                    dataPagamento: isNowPaid
-                                                      ? getLocalISODateTime()
-                                                      : null,
+                                                    status: isNowPaid ? "pago" : "pendente",
+                                                    dataPagamento: computedDataPagamento,
                                                   };
+                                                  
                                                   if (isNowPaid && isVencida) {
-                                                    novasParcelas[i].valor =
-                                                      valorAtualizado;
+                                                    novasParcelas[i].valor = valorAtualizado;
                                                   }
                                                   updatedSimulacoes[simIndex] =
                                                     {
@@ -7204,6 +7212,42 @@ if (view === "client_login") {
                                               {p.paga ? "Paga" : "Pendente"}
                                             </span>
                                           </label>
+                                          {p.paga && (
+                                            <div className="mt-2 text-sm bg-emerald-50 p-2 rounded border border-emerald-100">
+                                              <label className="block text-emerald-800 font-medium mb-1">
+                                                Data de Pagamento:
+                                              </label>
+                                              <input
+                                                type="date"
+                                                value={p.dataPagamento ? p.dataPagamento.split("T")[0] : ""}
+                                                onChange={async (e) => {
+                                                  const newDate = e.target.value;
+                                                  if (!selectedClient) return;
+                                                  try {
+                                                    const res = await fetch(`/api/clients/${selectedClient.id}`, { headers: { Authorization: `Bearer ${adminToken}` } });
+                                                    if (!res.ok) throw new Error("Failed to fetch latest client data");
+                                                    const latestClient = await res.json();
+                                                    const updatedSimulacoes = [...(latestClient.simulacoes || (latestClient.simulacao ? [latestClient.simulacao] : []))];
+                                                    const novasParcelas = [...updatedSimulacoes[simIndex].parcelas];
+                                                    novasParcelas[i] = { ...novasParcelas[i], dataPagamento: newDate ? newDate + "T00:00:00.000Z" : null };
+                                                    updatedSimulacoes[simIndex] = { ...updatedSimulacoes[simIndex], parcelas: novasParcelas };
+                                                    const updatedClient = { ...latestClient, simulacoes: updatedSimulacoes };
+                                                    const success = await updateClientWithUndo(updatedClient, "Atualizar Data de Pagamento");
+                                                    if (success) {
+                                                      setClients((prev) => prev.map((c) => c.id === latestClient.id ? updatedClient : c));
+                                                      setSelectedClient(updatedClient);
+                                                    } else {
+                                                      throw new Error("Failed to update");
+                                                    }
+                                                  } catch (error) {
+                                                    console.error("Error updating data pagamento:", error);
+                                                    toast.error("Erro ao atualizar data de pagamento");
+                                                  }
+                                                }}
+                                                className="w-full px-2 py-1 border border-emerald-200 rounded text-slate-700 focus:outline-none focus:border-emerald-500 bg-white"
+                                              />
+                                            </div>
+                                          )}
 
                                           {!p.paga && isVencida && (
                                             <label className="flex items-center gap-2 cursor-pointer mt-2">
