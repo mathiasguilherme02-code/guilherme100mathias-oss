@@ -135,6 +135,20 @@ const requireAdmin = (req: any, res: any, next: any) => {
   }
 };
 
+
+function sanitizeForFirestore(obj: any): any {
+  if (obj === undefined) return null;
+  if (typeof obj !== 'object' || obj === null) return obj;
+  if (Array.isArray(obj)) return obj.map(sanitizeForFirestore);
+  const result: any = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== undefined) {
+      result[key] = sanitizeForFirestore(obj[key]);
+    }
+  }
+  return result;
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -300,7 +314,7 @@ app.post("/api/clients/login", async (req, res) => {
     
     const data = querySnapshot.docs[0].data();
     const clientData = typeof data.dados === 'string' ? JSON.parse(data.dados) : (data.dados || {});
-    const merged = { ...clientData, ...data, id: querySnapshot.docs[0].id };
+    const merged = { ...data, ...clientData, id: querySnapshot.docs[0].id };
     delete merged.dados;
     res.json(merged);
   } catch (error) {
@@ -359,7 +373,7 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
     const parsedClients = querySnapshot.docs.map(doc => {
       const c = doc.data();
       const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
-      const merged = { ...dados, ...c, id: doc.id };
+      const merged = { ...c, ...dados, id: doc.id };
       delete merged.dados;
       return merged;
     });
@@ -387,7 +401,7 @@ app.get("/api/clients/:id", async (req, res) => {
     
     const data = docSnap.data();
     const clientData = typeof data.dados === 'string' ? JSON.parse(data.dados) : (data.dados || {});
-    const merged = { ...clientData, ...data, id: docSnap.id };
+    const merged = { ...data, ...clientData, id: docSnap.id };
     delete merged.dados;
     res.json(merged);
   } catch (error) {
@@ -455,13 +469,13 @@ app.post("/api/clients", async (req, res) => {
     // Process files (upload to Firebase Storage)
     const processedClient = await processClientFiles(client);
     
-    await setDoc(doc(db, "clients", client.id), {
+    await setDoc(doc(db, "clients", client.id), sanitizeForFirestore({
       id: client.id,
       nomeCompleto: client.nomeCompleto,
       cpf: formattedCpf,
       dataCadastro: pgDate,
       dados: processedClient
-    });
+    }));
       
     broadcastUpdate('UPDATE_CLIENTS');
     broadcastUpdate('NEW_CLIENT', { id: client.id, nomeCompleto: client.nomeCompleto });
@@ -541,7 +555,7 @@ app.put("/api/clients/:id", async (req, res) => {
     // Process files (upload to Firebase Storage)
     const processedClient = await processClientFiles(client);
     
-    const updateData: any = { dados: processedClient };
+    const updateData: any = sanitizeForFirestore({ dados: processedClient });
     if (client.nomeCompleto) updateData.nomeCompleto = client.nomeCompleto;
     if (client.cpf) updateData.cpf = client.cpf.replace(/[^\d]+/g, '');
     
@@ -592,7 +606,7 @@ app.post("/api/clients/:id/restore", requireAdmin, async (req, res) => {
     }
     const { id } = req.params;
     const clientData = req.body;
-    await setDoc(doc(db, "clients", id), clientData);
+    await setDoc(doc(db, "clients", id), sanitizeForFirestore(clientData));
     broadcastUpdate('UPDATE_CLIENTS');
     res.json({ success: true });
   } catch (error) {
