@@ -397,6 +397,24 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("todos");
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
+
+  const handleSelectClient = async (client: any) => {
+    setSelectedClient(client);
+    if (adminToken) {
+      try {
+        const res = await fetch(`/api/clients/${client.id}`, {
+          headers: { Authorization: `Bearer ${adminToken}` }
+        });
+        if (res.ok) {
+          const fullClient = await res.json();
+          setSelectedClient(fullClient);
+        }
+      } catch (e) {
+        console.error("Error fetching full client details:", e);
+      }
+    }
+  };
+
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -8278,7 +8296,7 @@ if (view === "client_login") {
                               <td className="py-4 px-6 text-right">
                                 <div className="flex items-center justify-end gap-3">
                                   <button
-                                    onClick={() => setSelectedClient(client)}
+                                    onClick={() => handleSelectClient(client)}
                                     className="text-indigo-600 hover:text-indigo-900 font-medium text-sm"
                                   >
                                     Ver Detalhes

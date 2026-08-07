@@ -375,6 +375,9 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
       const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
       const merged = { ...c, ...dados, id: doc.id };
       delete merged.dados;
+      if (merged.arquivos) {
+        delete merged.arquivos;
+      }
       return merged;
     });
     res.json(parsedClients);
