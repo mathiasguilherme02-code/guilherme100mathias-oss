@@ -47,7 +47,7 @@ import {
   Printer,
   ShoppingCart,
   Minus,
-  Image as ImageIcon
+  Image as ImageIcon,
 } from "lucide-react";
 
 export interface Produto {
@@ -203,18 +203,16 @@ export default function App() {
   }, [view]);
 
   const [adminTab, setAdminTab] = useState<
-    | "clientes"
-    | "cronograma"
-    | "fluxo_caixa"
-    | "mensagens"
-    | "produtos"
+    "clientes" | "cronograma" | "fluxo_caixa" | "mensagens" | "produtos"
   >("clientes");
-// 
+  //
 
-  
   const [produtos, setProdutos] = useState<Produto[]>([]);
-  const [carrinho, setCarrinho] = useState<{produto: Produto, quantidade: number}[]>([]);
-  const [formaPagamentoProduto, setFormaPagamentoProduto] = useState<string>("");
+  const [carrinho, setCarrinho] = useState<
+    { produto: Produto; quantidade: number }[]
+  >([]);
+  const [formaPagamentoProduto, setFormaPagamentoProduto] =
+    useState<string>("");
   const [selectedProduto, setSelectedProduto] = useState<Produto | null>(null);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
 
@@ -388,6 +386,10 @@ export default function App() {
   const [clientActionError, setClientActionError] = useState("");
   const [showReprovadoAlert, setShowReprovadoAlert] = useState(false);
   const [showActiveLoanAlert, setShowActiveLoanAlert] = useState(false);
+  const [showComoFuncionaEmprestimo, setShowComoFuncionaEmprestimo] =
+    useState(false);
+  const [showComoFuncionaProdutos, setShowComoFuncionaProdutos] =
+    useState(false);
   const [clients, setClients] = useState<any[]>([]);
   const clientsRef = useRef<any[]>([]);
 
@@ -403,7 +405,7 @@ export default function App() {
     if (adminToken) {
       try {
         const res = await fetch(`/api/clients/${client.id}`, {
-          headers: { Authorization: `Bearer ${adminToken}` }
+          headers: { Authorization: `Bearer ${adminToken}` },
         });
         if (res.ok) {
           const fullClient = await res.json();
@@ -440,7 +442,10 @@ export default function App() {
   } | null>(null);
   const [newAbatimento, setNewAbatimento] = useState({ data: "", valor: "" });
   const [addingParcela, setAddingParcela] = useState<number | null>(null);
-  const [newParcela, setNewParcela] = useState({ dataVencimento: "", valor: "" });
+  const [newParcela, setNewParcela] = useState({
+    dataVencimento: "",
+    valor: "",
+  });
 
   const [editingTransaction, setEditingTransaction] = useState<any | null>(
     null,
@@ -469,75 +474,95 @@ export default function App() {
         });
         if (!res.ok) throw new Error("Failed to fetch latest client data");
         const latestClient = await res.json();
-        const clientSimulacoes = latestClient.simulacoes || (latestClient.simulacao ? [latestClient.simulacao] : []);
+        const clientSimulacoes =
+          latestClient.simulacoes ||
+          (latestClient.simulacao ? [latestClient.simulacao] : []);
         const updatedSimulacoes = [...clientSimulacoes];
         const sim = updatedSimulacoes[simIndex];
-        
+
         let parcelas = [...(sim.parcelas || [])];
         const unpaidParcelas = parcelas.filter((p: any) => !p.paga);
-        
+
         if (unpaidParcelas.length === 0) {
           alert("Não há parcelas pendentes para congelar.");
           setCongelarModal(null);
           return;
         }
-        
-        const firstUnpaidDate = parseLocalDate(unpaidParcelas[0].dataVencimento);
-        firstUnpaidDate.setHours(0,0,0,0);
-        
+
+        const firstUnpaidDate = parseLocalDate(
+          unpaidParcelas[0].dataVencimento,
+        );
+        firstUnpaidDate.setHours(0, 0, 0, 0);
+
         // Push dates of all unpaid parcelas by 'meses' months
         for (let p of unpaidParcelas) {
-           let d = parseLocalDate(p.dataVencimento);
-           d.setHours(0,0,0,0);
-           d.setMonth(d.getMonth() + meses);
-           p.dataVencimento = getLocalISODate(d);
+          let d = parseLocalDate(p.dataVencimento);
+          d.setHours(0, 0, 0, 0);
+          d.setMonth(d.getMonth() + meses);
+          p.dataVencimento = getLocalISODate(d);
         }
-        
+
         // Insert 'meses' new parcelas for the interest
         const novasParcelasDeJuros = [];
         for (let i = 0; i < meses; i++) {
-           let d = new Date(firstUnpaidDate);
-           d.setMonth(d.getMonth() + i);
-           novasParcelasDeJuros.push({
-              dataVencimento: getLocalISODate(d),
-              valor: parseFloat(jurosMensal),
-              paga: false,
-              isCongelamento: true
-           });
+          let d = new Date(firstUnpaidDate);
+          d.setMonth(d.getMonth() + i);
+          novasParcelasDeJuros.push({
+            dataVencimento: getLocalISODate(d),
+            valor: parseFloat(jurosMensal),
+            paga: false,
+            isCongelamento: true,
+          });
         }
-        
+
         // Reassemble and renumber
-        parcelas = [...parcelas.filter((p: any) => p.paga), ...novasParcelasDeJuros, ...unpaidParcelas];
+        parcelas = [
+          ...parcelas.filter((p: any) => p.paga),
+          ...novasParcelasDeJuros,
+          ...unpaidParcelas,
+        ];
         parcelas.forEach((p: any, idx) => {
-           p.numero = idx + 1;
+          p.numero = idx + 1;
         });
-        
+
         updatedSimulacoes[simIndex] = {
-           ...sim,
-           isCongelado: true,
-           parcelas: parcelas
+          ...sim,
+          isCongelado: true,
+          parcelas: parcelas,
         };
-        
+
         const updatedClient = {
           ...latestClient,
-          simulacoes: updatedSimulacoes
+          simulacoes: updatedSimulacoes,
         };
-        
-        const success = await updateClientWithUndo(updatedClient, "Congelar Empréstimo");
+
+        const success = await updateClientWithUndo(
+          updatedClient,
+          "Congelar Empréstimo",
+        );
         if (success) {
-           setClients(prev => prev.map(c => c.id === latestClient.id ? updatedClient : c));
-           setSelectedClient(updatedClient);
-           setCongelarModal(null);
-           toast.success("Empréstimo congelado com sucesso!");
+          setClients((prev) =>
+            prev.map((c) => (c.id === latestClient.id ? updatedClient : c)),
+          );
+          setSelectedClient(updatedClient);
+          setCongelarModal(null);
+          toast.success("Empréstimo congelado com sucesso!");
         } else throw new Error("Update falhou");
       } catch (error) {
         console.error("Erro ao congelar empréstimo:", error);
         toast.error("Erro ao congelar empréstimo");
       }
     };
-    
-    window.addEventListener("app:confirmar_congelamento", handleConfirmarCongelamento);
-    return () => window.removeEventListener("app:confirmar_congelamento", handleConfirmarCongelamento);
+
+    window.addEventListener(
+      "app:confirmar_congelamento",
+      handleConfirmarCongelamento,
+    );
+    return () =>
+      window.removeEventListener(
+        "app:confirmar_congelamento",
+        handleConfirmarCongelamento,
+      );
   }, [congelarModal, selectedClient, adminToken]);
 
   const [adminSettings, setAdminSettings] = useState({
@@ -930,7 +955,7 @@ export default function App() {
     complemento: "",
     bairro: "",
     cidade: "",
-    estado: ""
+    estado: "",
   });
   const [categorizedFiles, setCategorizedFiles] = useState<
     Record<string, File>
@@ -1187,15 +1212,23 @@ export default function App() {
     return dateString;
   };
 
-  const generateVencidaMessage = (nomeCompleto: string, p: any, diasAtraso: number, valorAtualizado: number, prazo?: string) => {
+  const generateVencidaMessage = (
+    nomeCompleto: string,
+    p: any,
+    diasAtraso: number,
+    valorAtualizado: number,
+    prazo?: string,
+  ) => {
     const nome = nomeCompleto ? nomeCompleto.split(" ")[0] : "Cliente";
-    const dataStrVencimento = p.dataVencimento ? p.dataVencimento.split('T')[0].split('-').reverse().join('/') : "";
+    const dataStrVencimento = p.dataVencimento
+      ? p.dataVencimento.split("T")[0].split("-").reverse().join("/")
+      : "";
 
     if (prazo === "abater") {
       let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde ${dataStrVencimento}.
 
 `;
-      
+
       if (p.abatimentos && p.abatimentos.length > 0) {
         mensagem += `Sua dívida (vencida há ${diasAtraso} dias) está no valor atualizado de ${formatCurrency(valorAtualizado)}.
 
@@ -1204,7 +1237,7 @@ export default function App() {
 
 `;
         p.abatimentos.forEach((a: any) => {
-          const dataStr = a.data ? a.data.split('-').reverse().join('/') : "";
+          const dataStr = a.data ? a.data.split("-").reverse().join("/") : "";
           mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrency(a.valor)}
 `;
         });
@@ -1215,7 +1248,7 @@ Restando ainda o saldo de: ${formatCurrency(valorAtualizado)}.
         mensagem += `O valor total da sua dívida (vencida há ${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
 `;
       }
-      
+
       mensagem += `
 Por favor, regularize o quanto antes para evitar maiores encargos.`;
       return mensagem;
@@ -1235,8 +1268,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         const dataA = parseLocalDate(a.data);
         const diff = Math.max(0, hoje.getTime() - dataA.getTime());
         const dias = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const dataStr = a.data ? a.data.split('-').reverse().join('/') : "";
-        mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? 's' : ''})
+        const dataStr = a.data ? a.data.split("-").reverse().join("/") : "";
+        mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? "s" : ""})
 `;
       });
       mensagem += `
@@ -1252,7 +1285,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     }
 
     mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
-    
+
     return mensagem;
   };
 
@@ -1264,7 +1297,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     const clientSims =
       client.simulacoes?.filter(
         (s: any) =>
-          ((s.status === "aprovado" && s.clientAccepted === "sim") || (!s.status && s.clientAccepted !== "nao")) &&
+          ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+            (!s.status && s.clientAccepted !== "nao")) &&
           !s.arquivado,
       ) || [];
     let worstStatus = "sem_pendencias";
@@ -1273,7 +1307,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     hoje.setHours(0, 0, 0, 0);
 
     for (const sim of clientSims) {
-      for (const p of (sim.parcelas || [])) {
+      for (const p of sim.parcelas || []) {
         if (!p.paga) {
           const vencimento = parseLocalDate(p.dataVencimento);
           vencimento.setHours(0, 0, 0, 0);
@@ -1325,7 +1359,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       const hasCancelado = client.simulacoes?.some(
         (s: any) => s.status === "cancelado_pelo_cliente",
       );
-      if (hasCancelado && client.simulacoes?.length === 1) return "cancelado_pelo_cliente";
+      if (hasCancelado && client.simulacoes?.length === 1)
+        return "cancelado_pelo_cliente";
     }
 
     return worstStatus;
@@ -1335,7 +1370,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     const clientSims =
       client.simulacoes?.filter(
         (s: any) =>
-          ((s.status === "aprovado" && s.clientAccepted === "sim") || (!s.status && s.clientAccepted !== "nao")) &&
+          ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+            (!s.status && s.clientAccepted !== "nao")) &&
           !s.arquivado,
       ) || [];
     let maxDias = 0;
@@ -1401,7 +1437,11 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       case "reprovado":
         return { color: "bg-red-500", text: "text-white", label: "Reprovado" };
       case "cancelado_pelo_cliente":
-        return { color: "bg-slate-400", text: "text-white", label: "Cancelado (Cliente)" };
+        return {
+          color: "bg-slate-400",
+          text: "text-white",
+          label: "Cancelado (Cliente)",
+        };
       case "sem_pendencias":
         return {
           color: "bg-slate-200",
@@ -1423,11 +1463,16 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
 
     const qtd =
       simulacao.prazo === "única" ? 1 : parseInt(simulacao.quantidade) || 1;
-    const taxa = simulacao.prazo === "abater" ? 0 :
-      parseFloat(simulacao.taxaJuros) ||
-      parseFloat(adminSettings.taxaJuros) ||
-      1;
-    const tipoTaxa = simulacao.prazo === "abater" ? "mensal" : (simulacao.tipoTaxa || adminSettings.tipoTaxa || "mensal");
+    const taxa =
+      simulacao.prazo === "abater"
+        ? 0
+        : parseFloat(simulacao.taxaJuros) ||
+          parseFloat(adminSettings.taxaJuros) ||
+          1;
+    const tipoTaxa =
+      simulacao.prazo === "abater"
+        ? "mensal"
+        : simulacao.tipoTaxa || adminSettings.tipoTaxa || "mensal";
     let fatorDivisao = 30;
     if (tipoTaxa === "diaria") fatorDivisao = 1;
     else if (tipoTaxa === "semanal") fatorDivisao = 7;
@@ -1435,15 +1480,16 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     else if (tipoTaxa === "mensal") fatorDivisao = 30;
 
     let diasTotais = 30;
-    let dataAtual = simulacao.dataInicial 
-      ? parseLocalDate(simulacao.dataInicial) 
+    let dataAtual = simulacao.dataInicial
+      ? parseLocalDate(simulacao.dataInicial)
       : new Date();
     dataAtual.setHours(0, 0, 0, 0);
 
     if (simulacao.prazo === "dia") diasTotais = qtd;
     else if (simulacao.prazo === "semanal") diasTotais = qtd * 7;
     else if (simulacao.prazo === "quinzenal") diasTotais = qtd * 15;
-    else if (simulacao.prazo === "mensal" || simulacao.prazo === "abater") diasTotais = qtd * 30;
+    else if (simulacao.prazo === "mensal" || simulacao.prazo === "abater")
+      diasTotais = qtd * 30;
     else if (simulacao.prazo === "única") {
       if (!simulacao.dataVencimentoUnica) {
         alert("Por favor, informe a data de pagamento.");
@@ -1485,7 +1531,10 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
 
     setSimulacao((prev) => ({
       ...prev,
-      taxaJuros: prev.prazo === "abater" ? "0" : (prev.taxaJuros || adminSettings.taxaJuros),
+      taxaJuros:
+        prev.prazo === "abater"
+          ? "0"
+          : prev.taxaJuros || adminSettings.taxaJuros,
       taxaAtrasoDia: prev.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
       tipoTaxa: prev.tipoTaxa || adminSettings.tipoTaxa || "mensal",
       parcelas: novasParcelas,
@@ -1551,15 +1600,17 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     if (cleanCep.length !== 8) return;
     setLoadingCep(true);
     try {
-      const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
+      const response = await fetch(
+        `https://viacep.com.br/ws/${cleanCep}/json/`,
+      );
       const data = await response.json();
       if (!data.erro) {
-        setProdutoFormData(prev => ({
+        setProdutoFormData((prev) => ({
           ...prev,
           endereco: data.logradouro || "",
           bairro: data.bairro || "",
           cidade: data.localidade || "",
-          estado: data.uf || ""
+          estado: data.uf || "",
         }));
       }
     } catch (error) {
@@ -1904,7 +1955,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             dataBase.getTime() - vencimento.getTime(),
           );
           const diasAtraso = Math.round(diffTime / (1000 * 60 * 60 * 24));
-          const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || parseFloat(adminSettings.taxaAtrasoDia) || 1;
+          const taxaDia =
+            sim.prazo === "abater"
+              ? 0
+              : parseFloat(sim.taxaAtrasoDia) ||
+                parseFloat(adminSettings.taxaAtrasoDia) ||
+                1;
           valorAtualizado = p.valor + p.valor * (taxaDia / 100) * diasAtraso;
         }
         valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
@@ -1925,7 +1981,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
     clientSimulacoes.forEach((sim: any, index: number) => {
       if (
-        ((sim.status === "aprovado" && sim.clientAccepted === "sim") || (!sim.status && sim.clientAccepted !== "nao")) &&
+        ((sim.status === "aprovado" && sim.clientAccepted === "sim") ||
+          (!sim.status && sim.clientAccepted !== "nao")) &&
         !sim.arquivado
       ) {
         const simTotalOwed = calcularTotalAPagarAtualizado(sim);
@@ -1973,15 +2030,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         const clientSimulacoes =
           latestClient.simulacoes ||
           (latestClient.simulacao ? [latestClient.simulacao] : []);
-        
+
         const pendingOrUnacceptedSimulations = clientSimulacoes.filter(
           (s: any) =>
-            (s.status === "pendente" || (s.status === "aprovado" && (!s.clientAccepted || s.clientAccepted === "pendente"))) &&
+            (s.status === "pendente" ||
+              (s.status === "aprovado" &&
+                (!s.clientAccepted || s.clientAccepted === "pendente"))) &&
             !s.arquivado,
         );
 
         if (pendingOrUnacceptedSimulations.length >= 3) {
-          alert("Você pode ter no máximo 3 simulações aguardando análise ou aceite. Reveja as opções já aprovadas ou aguarde a análise do administrador.");
+          alert(
+            "Você pode ter no máximo 3 simulações aguardando análise ou aceite. Reveja as opções já aprovadas ou aguarde a análise do administrador.",
+          );
           return;
         }
 
@@ -2160,7 +2221,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       let updatedSimulacoes = latestClient.simulacoes
         ? [...latestClient.simulacoes]
         : [latestClient.simulacao];
-      
+
       updatedSimulacoes[simIndex] = {
         ...updatedSimulacoes[simIndex],
         clientAccepted: accepted ? "sim" : "nao",
@@ -2168,13 +2229,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
       if (accepted) {
         updatedSimulacoes = updatedSimulacoes.map((s, idx) => {
-          if (idx !== simIndex && !s.arquivado && (!s.clientAccepted || s.clientAccepted === "pendente") && (s.status === "pendente" || s.status === "aprovado" || !s.status)) {
+          if (
+            idx !== simIndex &&
+            !s.arquivado &&
+            (!s.clientAccepted || s.clientAccepted === "pendente") &&
+            (s.status === "pendente" || s.status === "aprovado" || !s.status)
+          ) {
             return {
               ...s,
               clientAccepted: "nao",
               arquivado: true,
               status: "reprovado",
-              observacoesAdmin: (s.observacoesAdmin ? s.observacoesAdmin + "\\n" : "") + "Cancelada/arquivada automaticamente devido ao aceite de outra proposta pelo cliente.",
+              observacoesAdmin:
+                (s.observacoesAdmin ? s.observacoesAdmin + "\\n" : "") +
+                "Cancelada/arquivada automaticamente devido ao aceite de outra proposta pelo cliente.",
             };
           }
           return s;
@@ -2366,9 +2434,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 Congelar Empréstimo
               </h3>
               <p className="text-sm text-slate-600 mb-4">
-                Separe os juros aplicados do valor principal. As parcelas pendentes da dívida serão adiadas, e novas parcelas contendo APENAS o valor referente aos juros mensais (R$ {congelarModal.jurosMensal}) serão geradas.
+                Separe os juros aplicados do valor principal. As parcelas
+                pendentes da dívida serão adiadas, e novas parcelas contendo
+                APENAS o valor referente aos juros mensais (R${" "}
+                {congelarModal.jurosMensal}) serão geradas.
               </p>
-              
+
               <div className="w-full text-left mb-6">
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Quantos meses deseja congelar (pagar apenas juros)?
@@ -2378,7 +2449,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   min="1"
                   max="12"
                   value={congelarModal.meses}
-                  onChange={(e) => setCongelarModal({...congelarModal, meses: parseInt(e.target.value) || 1})}
+                  onChange={(e) =>
+                    setCongelarModal({
+                      ...congelarModal,
+                      meses: parseInt(e.target.value) || 1,
+                    })
+                  }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200"
                 />
               </div>
@@ -2393,7 +2469,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 <button
                   onClick={async () => {
                     // Triggers the handleConfirmarCongelamento logic mapped below
-                    window.dispatchEvent(new CustomEvent("app:confirmar_congelamento"));
+                    window.dispatchEvent(
+                      new CustomEvent("app:confirmar_congelamento"),
+                    );
                   }}
                   className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white font-medium py-3 px-4 rounded-xl transition-colors"
                 >
@@ -2792,6 +2870,185 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           </div>
         </div>
       )}
+      {showComoFuncionaEmprestimo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowComoFuncionaEmprestimo(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <X size={24} />
+            </button>
+            <div className="w-16 h-16 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mx-auto mb-4">
+              <Info size={32} />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 text-center mb-4">
+              Como funciona nosso atendimento e pagamento
+            </h3>
+            <div className="text-slate-600 space-y-4 text-sm md:text-base">
+              <p>
+                Trabalhamos com condições flexíveis para caber no seu bolso,
+                oferecendo parcelas diárias, semanais, quinzenais ou mensais.
+              </p>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  1. Prazos e Vencimentos
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Início dos pagamentos:</strong> A primeira parcela
+                    vence de acordo com a frequência escolhida (ex.: plano
+                    diário inicia no dia seguinte; semanal após 7 dias, e assim
+                    sucessivamente).
+                  </li>
+                  <li>
+                    <strong>Horário limite:</strong> Todos os pagamentos devem
+                    ser efetuados até as 18h da data de vencimento.
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  2. Formas de Pagamento
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Pix:</strong> Forma preferencial de pagamento.
+                  </li>
+                  <li>
+                    <strong>Dinheiro em espécie:</strong> O pagamento é
+                    recolhido via motoboy, com taxa de entrega por conta do
+                    cliente.
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  3. Regras para Atrasos
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Juros por atraso:</strong> Será cobrada uma taxa de
+                    8% ao dia sobre o valor da parcela em atraso.
+                  </li>
+                  <li>
+                    <strong>Visita presencial:</strong> Em caso de atraso sem
+                    retorno às nossas mensagens ou ligações, será realizada uma
+                    visita ao local. Os custos do deslocamento serão repassados
+                    ao cliente.
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6">
+              <button
+                type="button"
+                onClick={() => setShowComoFuncionaEmprestimo(false)}
+                className="w-full bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold py-3 px-4 rounded-xl transition-colors"
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showComoFuncionaProdutos && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowComoFuncionaProdutos(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <X size={24} />
+            </button>
+            <div className="w-16 h-16 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mx-auto mb-4">
+              <Info size={32} />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800 text-center mb-4">
+              Como fazer seu pedido – Passo a Passo
+            </h3>
+            <div className="text-slate-600 space-y-4 text-sm md:text-base">
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  1. Escolha dos Produtos e Cadastro
+                </strong>
+                <p>
+                  Após selecionar os produtos do seu interesse, solicitamos o
+                  preenchimento completo da nossa ficha de cadastro com seus
+                  dados.
+                </p>
+              </div>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  2. Formas de Pagamento
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Opções:</strong> Pix, cartão de crédito ou cartão de
+                    débito (por aproximação).
+                  </li>
+                  <li>
+                    <strong>Importante:</strong> Eventuais taxas ou encargos
+                    bancários/de maquininha são por conta do cliente.
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  3. Envio e Entrega
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Modalidades:</strong> As entregas são feitas via
+                    Motoboy ou Sedex.
+                  </li>
+                  <li>
+                    <strong>Frete:</strong> O custo do envio é de
+                    responsabilidade do cliente.
+                  </li>
+                  <li>
+                    <strong>Aviso importante sobre o entregador:</strong> O
+                    motoboy realiza a entrega exclusivamente na portaria/entrada
+                    do endereço (não sobe em apartamentos) e não realiza compras
+                    adicionais ou serviços fora do que foi previamente combinado
+                    via WhatsApp.
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <strong className="block text-slate-800 mb-1">
+                  4. Conferência dos Produtos
+                </strong>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>
+                    <strong>Atenção:</strong> Pedimos que confira todos os
+                    produtos imediatamente no ato da entrega.
+                  </li>
+                  <li>
+                    <strong>Política de troca:</strong> Não realizaremos trocas
+                    ou devoluções após a saída do motoboy do local.
+                  </li>
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6">
+              <button
+                type="button"
+                onClick={() => setShowComoFuncionaProdutos(false)}
+                className="w-full bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold py-3 px-4 rounded-xl transition-colors"
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -2857,7 +3114,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           </button>
         </div>
         <div className="absolute top-4 right-4 flex gap-3">
-          
+          <button
+            onClick={() => setShowComoFuncionaEmprestimo(true)}
+
+            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+          >
+            <Info size={16} />
+            Como funciona empréstimo
+          </button>
+
+          <button
+            onClick={() => setShowComoFuncionaProdutos(true)}
+
+            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+          >
+            <Info size={16} />
+            Como funciona produtos
+          </button>
+
           <a
             href="https://wa.me/5531972323040"
             target="_blank"
@@ -2917,7 +3191,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               onClick={() => setView("produtos_lista")}
               className="px-10 py-5 bg-yellow-500 text-slate-900 text-2xl font-bold rounded-xl shadow-lg hover:bg-yellow-600 transition-all hover:scale-105 flex items-center gap-3"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
+                <path d="M3 6h18" />
+                <path d="M16 10a4 4 0 0 1-8 0" />
+              </svg>
               Produtos
             </button>
           </div>
@@ -2945,13 +3233,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               Cadastro de Interesse em Produtos
             </h1>
             <p className="text-slate-500 text-sm max-w-md">
-              Preencha o formulário abaixo para registrar seu interesse em nossos produtos.
+              Preencha o formulário abaixo para registrar seu interesse em
+              nossos produtos.
             </p>
           </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              toast.success("Cadastro realizado com sucesso! Em breve entraremos em contato.");
+              toast.success(
+                "Cadastro realizado com sucesso! Em breve entraremos em contato.",
+              );
               setView("produtos");
             }}
             className="p-8 space-y-6"
@@ -2964,7 +3255,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 type="text"
                 required
                 value={produtoFormData.nomeCompleto}
-                onChange={(e) => setProdutoFormData({ ...produtoFormData, nomeCompleto: e.target.value })}
+                onChange={(e) =>
+                  setProdutoFormData({
+                    ...produtoFormData,
+                    nomeCompleto: e.target.value,
+                  })
+                }
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                 placeholder="Digite seu nome completo"
               />
@@ -3030,7 +3326,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     type="text"
                     required
                     value={produtoFormData.endereco}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, endereco: e.target.value })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        endereco: e.target.value,
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                     placeholder="Rua, Avenida, etc."
                   />
@@ -3043,7 +3344,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     type="text"
                     required
                     value={produtoFormData.numero}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, numero: e.target.value })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        numero: e.target.value,
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                     placeholder="Nº"
                   />
@@ -3058,7 +3364,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   <input
                     type="text"
                     value={produtoFormData.complemento}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, complemento: e.target.value })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        complemento: e.target.value,
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                     placeholder="Apto, Sala, Casa 2"
                   />
@@ -3071,7 +3382,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     type="text"
                     required
                     value={produtoFormData.bairro}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, bairro: e.target.value })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        bairro: e.target.value,
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                     placeholder="Bairro"
                   />
@@ -3087,7 +3403,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     type="text"
                     required
                     value={produtoFormData.cidade}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, cidade: e.target.value })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        cidade: e.target.value,
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none"
                     placeholder="Cidade"
                   />
@@ -3101,7 +3422,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     required
                     maxLength={2}
                     value={produtoFormData.estado}
-                    onChange={(e) => setProdutoFormData({ ...produtoFormData, estado: e.target.value.toUpperCase() })}
+                    onChange={(e) =>
+                      setProdutoFormData({
+                        ...produtoFormData,
+                        estado: e.target.value.toUpperCase(),
+                      })
+                    }
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 transition-colors outline-none uppercase"
                     placeholder="UF"
                   />
@@ -3139,28 +3465,38 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             <h2 className="text-3xl font-bold text-slate-800 mb-2">
               Área do Cliente
             </h2>
-            <p className="text-slate-500">
-              Acesse com seu número de telefone
-            </p>
+            <p className="text-slate-500">Acesse com seu número de telefone</p>
           </div>
-          <form className="mt-8 space-y-6" onSubmit={(e) => {
-            e.preventDefault();
-            const phone = (e.currentTarget.elements.namedItem('telefone') as HTMLInputElement).value;
-            if (!phone) {
-              setClientLoginError("Por favor, insira seu telefone.");
-              return;
-            }
-            if (carrinho.length > 0) {
-              toast.success(`Pedido finalizado com sucesso! Forma de Pagamento: ${formaPagamentoProduto === 'dinheiro' ? 'Dinheiro' : formaPagamentoProduto === 'pix' ? 'Pix' : formaPagamentoProduto === 'debito' ? 'Cartão de Débito' : 'Cartão de Crédito'}. Entraremos em contato via WhatsApp.`);
-              setCarrinho([]);
-              setFormaPagamentoProduto("");
-            } else {
-              toast.success("Login realizado com sucesso!");
-            }
-            setView("produtos_lista");
-          }}>
+          <form
+            className="mt-8 space-y-6"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const phone = (
+                e.currentTarget.elements.namedItem(
+                  "telefone",
+                ) as HTMLInputElement
+              ).value;
+              if (!phone) {
+                setClientLoginError("Por favor, insira seu telefone.");
+                return;
+              }
+              if (carrinho.length > 0) {
+                toast.success(
+                  `Pedido finalizado com sucesso! Forma de Pagamento: ${formaPagamentoProduto === "dinheiro" ? "Dinheiro" : formaPagamentoProduto === "pix" ? "Pix" : formaPagamentoProduto === "debito" ? "Cartão de Débito" : "Cartão de Crédito"}. Entraremos em contato via WhatsApp.`,
+                );
+                setCarrinho([]);
+                setFormaPagamentoProduto("");
+              } else {
+                toast.success("Login realizado com sucesso!");
+              }
+              setView("produtos_lista");
+            }}
+          >
             <div>
-              <label htmlFor="telefone" className="block text-sm font-medium text-slate-700 mb-2">
+              <label
+                htmlFor="telefone"
+                className="block text-sm font-medium text-slate-700 mb-2"
+              >
                 Telefone / WhatsApp
               </label>
               <input
@@ -3198,10 +3534,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     );
   }
 
-  
   if (view === "produtos_lista") {
-    const totalCarrinho = carrinho.reduce((acc, item) => acc + (parseFloat(item.produto.precoOferta || item.produto.preco) * item.quantidade), 0);
-    const numItensCarrinho = carrinho.reduce((acc, item) => acc + item.quantidade, 0);
+    const totalCarrinho = carrinho.reduce(
+      (acc, item) =>
+        acc +
+        parseFloat(item.produto.precoOferta || item.produto.preco) *
+          item.quantidade,
+      0,
+    );
+    const numItensCarrinho = carrinho.reduce(
+      (acc, item) => acc + item.quantidade,
+      0,
+    );
 
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
@@ -3213,9 +3557,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             >
               <ArrowLeft size={24} />
             </button>
-            <h1 className="text-xl font-bold text-slate-800">
-              Produtos
-            </h1>
+            <h1 className="text-xl font-bold text-slate-800">Produtos</h1>
           </div>
           {numItensCarrinho > 0 && (
             <button
@@ -3231,9 +3573,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         </div>
         <div className="flex-1 p-6 max-w-7xl mx-auto w-full">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {produtos.map(p => (
-              <div 
-                key={p.id} 
+            {produtos.map((p) => (
+              <div
+                key={p.id}
                 className="bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow border border-slate-100 overflow-hidden cursor-pointer flex flex-col"
                 onClick={() => {
                   setSelectedProduto(p);
@@ -3241,23 +3583,37 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 }}
               >
                 {p.imagemUrl ? (
-                  <img src={p.imagemUrl} alt={p.nome} className="w-full h-48 object-cover" />
+                  <img
+                    src={p.imagemUrl}
+                    alt={p.nome}
+                    className="w-full h-48 object-cover"
+                  />
                 ) : (
                   <div className="w-full h-48 bg-slate-200 flex items-center justify-center text-slate-400">
                     <ImageIcon size={48} />
                   </div>
                 )}
                 <div className="p-4 flex flex-col flex-1">
-                  <h3 className="font-bold text-lg text-slate-800 mb-1">{p.nome}</h3>
-                  <p className="text-slate-500 text-sm mb-4 line-clamp-2">{p.descricao}</p>
+                  <h3 className="font-bold text-lg text-slate-800 mb-1">
+                    {p.nome}
+                  </h3>
+                  <p className="text-slate-500 text-sm mb-4 line-clamp-2">
+                    {p.descricao}
+                  </p>
                   <div className="mt-auto">
                     {p.precoOferta ? (
                       <div className="flex flex-col">
-                        <span className="text-slate-400 text-sm line-through">{formatCurrency(parseFloat(p.preco))}</span>
-                        <span className="text-green-600 font-bold text-lg">{formatCurrency(parseFloat(p.precoOferta))}</span>
+                        <span className="text-slate-400 text-sm line-through">
+                          {formatCurrency(parseFloat(p.preco))}
+                        </span>
+                        <span className="text-green-600 font-bold text-lg">
+                          {formatCurrency(parseFloat(p.precoOferta))}
+                        </span>
                       </div>
                     ) : (
-                      <span className="text-slate-800 font-bold text-lg">{formatCurrency(parseFloat(p.preco))}</span>
+                      <span className="text-slate-800 font-bold text-lg">
+                        {formatCurrency(parseFloat(p.preco))}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -3276,8 +3632,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
   if (view === "produto_detalhes" && selectedProduto) {
     const preco = parseFloat(selectedProduto.preco);
-    const precoOferta = selectedProduto.precoOferta ? parseFloat(selectedProduto.precoOferta) : null;
-    
+    const precoOferta = selectedProduto.precoOferta
+      ? parseFloat(selectedProduto.precoOferta)
+      : null;
+
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
         <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500">
@@ -3295,7 +3653,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col md:flex-row">
             <div className="md:w-1/2">
               {selectedProduto.imagemUrl ? (
-                <img src={selectedProduto.imagemUrl} alt={selectedProduto.nome} className="w-full h-full object-cover min-h-[300px]" />
+                <img
+                  src={selectedProduto.imagemUrl}
+                  alt={selectedProduto.nome}
+                  className="w-full h-full object-cover min-h-[300px]"
+                />
               ) : (
                 <div className="w-full h-full min-h-[300px] bg-slate-200 flex items-center justify-center text-slate-400">
                   <ImageIcon size={64} />
@@ -3303,28 +3665,49 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               )}
             </div>
             <div className="p-8 md:w-1/2 flex flex-col">
-              <h2 className="text-3xl font-black text-slate-800 mb-4">{selectedProduto.nome}</h2>
-              <p className="text-slate-600 mb-6 text-lg">{selectedProduto.descricao}</p>
-              
+              <h2 className="text-3xl font-black text-slate-800 mb-4">
+                {selectedProduto.nome}
+              </h2>
+              <p className="text-slate-600 mb-6 text-lg">
+                {selectedProduto.descricao}
+              </p>
+
               <div className="mb-8">
                 {precoOferta ? (
                   <div className="flex flex-col">
-                    <span className="text-slate-400 text-lg line-through">De: {formatCurrency(preco)}</span>
-                    <span className="text-green-600 font-bold text-4xl">Por: {formatCurrency(precoOferta)}</span>
+                    <span className="text-slate-400 text-lg line-through">
+                      De: {formatCurrency(preco)}
+                    </span>
+                    <span className="text-green-600 font-bold text-4xl">
+                      Por: {formatCurrency(precoOferta)}
+                    </span>
                   </div>
                 ) : (
-                  <span className="text-slate-800 font-bold text-4xl">{formatCurrency(preco)}</span>
+                  <span className="text-slate-800 font-bold text-4xl">
+                    {formatCurrency(preco)}
+                  </span>
                 )}
               </div>
-              
+
               <div className="mt-auto space-y-4">
                 <button
                   onClick={() => {
-                    const existingItem = carrinho.find(i => i.produto.id === selectedProduto.id);
+                    const existingItem = carrinho.find(
+                      (i) => i.produto.id === selectedProduto.id,
+                    );
                     if (existingItem) {
-                      setCarrinho(carrinho.map(i => i.produto.id === selectedProduto.id ? { ...i, quantidade: i.quantidade + 1 } : i));
+                      setCarrinho(
+                        carrinho.map((i) =>
+                          i.produto.id === selectedProduto.id
+                            ? { ...i, quantidade: i.quantidade + 1 }
+                            : i,
+                        ),
+                      );
                     } else {
-                      setCarrinho([...carrinho, { produto: selectedProduto, quantidade: 1 }]);
+                      setCarrinho([
+                        ...carrinho,
+                        { produto: selectedProduto, quantidade: 1 },
+                      ]);
                     }
                     toast.success("Produto adicionado ao carrinho!");
                   }}
@@ -3333,11 +3716,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   <ShoppingCart size={20} />
                   Adicionar ao Carrinho
                 </button>
-                
+
                 <div className="flex gap-4 pt-4 border-t border-slate-100">
                   <button
                     onClick={() => {
-                       setView("client_login_produtos");
+                      setView("client_login_produtos");
                     }}
                     className="flex-1 py-3 bg-white border-2 border-yellow-500 text-yellow-600 hover:bg-yellow-50 rounded-xl font-bold transition-colors shadow-sm flex items-center justify-center gap-2"
                   >
@@ -3346,7 +3729,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </button>
                   <button
                     onClick={() => {
-                       setView("form_produtos");
+                      setView("form_produtos");
                     }}
                     className="flex-1 py-3 bg-yellow-500 hover:bg-yellow-600 text-slate-900 rounded-xl font-bold transition-colors shadow-md flex items-center justify-center gap-2"
                   >
@@ -3363,8 +3746,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
   }
 
   if (view === "carrinho") {
-    const totalCarrinho = carrinho.reduce((acc, item) => acc + (parseFloat(item.produto.precoOferta || item.produto.preco) * item.quantidade), 0);
-    
+    const totalCarrinho = carrinho.reduce(
+      (acc, item) =>
+        acc +
+        parseFloat(item.produto.precoOferta || item.produto.preco) *
+          item.quantidade,
+      0,
+    );
+
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
         <div className="bg-white shadow-sm p-4 flex items-center gap-4 border-b-4 border-yellow-500">
@@ -3383,8 +3772,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           {carrinho.length === 0 ? (
             <div className="text-center py-20 flex flex-col items-center">
               <ShoppingCart size={64} className="text-slate-300 mb-4" />
-              <h2 className="text-2xl font-bold text-slate-700 mb-2">Seu carrinho está vazio</h2>
-              <p className="text-slate-500 mb-8">Navegue pelos nossos produtos e adicione itens ao carrinho.</p>
+              <h2 className="text-2xl font-bold text-slate-700 mb-2">
+                Seu carrinho está vazio
+              </h2>
+              <p className="text-slate-500 mb-8">
+                Navegue pelos nossos produtos e adicione itens ao carrinho.
+              </p>
               <button
                 onClick={() => setView("produtos_lista")}
                 className="px-8 py-3 bg-yellow-500 text-slate-900 font-bold rounded-xl hover:bg-yellow-600 transition-colors shadow-md"
@@ -3396,12 +3789,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <ul className="divide-y divide-slate-100">
                 {carrinho.map((item, index) => {
-                  const precoReal = parseFloat(item.produto.precoOferta || item.produto.preco);
+                  const precoReal = parseFloat(
+                    item.produto.precoOferta || item.produto.preco,
+                  );
                   return (
-                    <li key={index} className="p-4 sm:p-6 flex items-center gap-4 sm:gap-6">
+                    <li
+                      key={index}
+                      className="p-4 sm:p-6 flex items-center gap-4 sm:gap-6"
+                    >
                       <div className="w-20 h-20 sm:w-24 sm:h-24 shrink-0 rounded-lg overflow-hidden bg-slate-100 border border-slate-200">
                         {item.produto.imagemUrl ? (
-                          <img src={item.produto.imagemUrl} alt={item.produto.nome} className="w-full h-full object-cover" />
+                          <img
+                            src={item.produto.imagemUrl}
+                            alt={item.produto.nome}
+                            className="w-full h-full object-cover"
+                          />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center text-slate-400">
                             <ImageIcon size={24} />
@@ -3409,29 +3811,52 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         )}
                       </div>
                       <div className="flex-1">
-                        <h3 className="font-bold text-slate-800 text-lg mb-1">{item.produto.nome}</h3>
-                        <p className="text-slate-500 text-sm">{formatCurrency(precoReal)} unid.</p>
+                        <h3 className="font-bold text-slate-800 text-lg mb-1">
+                          {item.produto.nome}
+                        </h3>
+                        <p className="text-slate-500 text-sm">
+                          {formatCurrency(precoReal)} unid.
+                        </p>
                         {item.quantidade > 1 && (
-                           <p className="text-yellow-600 font-bold mt-1">Subtotal: {formatCurrency(precoReal * item.quantidade)}</p>
+                          <p className="text-yellow-600 font-bold mt-1">
+                            Subtotal:{" "}
+                            {formatCurrency(precoReal * item.quantidade)}
+                          </p>
                         )}
                       </div>
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => {
                             if (item.quantidade > 1) {
-                              setCarrinho(carrinho.map((c, i) => i === index ? { ...c, quantidade: c.quantidade - 1 } : c));
+                              setCarrinho(
+                                carrinho.map((c, i) =>
+                                  i === index
+                                    ? { ...c, quantidade: c.quantidade - 1 }
+                                    : c,
+                                ),
+                              );
                             } else {
-                              setCarrinho(carrinho.filter((c, i) => i !== index));
+                              setCarrinho(
+                                carrinho.filter((c, i) => i !== index),
+                              );
                             }
                           }}
                           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200 transition-colors"
                         >
                           <Minus size={16} />
                         </button>
-                        <span className="font-bold text-slate-800 w-4 text-center">{item.quantidade}</span>
+                        <span className="font-bold text-slate-800 w-4 text-center">
+                          {item.quantidade}
+                        </span>
                         <button
                           onClick={() => {
-                            setCarrinho(carrinho.map((c, i) => i === index ? { ...c, quantidade: c.quantidade + 1 } : c));
+                            setCarrinho(
+                              carrinho.map((c, i) =>
+                                i === index
+                                  ? { ...c, quantidade: c.quantidade + 1 }
+                                  : c,
+                              ),
+                            );
                           }}
                           className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-slate-200 transition-colors"
                         >
@@ -3448,14 +3873,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         </button>
                       </div>
                     </li>
-                  )
+                  );
                 })}
               </ul>
               <div className="p-6 bg-slate-50 border-t border-slate-100">
                 <div className="mb-6">
-                  <label className="block text-slate-700 font-bold mb-2">Forma de Pagamento:</label>
-                  <select 
-                    value={formaPagamentoProduto} 
+                  <label className="block text-slate-700 font-bold mb-2">
+                    Forma de Pagamento:
+                  </label>
+                  <select
+                    value={formaPagamentoProduto}
                     onChange={(e) => setFormaPagamentoProduto(e.target.value)}
                     className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
                   >
@@ -3467,17 +3894,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </select>
                 </div>
                 <div className="flex justify-between items-center mb-6">
-                  <span className="text-slate-600 font-medium text-lg">Total do Pedido:</span>
-                  <span className="text-3xl font-black text-slate-800">{formatCurrency(totalCarrinho)}</span>
+                  <span className="text-slate-600 font-medium text-lg">
+                    Total do Pedido:
+                  </span>
+                  <span className="text-3xl font-black text-slate-800">
+                    {formatCurrency(totalCarrinho)}
+                  </span>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-4">
                   <button
                     onClick={() => {
-                       if (!formaPagamentoProduto) {
-                         toast.error("Por favor, selecione uma forma de pagamento antes de continuar.");
-                         return;
-                       }
-                       setView("client_login_produtos");
+                      if (!formaPagamentoProduto) {
+                        toast.error(
+                          "Por favor, selecione uma forma de pagamento antes de continuar.",
+                        );
+                        return;
+                      }
+                      setView("client_login_produtos");
                     }}
                     className="flex-1 py-4 bg-white border-2 border-yellow-500 text-yellow-600 hover:bg-yellow-50 rounded-xl font-bold transition-colors shadow-sm flex items-center justify-center gap-2 text-lg"
                   >
@@ -3486,11 +3919,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </button>
                   <button
                     onClick={() => {
-                       if (!formaPagamentoProduto) {
-                         toast.error("Por favor, selecione uma forma de pagamento antes de continuar.");
-                         return;
-                       }
-                       setView("form_produtos");
+                      if (!formaPagamentoProduto) {
+                        toast.error(
+                          "Por favor, selecione uma forma de pagamento antes de continuar.",
+                        );
+                        return;
+                      }
+                      setView("form_produtos");
                     }}
                     className="flex-1 py-4 bg-yellow-500 hover:bg-yellow-600 text-slate-900 rounded-xl font-bold transition-colors shadow-md flex items-center justify-center gap-2 text-lg"
                   >
@@ -3506,7 +3941,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     );
   }
 
-if (view === "client_login") {
+  if (view === "client_login") {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
         <button
@@ -3628,20 +4063,27 @@ if (view === "client_login") {
               </button>
               <button
                 onClick={() => {
-                  const pendingOrUnacceptedSimulations = clientSimulacoes.filter(
-                    (s: any) =>
-                      (s.status === "pendente" || (s.status === "aprovado" && (!s.clientAccepted || s.clientAccepted === "pendente"))) &&
-                      !s.arquivado,
-                  );
+                  const pendingOrUnacceptedSimulations =
+                    clientSimulacoes.filter(
+                      (s: any) =>
+                        (s.status === "pendente" ||
+                          (s.status === "aprovado" &&
+                            (!s.clientAccepted ||
+                              s.clientAccepted === "pendente"))) &&
+                        !s.arquivado,
+                    );
 
                   if (pendingOrUnacceptedSimulations.length >= 3) {
-                    alert("Você pode ter no máximo 3 simulações aguardando análise ou aceite. Reveja as opções já aprovadas ou aguarde a análise do administrador.");
+                    alert(
+                      "Você pode ter no máximo 3 simulações aguardando análise ou aceite. Reveja as opções já aprovadas ou aguarde a análise do administrador.",
+                    );
                     return;
                   }
 
                   const activeLoans = clientSimulacoes.filter(
                     (s: any) =>
-                      ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                      ((s.status === "aprovado" &&
+                        s.clientAccepted === "sim") ||
                         (!s.status && s.clientAccepted !== "nao")) &&
                       !s.arquivado,
                   );
@@ -3787,17 +4229,31 @@ if (view === "client_login") {
                             estar verificando se houve atualização.
                           </p>
                           <div className="bg-slate-50 p-4 rounded-lg max-w-md mx-auto text-left border border-slate-200 mb-8">
-                            <h4 className="font-semibold text-slate-700 mb-2">Detalhes da Solicitação:</h4>
+                            <h4 className="font-semibold text-slate-700 mb-2">
+                              Detalhes da Solicitação:
+                            </h4>
                             <ul className="text-sm text-slate-600 space-y-2">
-                              <li><strong>Valor:</strong> {formatCurrency(sim.valorSolicitado)}</li>
-                              <li><strong>Prazo:</strong> <span className="capitalize">{sim.prazo}</span></li>
                               <li>
-                                <strong>Data Inicial:</strong> {formatDate(sim.dataInicial)}
+                                <strong>Valor:</strong>{" "}
+                                {formatCurrency(sim.valorSolicitado)}
+                              </li>
+                              <li>
+                                <strong>Prazo:</strong>{" "}
+                                <span className="capitalize">{sim.prazo}</span>
+                              </li>
+                              <li>
+                                <strong>Data Inicial:</strong>{" "}
+                                {formatDate(sim.dataInicial)}
                               </li>
                               {sim.prazo === "única" ? (
-                                <li><strong>Data de Pagamento:</strong> {formatDate(sim.dataVencimentoUnica)}</li>
+                                <li>
+                                  <strong>Data de Pagamento:</strong>{" "}
+                                  {formatDate(sim.dataVencimentoUnica)}
+                                </li>
                               ) : (
-                                <li><strong>Quantidade:</strong> {sim.quantidade}x</li>
+                                <li>
+                                  <strong>Quantidade:</strong> {sim.quantidade}x
+                                </li>
                               )}
                             </ul>
                           </div>
@@ -3807,7 +4263,9 @@ if (view === "client_login") {
                               A análise está demorando ou você mudou de ideia?
                             </p>
                             <button
-                              onClick={() => handleClientCancelSolicitacao(sim.originalIndex)}
+                              onClick={() =>
+                                handleClientCancelSolicitacao(sim.originalIndex)
+                              }
                               className="text-red-500 hover:text-red-700 hover:bg-red-50 font-medium py-2 px-6 rounded-lg transition-colors border border-red-200 hover:border-red-300"
                             >
                               Cancelar Solicitação
@@ -3857,22 +4315,30 @@ if (view === "client_login") {
                               strokeLinejoin="round"
                             >
                               <circle cx="12" cy="12" r="10"></circle>
-                              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                              <line
+                                x1="4.93"
+                                y1="4.93"
+                                x2="19.07"
+                                y2="19.07"
+                              ></line>
                             </svg>
                           </div>
                           <h3 className="text-xl font-bold text-slate-800 mb-2">
                             Empréstimo Cancelado
                           </h3>
                           <p className="text-slate-500 max-w-md mx-auto">
-                            Esta solicitação de empréstimo foi cancelada por você. 
-                            Você pode realizar uma nova simulação a qualquer momento.
+                            Esta solicitação de empréstimo foi cancelada por
+                            você. Você pode realizar uma nova simulação a
+                            qualquer momento.
                           </p>
                         </div>
                       ) : (
                         <>
                           {sim.status === "aprovado" &&
                             !sim.clientAccepted &&
-                            !(Array.isArray(sim.parcelas) ? sim.parcelas : [])?.some((p: any) => p.paga) && (
+                            !(
+                              Array.isArray(sim.parcelas) ? sim.parcelas : []
+                            )?.some((p: any) => p.paga) && (
                               <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-8 text-center">
                                 <h3 className="text-xl font-bold text-blue-800 mb-2">
                                   Proposta Aprovada!
@@ -3969,7 +4435,10 @@ if (view === "client_login") {
                                 diasAtraso = Math.round(
                                   diffTime / (1000 * 60 * 60 * 24),
                                 );
-                                const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || 1;
+                                const taxaDia =
+                                  sim.prazo === "abater"
+                                    ? 0
+                                    : parseFloat(sim.taxaAtrasoDia) || 1;
                                 valorAtualizado =
                                   p.valor +
                                   p.valor * (taxaDia / 100) * diasAtraso;
@@ -3989,18 +4458,37 @@ if (view === "client_login") {
                                     <div className="flex items-center gap-2">
                                       <span className="font-bold text-lg text-slate-800">
                                         Parcela {p.numero}
-                                        {p.isCongelamento && <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">Apenas Juros</span>}
-                                        {p.jurosCongelados && p.dataCongelamento && (
-                                          <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                            Congelada em {formatDate(p.dataCongelamento)}
-                                            {(() => {
-                                              const v = parseLocalDate(p.dataVencimento);
-                                              const c = parseLocalDate(p.dataCongelamento);
-                                              const diff = Math.max(0, Math.round((c.getTime() - v.getTime()) / (1000 * 60 * 60 * 24)));
-                                              return diff > 0 ? ` (${diff} dias atraso)` : "";
-                                            })()}
+                                        {p.isCongelamento && (
+                                          <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                            Apenas Juros
                                           </span>
                                         )}
+                                        {p.jurosCongelados &&
+                                          p.dataCongelamento && (
+                                            <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                              Congelada em{" "}
+                                              {formatDate(p.dataCongelamento)}
+                                              {(() => {
+                                                const v = parseLocalDate(
+                                                  p.dataVencimento,
+                                                );
+                                                const c = parseLocalDate(
+                                                  p.dataCongelamento,
+                                                );
+                                                const diff = Math.max(
+                                                  0,
+                                                  Math.round(
+                                                    (c.getTime() -
+                                                      v.getTime()) /
+                                                      (1000 * 60 * 60 * 24),
+                                                  ),
+                                                );
+                                                return diff > 0
+                                                  ? ` (${diff} dias atraso)`
+                                                  : "";
+                                              })()}
+                                            </span>
+                                          )}
                                       </span>
                                       {isVencendoHoje && (
                                         <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-0.5 rounded animate-pulse">
@@ -4134,7 +4622,9 @@ if (view === "client_login") {
 
                           {sim.status === "aprovado" &&
                             !sim.clientAccepted &&
-                            !(Array.isArray(sim.parcelas) ? sim.parcelas : [])?.some((p: any) => p.paga) && (
+                            !(
+                              Array.isArray(sim.parcelas) ? sim.parcelas : []
+                            )?.some((p: any) => p.paga) && (
                               <div className="mt-8 pt-6 border-t border-slate-200">
                                 <div className="flex gap-4">
                                   <button
@@ -4406,9 +4896,10 @@ if (view === "client_login") {
       const updatedSimulacoes = [...clientSimulacoes];
       const novasParcelas = [...(updatedSimulacoes[simIndex].parcelas || [])];
 
-      const maxNumero = novasParcelas.length > 0 
-        ? Math.max(...novasParcelas.map(p => p.numero)) 
-        : 0;
+      const maxNumero =
+        novasParcelas.length > 0
+          ? Math.max(...novasParcelas.map((p) => p.numero))
+          : 0;
 
       novasParcelas.push({
         numero: maxNumero + 1,
@@ -4418,7 +4909,7 @@ if (view === "client_login") {
       });
 
       updatedSimulacoes[simIndex].parcelas = novasParcelas;
-      
+
       // Also update quantidade
       updatedSimulacoes[simIndex].quantidade = novasParcelas.length.toString();
 
@@ -4701,33 +5192,37 @@ if (view === "client_login") {
               !s.arquivado,
           )
           .flatMap((s: any, sIdx: number) =>
-            (Array.isArray(s.parcelas) ? s.parcelas : []).map((p: any, pIdx: number) => {
-              const abatimentosTotal = p.abatimentos
-                ? p.abatimentos.reduce(
-                    (acc: number, a: any) => acc + a.valor,
+            (Array.isArray(s.parcelas) ? s.parcelas : []).map(
+              (p: any, pIdx: number) => {
+                const abatimentosTotal = p.abatimentos
+                  ? p.abatimentos.reduce(
+                      (acc: number, a: any) => acc + a.valor,
+                      0,
+                    )
+                  : 0;
+                return {
+                  ...p,
+                  valorRestante: Math.max(
                     0,
-                  )
-                : 0;
-              return {
-                ...p,
-                valorRestante: Math.max(
-                  0,
-                  parseFloat(p.valor || 0) - abatimentosTotal,
-                ),
-                clientId: c.id,
-                clientName: c.nomeCompleto,
-                clientPhone: c.telefone,
-                simIndex: sIdx,
-                parcelaIndex: pIdx,
-                taxaAtrasoDia: s.taxaAtrasoDia,
-                prazo: s.prazo,
-              };
-            }),
+                    parseFloat(p.valor || 0) - abatimentosTotal,
+                  ),
+                  clientId: c.id,
+                  clientName: c.nomeCompleto,
+                  clientPhone: c.telefone,
+                  simIndex: sIdx,
+                  parcelaIndex: pIdx,
+                  taxaAtrasoDia: s.taxaAtrasoDia,
+                  prazo: s.prazo,
+                };
+              },
+            ),
           ),
       )
       .filter((p) => !p.paga)
       .sort((a, b) => {
-        const dateCompare = (a.dataVencimento || "").localeCompare(b.dataVencimento || "");
+        const dateCompare = (a.dataVencimento || "").localeCompare(
+          b.dataVencimento || "",
+        );
         if (dateCompare !== 0) return dateCompare;
         return (a.clientName || "").localeCompare(b.clientName || "");
       });
@@ -4735,7 +5230,7 @@ if (view === "client_login") {
     const filteredCronogramaParcelas = cronogramaParcelas.filter((p: any) => {
       const date = p.dataVencimento;
       if (!date) return false;
-      
+
       const vencimento = parseLocalDate(date);
       const year = String(vencimento.getFullYear());
       const month = String(vencimento.getMonth() + 1).padStart(2, "0");
@@ -4783,7 +5278,10 @@ if (view === "client_login") {
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
           .map((s: any, originalIndex: number) => ({ s, originalIndex }))
           .filter(
-            ({ s }: any) => ((s.status === "aprovado" && s.clientAccepted === "sim") || (!s.status && s.clientAccepted !== "nao") || s.status === "renegociado"),
+            ({ s }: any) =>
+              (s.status === "aprovado" && s.clientAccepted === "sim") ||
+              (!s.status && s.clientAccepted !== "nao") ||
+              s.status === "renegociado",
           )
           .flatMap(({ s, originalIndex }: any) =>
             (s.parcelas || [])
@@ -4814,7 +5312,10 @@ if (view === "client_login") {
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
           .map((s: any, originalIndex: number) => ({ s, originalIndex }))
           .filter(
-            ({ s }: any) => ((s.status === "aprovado" && s.clientAccepted === "sim") || (!s.status && s.clientAccepted !== "nao") || s.status === "renegociado"),
+            ({ s }: any) =>
+              (s.status === "aprovado" && s.clientAccepted === "sim") ||
+              (!s.status && s.clientAccepted !== "nao") ||
+              s.status === "renegociado",
           )
           .flatMap(({ s, originalIndex }: any) =>
             (s.parcelas || []).flatMap((p: any) =>
@@ -4920,9 +5421,9 @@ if (view === "client_login") {
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
           .filter(
             (s: any) =>
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao") ||
-                s.status === "renegociado"),
+              (s.status === "aprovado" && s.clientAccepted === "sim") ||
+              (!s.status && s.clientAccepted !== "nao") ||
+              s.status === "renegociado",
           )
           .flatMap((s: any) => [
             ...(s.parcelas || [])
@@ -4969,9 +5470,7 @@ if (view === "client_login") {
                 const vencimento = parseLocalDate(date);
                 vencimento.setHours(0, 0, 0, 0);
                 return (
-                  !p.paga &&
-                  vencimento >= hoje &&
-                  date.startsWith(fluxoFilter)
+                  !p.paga && vencimento >= hoje && date.startsWith(fluxoFilter)
                 );
               })
               .map((p: any) => {
@@ -5005,9 +5504,7 @@ if (view === "client_login") {
                 const vencimento = parseLocalDate(date);
                 vencimento.setHours(0, 0, 0, 0);
                 return (
-                  !p.paga &&
-                  vencimento < hoje &&
-                  date.startsWith(fluxoFilter)
+                  !p.paga && vencimento < hoje && date.startsWith(fluxoFilter)
                 );
               })
               .map((p: any) => {
@@ -5043,19 +5540,24 @@ if (view === "client_login") {
 
     const monthRetiradas = adminTransactions
       .filter(
-        (t: any) => (t.data || "").startsWith(fluxoFilter) && t.tipo === "retirada",
+        (t: any) =>
+          (t.data || "").startsWith(fluxoFilter) && t.tipo === "retirada",
       )
       .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
 
     const monthDespesasPrevistas = adminTransactions
       .filter(
         (t: any) =>
-          (t.data || "").startsWith(fluxoFilter) && t.tipo === "despesa_prevista",
+          (t.data || "").startsWith(fluxoFilter) &&
+          t.tipo === "despesa_prevista",
       )
       .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
 
     const monthAportes = adminTransactions
-      .filter((t: any) => (t.data || "").startsWith(fluxoFilter) && t.tipo === "aporte")
+      .filter(
+        (t: any) =>
+          (t.data || "").startsWith(fluxoFilter) && t.tipo === "aporte",
+      )
       .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
 
     const saldo = monthEntradas + monthAportes - monthSaidas - monthRetiradas;
@@ -5475,12 +5977,14 @@ if (view === "client_login") {
         taxaJuros: sim.taxaJuros || adminSettings.taxaJuros,
         taxaAtrasoDia: sim.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
         tipoTaxa: sim.tipoTaxa || adminSettings.tipoTaxa || "mensal",
-        dataInicial: sim.dataInicial || (sim.dataCriacao
-          ? sim.dataCriacao.split("T")[0]
-          : getLocalISODate()),
+        dataInicial:
+          sim.dataInicial ||
+          (sim.dataCriacao ? sim.dataCriacao.split("T")[0] : getLocalISODate()),
         dataVencimentoUnica:
           sim.prazo === "única"
-            ? (sim.parcelas && sim.parcelas.length > 0 ? (sim.parcelas[0].dataVencimento || "").split("T")[0] : (sim.dataVencimentoUnica || ""))
+            ? sim.parcelas && sim.parcelas.length > 0
+              ? (sim.parcelas[0].dataVencimento || "").split("T")[0]
+              : sim.dataVencimentoUnica || ""
             : "",
         valorParcela: "", // Do not pre-fill, let it auto-calculate unless user overrides
       });
@@ -5503,11 +6007,16 @@ if (view === "client_login") {
         editSimData.prazo === "única"
           ? 1
           : parseInt(editSimData.quantidade) || 1;
-      const taxa = editSimData.prazo === "abater" ? 0 :
-        parseFloat(editSimData.taxaJuros) ||
-        parseFloat(adminSettings.taxaJuros) ||
-        1;
-      const tipoTaxa = editSimData.prazo === "abater" ? "mensal" : (editSimData.tipoTaxa || adminSettings.tipoTaxa || "mensal");
+      const taxa =
+        editSimData.prazo === "abater"
+          ? 0
+          : parseFloat(editSimData.taxaJuros) ||
+            parseFloat(adminSettings.taxaJuros) ||
+            1;
+      const tipoTaxa =
+        editSimData.prazo === "abater"
+          ? "mensal"
+          : editSimData.tipoTaxa || adminSettings.tipoTaxa || "mensal";
       let fatorDivisao = 30;
       if (tipoTaxa === "diaria") fatorDivisao = 1;
       else if (tipoTaxa === "semanal") fatorDivisao = 7;
@@ -5523,7 +6032,8 @@ if (view === "client_login") {
       if (editSimData.prazo === "dia") diasTotais = qtd;
       else if (editSimData.prazo === "semanal") diasTotais = qtd * 7;
       else if (editSimData.prazo === "quinzenal") diasTotais = qtd * 15;
-      else if (editSimData.prazo === "mensal" || editSimData.prazo === "abater") diasTotais = qtd * 30;
+      else if (editSimData.prazo === "mensal" || editSimData.prazo === "abater")
+        diasTotais = qtd * 30;
       else if (editSimData.prazo === "única") {
         if (!editSimData.dataVencimentoUnica) {
           alert("Por favor, informe a data de pagamento.");
@@ -5581,7 +6091,10 @@ if (view === "client_login") {
             dataVencimento.setDate(dataVencimento.getDate() + i * 7);
           } else if (editSimData.prazo === "quinzenal") {
             dataVencimento.setDate(dataVencimento.getDate() + i * 15);
-          } else if (editSimData.prazo === "mensal" || editSimData.prazo === "abater") {
+          } else if (
+            editSimData.prazo === "mensal" ||
+            editSimData.prazo === "abater"
+          ) {
             dataVencimento.setMonth(dataVencimento.getMonth() + i);
           } else if (editSimData.prazo === "única") {
             dataVencimento = parseLocalDate(editSimData.dataVencimentoUnica);
@@ -5679,12 +6192,14 @@ if (view === "client_login") {
             const clientSimulacoes =
               latestClient.simulacoes ||
               (latestClient.simulacao ? [latestClient.simulacao] : []);
-            
-            console.log(`Total simulations before delete: ${clientSimulacoes.length}`);
-            
+
+            console.log(
+              `Total simulations before delete: ${clientSimulacoes.length}`,
+            );
+
             if (simIndex < 0 || simIndex >= clientSimulacoes.length) {
-                console.error("simIndex is out of bounds!", simIndex);
-                throw new Error("Índice de simulação inválido.");
+              console.error("simIndex is out of bounds!", simIndex);
+              throw new Error("Índice de simulação inválido.");
             }
 
             const updatedSimulacoes = [...clientSimulacoes];
@@ -5730,7 +6245,13 @@ if (view === "client_login") {
 
       const simulacao = selectedClient.simulacoes[simIndex];
 
-      if (aprovar && (!simulacao.parcelas || (Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0) === 0)) {
+      if (
+        aprovar &&
+        (!simulacao.parcelas ||
+          (Array.isArray(simulacao.parcelas)
+            ? simulacao.parcelas.length
+            : 0) === 0)
+      ) {
         alert(
           "Por favor, edite a simulação para definir a taxa de juros e gerar as parcelas antes de aprovar.",
         );
@@ -5990,7 +6511,12 @@ if (view === "client_login") {
             <div className="ml-auto flex items-center mb-3">
               <button
                 onClick={async () => {
-                  if (!confirm("Deseja gerar e baixar um arquivo ZIP contendo todo o banco de dados e arquivos de imagens/comprovantes de todos os clientes? Isso pode demorar alguns minutos.")) return;
+                  if (
+                    !confirm(
+                      "Deseja gerar e baixar um arquivo ZIP contendo todo o banco de dados e arquivos de imagens/comprovantes de todos os clientes? Isso pode demorar alguns minutos.",
+                    )
+                  )
+                    return;
                   setIsBackingUp(true);
                   try {
                     const res = await fetch("/api/backup", {
@@ -6019,7 +6545,10 @@ if (view === "client_login") {
                 disabled={isBackingUp}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-sm font-medium ${isBackingUp ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-blue-100 hover:bg-blue-200 text-blue-800"}`}
               >
-                <Download size={16} className={isBackingUp ? "animate-pulse" : ""} />
+                <Download
+                  size={16}
+                  className={isBackingUp ? "animate-pulse" : ""}
+                />
                 {isBackingUp ? "Gerando Backup..." : "Fazer Backup Geral"}
               </button>
             </div>
@@ -6072,7 +6601,9 @@ if (view === "client_login") {
                     <label className="block text-sm font-medium text-slate-700">
                       Taxa de Juros (%)
                     </label>
-                    <span className="text-sm font-bold text-yellow-600">{adminSettings.taxaJuros}%</span>
+                    <span className="text-sm font-bold text-yellow-600">
+                      {adminSettings.taxaJuros}%
+                    </span>
                   </div>
                   <div className="flex items-center gap-4">
                     <input
@@ -6658,18 +7189,22 @@ if (view === "client_login") {
                                 >
                                   <RefreshCw size={18} />
                                 </button>
-                                {(sim.prazo === "mensal" || sim.prazo === "única") && (
+                                {(sim.prazo === "mensal" ||
+                                  sim.prazo === "única") && (
                                   <button
                                     onClick={() => {
-                                       const principal = parseFloat(sim.valorSolicitado);
-                                       const taxa = parseFloat(sim.taxaJuros) || 40;
-                                       const juros = principal * (taxa / 100);
-                                       setCongelarModal({
-                                         isOpen: true,
-                                         simIndex,
-                                         meses: 1,
-                                         jurosMensal: juros.toFixed(2),
-                                       });
+                                      const principal = parseFloat(
+                                        sim.valorSolicitado,
+                                      );
+                                      const taxa =
+                                        parseFloat(sim.taxaJuros) || 40;
+                                      const juros = principal * (taxa / 100);
+                                      setCongelarModal({
+                                        isOpen: true,
+                                        simIndex,
+                                        meses: 1,
+                                        jurosMensal: juros.toFixed(2),
+                                      });
                                     }}
                                     className="ml-2 text-cyan-500 hover:text-cyan-700 p-2 rounded-lg hover:bg-cyan-50 transition-colors"
                                     title="Congelar Empréstimo (Pagar Só Juros)"
@@ -6753,7 +7288,8 @@ if (view === "client_login") {
                                       <option value="quinzenal">
                                         Quinzenal
                                       </option>
-                                      <option value="mensal">Mensal</option><option value="abater">Abater</option>
+                                      <option value="mensal">Mensal</option>
+                                      <option value="abater">Abater</option>
                                       <option value="única">
                                         Parcela Única
                                       </option>
@@ -6817,7 +7353,11 @@ if (view === "client_login") {
                                       Tipo de Taxa
                                     </label>
                                     <select
-                                      value={editSimData.tipoTaxa || adminSettings.tipoTaxa || "mensal"}
+                                      value={
+                                        editSimData.tipoTaxa ||
+                                        adminSettings.tipoTaxa ||
+                                        "mensal"
+                                      }
                                       disabled={editSimData.prazo === "abater"}
                                       onChange={(e) =>
                                         setEditSimData({
@@ -6829,7 +7369,9 @@ if (view === "client_login") {
                                     >
                                       <option value="diaria">Diária</option>
                                       <option value="semanal">Semanal</option>
-                                      <option value="quinzenal">Quinzenal</option>
+                                      <option value="quinzenal">
+                                        Quinzenal
+                                      </option>
                                       <option value="mensal">Mensal</option>
                                     </select>
                                   </div>
@@ -6838,7 +7380,12 @@ if (view === "client_login") {
                                       <label className="block text-sm font-medium text-slate-700">
                                         Taxa de Juros (%)
                                       </label>
-                                      <span className="text-sm font-bold text-indigo-600">{editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}%</span>
+                                      <span className="text-sm font-bold text-indigo-600">
+                                        {editSimData.prazo === "abater"
+                                          ? 0
+                                          : editSimData.taxaJuros}
+                                        %
+                                      </span>
                                     </div>
                                     <div className="flex items-center gap-2">
                                       <input
@@ -6846,8 +7393,14 @@ if (view === "client_login") {
                                         min="0"
                                         max="100"
                                         step="0.1"
-                                        value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
-                                        disabled={editSimData.prazo === "abater"}
+                                        value={
+                                          editSimData.prazo === "abater"
+                                            ? 0
+                                            : editSimData.taxaJuros
+                                        }
+                                        disabled={
+                                          editSimData.prazo === "abater"
+                                        }
                                         onChange={(e) =>
                                           setEditSimData({
                                             ...editSimData,
@@ -6858,8 +7411,14 @@ if (view === "client_login") {
                                       />
                                       <input
                                         type="number"
-                                        value={editSimData.prazo === "abater" ? 0 : editSimData.taxaJuros}
-                                        disabled={editSimData.prazo === "abater"}
+                                        value={
+                                          editSimData.prazo === "abater"
+                                            ? 0
+                                            : editSimData.taxaJuros
+                                        }
+                                        disabled={
+                                          editSimData.prazo === "abater"
+                                        }
                                         onChange={(e) =>
                                           setEditSimData({
                                             ...editSimData,
@@ -6948,7 +7507,15 @@ if (view === "client_login") {
                                         Data de Pagamento
                                       </p>
                                       <p className="text-lg font-semibold text-slate-800">
-                                        {sim.dataVencimentoUnica ? formatDate(sim.dataVencimentoUnica) : ((Array.isArray(sim.parcelas) ? sim.parcelas : [])?.[0]?.dataVencimento ? formatDate(sim.parcelas[0].dataVencimento) : "Pendente")}
+                                        {sim.dataVencimentoUnica
+                                          ? formatDate(sim.dataVencimentoUnica)
+                                          : (Array.isArray(sim.parcelas)
+                                                ? sim.parcelas
+                                                : [])?.[0]?.dataVencimento
+                                            ? formatDate(
+                                                sim.parcelas[0].dataVencimento,
+                                              )
+                                            : "Pendente"}
                                       </p>
                                     </div>
                                   )}
@@ -6957,7 +7524,11 @@ if (view === "client_login") {
                                       Cálculo de Juros (Visão Admin)
                                     </p>
                                     <p className="text-sm text-yellow-900">
-                                      Taxa aplicada: {sim.taxaJuros}% ({sim.tipoTaxa || adminSettings.tipoTaxa || 'mensal'})
+                                      Taxa aplicada: {sim.taxaJuros}% (
+                                      {sim.tipoTaxa ||
+                                        adminSettings.tipoTaxa ||
+                                        "mensal"}
+                                      )
                                     </p>
                                     <p className="text-xs text-yellow-700 mt-1">
                                       Fórmula: Valor Solicitado + (Valor
@@ -6996,287 +7567,168 @@ if (view === "client_login") {
                                   </div>
                                 </div>
                                 <div className="grid grid-cols-1 gap-4">
-                                  {(sim.parcelas || []).map((p: any, i: number) => {
-                                    const hoje = new Date();
-                                    hoje.setHours(0, 0, 0, 0);
-                                    const vencimento = parseLocalDate(
-                                      p.dataVencimento,
-                                    );
-                                    vencimento.setHours(0, 0, 0, 0);
+                                  {(sim.parcelas || []).map(
+                                    (p: any, i: number) => {
+                                      const hoje = new Date();
+                                      hoje.setHours(0, 0, 0, 0);
+                                      const vencimento = parseLocalDate(
+                                        p.dataVencimento,
+                                      );
+                                      vencimento.setHours(0, 0, 0, 0);
 
-                                    const isVencida =
-                                      !p.paga && vencimento < hoje;
-                                    const isVencendoHoje =
-                                      !p.paga &&
-                                      vencimento.getTime() === hoje.getTime();
-                                    
-                                    const diffParaVencimento = vencimento.getTime() - hoje.getTime();
-                                    const diasParaVencimento = Math.round(diffParaVencimento / (1000 * 60 * 60 * 24));
-                                    const isPreVencimento = !p.paga && diasParaVencimento >= 1 && diasParaVencimento <= 3;
+                                      const isVencida =
+                                        !p.paga && vencimento < hoje;
+                                      const isVencendoHoje =
+                                        !p.paga &&
+                                        vencimento.getTime() === hoje.getTime();
 
-                                    let diasAtraso = 0;
-                                    let valorAtualizado = p.valor;
-                                    const abatimentosTotal = p.abatimentos
-                                      ? p.abatimentos.reduce(
-                                          (acc: number, a: any) =>
-                                            acc + a.valor,
-                                          0,
-                                        )
-                                      : 0;
+                                      const diffParaVencimento =
+                                        vencimento.getTime() - hoje.getTime();
+                                      const diasParaVencimento = Math.round(
+                                        diffParaVencimento /
+                                          (1000 * 60 * 60 * 24),
+                                      );
+                                      const isPreVencimento =
+                                        !p.paga &&
+                                        diasParaVencimento >= 1 &&
+                                        diasParaVencimento <= 3;
 
-                                    if (isVencida) {
-                                      let dataBase = hoje;
-                                      if (
-                                        p.jurosCongelados &&
-                                        p.dataCongelamento
-                                      ) {
-                                        const dataCongelamento = parseLocalDate(
-                                          p.dataCongelamento,
-                                        );
-                                        dataCongelamento.setHours(0, 0, 0, 0);
-                                        if (dataCongelamento < hoje) {
-                                          dataBase = dataCongelamento;
+                                      let diasAtraso = 0;
+                                      let valorAtualizado = p.valor;
+                                      const abatimentosTotal = p.abatimentos
+                                        ? p.abatimentos.reduce(
+                                            (acc: number, a: any) =>
+                                              acc + a.valor,
+                                            0,
+                                          )
+                                        : 0;
+
+                                      if (isVencida) {
+                                        let dataBase = hoje;
+                                        if (
+                                          p.jurosCongelados &&
+                                          p.dataCongelamento
+                                        ) {
+                                          const dataCongelamento =
+                                            parseLocalDate(p.dataCongelamento);
+                                          dataCongelamento.setHours(0, 0, 0, 0);
+                                          if (dataCongelamento < hoje) {
+                                            dataBase = dataCongelamento;
+                                          }
                                         }
+                                        const diffTime = Math.max(
+                                          0,
+                                          dataBase.getTime() -
+                                            vencimento.getTime(),
+                                        );
+                                        diasAtraso = Math.round(
+                                          diffTime / (1000 * 60 * 60 * 24),
+                                        );
+                                        const taxaDia =
+                                          sim.prazo === "abater"
+                                            ? 0
+                                            : parseFloat(sim.taxaAtrasoDia) ||
+                                              1;
+                                        valorAtualizado =
+                                          p.valor +
+                                          p.valor *
+                                            (taxaDia / 100) *
+                                            diasAtraso;
                                       }
-                                      const diffTime = Math.max(
+
+                                      valorAtualizado = Math.max(
                                         0,
-                                        dataBase.getTime() -
-                                          vencimento.getTime(),
+                                        valorAtualizado - abatimentosTotal,
                                       );
-                                      diasAtraso = Math.round(
-                                        diffTime / (1000 * 60 * 60 * 24),
-                                      );
-                                      const taxaDia = sim.prazo === "abater" ? 0 : parseFloat(sim.taxaAtrasoDia) || 1;
-                                      valorAtualizado =
-                                        p.valor +
-                                        p.valor * (taxaDia / 100) * diasAtraso;
-                                    }
 
-                                    valorAtualizado = Math.max(
-                                      0,
-                                      valorAtualizado - abatimentosTotal,
-                                    );
+                                      const isEditing =
+                                        editingParcela?.simIndex === simIndex &&
+                                        editingParcela?.parcelaIndex === i;
 
-                                    const isEditing =
-                                      editingParcela?.simIndex === simIndex &&
-                                      editingParcela?.parcelaIndex === i;
-
-                                    return (
-                                      <div
-                                        key={i}
-                                        className={`border rounded-lg p-4 ${isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
-                                      >
-                                        <div className="flex justify-between items-center mb-2">
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-semibold text-slate-800">
-                                              Parcela {p.numero}
-                                              {p.isCongelamento && <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">Apenas Juros</span>}
-                                              {p.jurosCongelados && p.dataCongelamento && (
-                                                <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                                  Congelada em {formatDate(p.dataCongelamento)}
-                                                  {(() => {
-                                                    const v = parseLocalDate(p.dataVencimento);
-                                                    const c = parseLocalDate(p.dataCongelamento);
-                                                    const diff = Math.max(0, Math.round((c.getTime() - v.getTime()) / (1000 * 60 * 60 * 24)));
-                                                    return diff > 0 ? ` (${diff} dias atraso)` : "";
-                                                  })()}
+                                      return (
+                                        <div
+                                          key={i}
+                                          className={`border rounded-lg p-4 ${isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
+                                        >
+                                          <div className="flex justify-between items-center mb-2">
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-semibold text-slate-800">
+                                                Parcela {p.numero}
+                                                {p.isCongelamento && (
+                                                  <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                                    Apenas Juros
+                                                  </span>
+                                                )}
+                                                {p.jurosCongelados &&
+                                                  p.dataCongelamento && (
+                                                    <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                                      Congelada em{" "}
+                                                      {formatDate(
+                                                        p.dataCongelamento,
+                                                      )}
+                                                      {(() => {
+                                                        const v =
+                                                          parseLocalDate(
+                                                            p.dataVencimento,
+                                                          );
+                                                        const c =
+                                                          parseLocalDate(
+                                                            p.dataCongelamento,
+                                                          );
+                                                        const diff = Math.max(
+                                                          0,
+                                                          Math.round(
+                                                            (c.getTime() -
+                                                              v.getTime()) /
+                                                              (1000 *
+                                                                60 *
+                                                                60 *
+                                                                24),
+                                                          ),
+                                                        );
+                                                        return diff > 0
+                                                          ? ` (${diff} dias atraso)`
+                                                          : "";
+                                                      })()}
+                                                    </span>
+                                                  )}
+                                              </span>
+                                              {!isEditing && (
+                                                <button
+                                                  onClick={() => {
+                                                    setEditingParcela({
+                                                      simIndex,
+                                                      parcelaIndex: i,
+                                                    });
+                                                    setEditParcelaData({
+                                                      dataVencimento:
+                                                        p.dataVencimento,
+                                                      valor: p.valor,
+                                                      dataPagamento:
+                                                        p.dataPagamento
+                                                          ? p.dataPagamento.split(
+                                                              "T",
+                                                            )[0]
+                                                          : "",
+                                                    });
+                                                  }}
+                                                  className="text-slate-400 hover:text-yellow-600 transition-colors ml-2"
+                                                  title="Editar Parcela"
+                                                >
+                                                  <Edit2 size={14} />
+                                                </button>
+                                              )}
+                                              {isVencendoHoje && (
+                                                <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-0.5 rounded animate-pulse">
+                                                  VENCE HOJE
                                                 </span>
                                               )}
-                                            </span>
-                                            {!isEditing && (
-                                              <button
-                                                onClick={() => {
-                                                  setEditingParcela({
-                                                    simIndex,
-                                                    parcelaIndex: i,
-                                                  });
-                                                  setEditParcelaData({
-                                                    dataVencimento:
-                                                      p.dataVencimento,
-                                                    valor: p.valor,
-                                                    dataPagamento:
-                                                      p.dataPagamento
-                                                        ? p.dataPagamento.split(
-                                                            "T",
-                                                          )[0]
-                                                        : "",
-                                                  });
-                                                }}
-                                                className="text-slate-400 hover:text-yellow-600 transition-colors ml-2"
-                                                title="Editar Parcela"
-                                              >
-                                                <Edit2 size={14} />
-                                              </button>
-                                            )}
-                                            {isVencendoHoje && (
-                                              <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-0.5 rounded animate-pulse">
-                                                VENCE HOJE
-                                              </span>
-                                            )}
-                                          </div>
-                                          <label className="flex items-center gap-2 cursor-pointer">
-                                            <input
-                                              type="checkbox"
-                                              checked={p.paga}
-                                              onChange={async () => {
-                                                if (!selectedClient) return;
-                                                try {
-                                                  const res = await fetch(
-                                                    `/api/clients/${selectedClient.id}`,
-                                                    {
-                                                      headers: {
-                                                        Authorization: `Bearer ${adminToken}`,
-                                                      },
-                                                    },
-                                                  );
-                                                  if (!res.ok)
-                                                    throw new Error(
-                                                      "Failed to fetch latest client data",
-                                                    );
-                                                  const latestClient =
-                                                    await res.json();
-
-                                                  const clientSimulacoes =
-                                                    latestClient.simulacoes ||
-                                                    (latestClient.simulacao
-                                                      ? [latestClient.simulacao]
-                                                      : []);
-                                                  const updatedSimulacoes = [
-                                                    ...clientSimulacoes,
-                                                  ];
-                                                  const novasParcelas = [
-                                                    ...updatedSimulacoes[
-                                                      simIndex
-                                                    ].parcelas,
-                                                  ];
-                                                  const isNowPaid = !novasParcelas[i].paga;
-                                                  
-                                                  let computedDataPagamento = null;
-                                                  if (isNowPaid) {
-                                                    const todayStr = getLocalISODateTime().split("T")[0];
-                                                    const vencimentoStr = (p.dataVencimento || "").split("T")[0];
-                                                    
-                                                    if (vencimentoStr && new Date(todayStr + "T00:00:00") > new Date(vencimentoStr + "T00:00:00")) {
-                                                      computedDataPagamento = p.dataVencimento; // acionado em data atrasada -> vencimento
-                                                    } else {
-                                                      computedDataPagamento = getLocalISODateTime(); // antecipado ou em dia -> hoje
-                                                    }
-                                                  }
-
-                                                  novasParcelas[i] = {
-                                                    ...novasParcelas[i],
-                                                    paga: isNowPaid,
-                                                    status: isNowPaid ? "pago" : "pendente",
-                                                    dataPagamento: computedDataPagamento,
-                                                  };
-                                                  
-                                                  if (isNowPaid && isVencida) {
-                                                    novasParcelas[i].valor = valorAtualizado;
-                                                  }
-                                                  updatedSimulacoes[simIndex] =
-                                                    {
-                                                      ...updatedSimulacoes[
-                                                        simIndex
-                                                      ],
-                                                      parcelas: novasParcelas,
-                                                    };
-
-                                                  const updatedClient = {
-                                                    ...latestClient,
-                                                    simulacoes:
-                                                      updatedSimulacoes,
-                                                  };
-
-                                                  const success =
-                                                    await updateClientWithUndo(
-                                                      updatedClient,
-                                                      `Marcar Parcela como ${isNowPaid ? "Paga" : "Pendente"}`,
-                                                    );
-                                                  if (success) {
-                                                    setClients((prev) =>
-                                                      prev.map((c) =>
-                                                        c.id === latestClient.id
-                                                          ? updatedClient
-                                                          : c,
-                                                      ),
-                                                    );
-                                                    setSelectedClient(
-                                                      updatedClient,
-                                                    );
-                                                  } else {
-                                                    throw new Error(
-                                                      "Failed to update",
-                                                    );
-                                                  }
-                                                } catch (error) {
-                                                  console.error(
-                                                    "Error toggling payment:",
-                                                    error,
-                                                  );
-                                                  toast.error(
-                                                    "Erro ao atualizar status da parcela",
-                                                  );
-                                                }
-                                              }}
-                                              className="w-5 h-5 text-yellow-500 rounded focus:ring-yellow-500"
-                                            />
-                                            <span
-                                              className={
-                                                p.paga
-                                                  ? "text-emerald-600 font-medium"
-                                                  : "text-slate-500"
-                                              }
-                                            >
-                                              {p.paga ? "Paga" : "Pendente"}
-                                            </span>
-                                          </label>
-                                          {p.paga && (
-                                            <div className="mt-2 text-sm bg-emerald-50 p-2 rounded border border-emerald-100">
-                                              <label className="block text-emerald-800 font-medium mb-1">
-                                                Data de Pagamento:
-                                              </label>
-                                              <input
-                                                type="date"
-                                                value={p.dataPagamento ? p.dataPagamento.split("T")[0] : ""}
-                                                onChange={async (e) => {
-                                                  const newDate = e.target.value;
-                                                  if (!selectedClient) return;
-                                                  try {
-                                                    const res = await fetch(`/api/clients/${selectedClient.id}`, { headers: { Authorization: `Bearer ${adminToken}` } });
-                                                    if (!res.ok) throw new Error("Failed to fetch latest client data");
-                                                    const latestClient = await res.json();
-                                                    const updatedSimulacoes = [...(latestClient.simulacoes || (latestClient.simulacao ? [latestClient.simulacao] : []))];
-                                                    const novasParcelas = [...updatedSimulacoes[simIndex].parcelas];
-                                                    novasParcelas[i] = { ...novasParcelas[i], dataPagamento: newDate ? newDate + "T00:00:00.000Z" : null };
-                                                    updatedSimulacoes[simIndex] = { ...updatedSimulacoes[simIndex], parcelas: novasParcelas };
-                                                    const updatedClient = { ...latestClient, simulacoes: updatedSimulacoes };
-                                                    const success = await updateClientWithUndo(updatedClient, "Atualizar Data de Pagamento");
-                                                    if (success) {
-                                                      setClients((prev) => prev.map((c) => c.id === latestClient.id ? updatedClient : c));
-                                                      setSelectedClient(updatedClient);
-                                                    } else {
-                                                      throw new Error("Failed to update");
-                                                    }
-                                                  } catch (error) {
-                                                    console.error("Error updating data pagamento:", error);
-                                                    toast.error("Erro ao atualizar data de pagamento");
-                                                  }
-                                                }}
-                                                className="w-full px-2 py-1 border border-emerald-200 rounded text-slate-700 focus:outline-none focus:border-emerald-500 bg-white"
-                                              />
                                             </div>
-                                          )}
-
-                                          {!p.paga && isVencida && (
-                                            <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                            <label className="flex items-center gap-2 cursor-pointer">
                                               <input
                                                 type="checkbox"
-                                                checked={
-                                                  p.jurosCongelados || false
-                                                }
-                                                onChange={async (e) => {
-                                                  const isFrozen =
-                                                    e.target.checked;
+                                                checked={p.paga}
+                                                onChange={async () => {
                                                   if (!selectedClient) return;
                                                   try {
                                                     const res = await fetch(
@@ -7294,28 +7746,71 @@ if (view === "client_login") {
                                                     const latestClient =
                                                       await res.json();
 
+                                                    const clientSimulacoes =
+                                                      latestClient.simulacoes ||
+                                                      (latestClient.simulacao
+                                                        ? [
+                                                            latestClient.simulacao,
+                                                          ]
+                                                        : []);
                                                     const updatedSimulacoes = [
-                                                      ...(latestClient.simulacoes ||
-                                                        (latestClient.simulacao
-                                                          ? [
-                                                              latestClient.simulacao,
-                                                            ]
-                                                          : [])),
+                                                      ...clientSimulacoes,
                                                     ];
                                                     const novasParcelas = [
                                                       ...updatedSimulacoes[
                                                         simIndex
                                                       ].parcelas,
                                                     ];
+                                                    const isNowPaid =
+                                                      !novasParcelas[i].paga;
+
+                                                    let computedDataPagamento =
+                                                      null;
+                                                    if (isNowPaid) {
+                                                      const todayStr =
+                                                        getLocalISODateTime().split(
+                                                          "T",
+                                                        )[0];
+                                                      const vencimentoStr = (
+                                                        p.dataVencimento || ""
+                                                      ).split("T")[0];
+
+                                                      if (
+                                                        vencimentoStr &&
+                                                        new Date(
+                                                          todayStr +
+                                                            "T00:00:00",
+                                                        ) >
+                                                          new Date(
+                                                            vencimentoStr +
+                                                              "T00:00:00",
+                                                          )
+                                                      ) {
+                                                        computedDataPagamento =
+                                                          p.dataVencimento; // acionado em data atrasada -> vencimento
+                                                      } else {
+                                                        computedDataPagamento =
+                                                          getLocalISODateTime(); // antecipado ou em dia -> hoje
+                                                      }
+                                                    }
+
                                                     novasParcelas[i] = {
                                                       ...novasParcelas[i],
-                                                      jurosCongelados: isFrozen,
-                                                      dataCongelamento: isFrozen
-                                                        ? new Date()
-                                                            .toISOString()
-                                                            .split("T")[0]
-                                                        : undefined,
+                                                      paga: isNowPaid,
+                                                      status: isNowPaid
+                                                        ? "pago"
+                                                        : "pendente",
+                                                      dataPagamento:
+                                                        computedDataPagamento,
                                                     };
+
+                                                    if (
+                                                      isNowPaid &&
+                                                      isVencida
+                                                    ) {
+                                                      novasParcelas[i].valor =
+                                                        valorAtualizado;
+                                                    }
                                                     updatedSimulacoes[
                                                       simIndex
                                                     ] = {
@@ -7334,7 +7829,7 @@ if (view === "client_login") {
                                                     const success =
                                                       await updateClientWithUndo(
                                                         updatedClient,
-                                                        `Juros ${isFrozen ? "Congelados" : "Descongelados"}`,
+                                                        `Marcar Parcela como ${isNowPaid ? "Paga" : "Pendente"}`,
                                                       );
                                                     if (success) {
                                                       setClients((prev) =>
@@ -7355,37 +7850,140 @@ if (view === "client_login") {
                                                     }
                                                   } catch (error) {
                                                     console.error(
-                                                      "Error toggling juros congelados:",
+                                                      "Error toggling payment:",
                                                       error,
                                                     );
                                                     toast.error(
-                                                      "Erro ao atualizar status de congelamento",
+                                                      "Erro ao atualizar status da parcela",
                                                     );
                                                   }
                                                 }}
-                                                className="w-4 h-4 text-blue-500 rounded focus:ring-blue-500"
+                                                className="w-5 h-5 text-yellow-500 rounded focus:ring-yellow-500"
                                               />
-                                              <span className="text-blue-600 text-sm font-medium">
-                                                Juros congelados
+                                              <span
+                                                className={
+                                                  p.paga
+                                                    ? "text-emerald-600 font-medium"
+                                                    : "text-slate-500"
+                                                }
+                                              >
+                                                {p.paga ? "Paga" : "Pendente"}
                                               </span>
                                             </label>
-                                          )}
-
-                                          {!p.paga &&
-                                            isVencida &&
-                                            p.jurosCongelados && (
-                                              <div className="mt-2 text-sm bg-blue-50 p-2 rounded border border-blue-100">
-                                                <label className="block text-blue-800 font-medium mb-1">
-                                                  Data de Congelamento:
+                                            {p.paga && (
+                                              <div className="mt-2 text-sm bg-emerald-50 p-2 rounded border border-emerald-100">
+                                                <label className="block text-emerald-800 font-medium mb-1">
+                                                  Data de Pagamento:
                                                 </label>
                                                 <input
                                                   type="date"
                                                   value={
-                                                    p.dataCongelamento || ""
+                                                    p.dataPagamento
+                                                      ? p.dataPagamento.split(
+                                                          "T",
+                                                        )[0]
+                                                      : ""
                                                   }
                                                   onChange={async (e) => {
                                                     const newDate =
                                                       e.target.value;
+                                                    if (!selectedClient) return;
+                                                    try {
+                                                      const res = await fetch(
+                                                        `/api/clients/${selectedClient.id}`,
+                                                        {
+                                                          headers: {
+                                                            Authorization: `Bearer ${adminToken}`,
+                                                          },
+                                                        },
+                                                      );
+                                                      if (!res.ok)
+                                                        throw new Error(
+                                                          "Failed to fetch latest client data",
+                                                        );
+                                                      const latestClient =
+                                                        await res.json();
+                                                      const updatedSimulacoes =
+                                                        [
+                                                          ...(latestClient.simulacoes ||
+                                                            (latestClient.simulacao
+                                                              ? [
+                                                                  latestClient.simulacao,
+                                                                ]
+                                                              : [])),
+                                                        ];
+                                                      const novasParcelas = [
+                                                        ...updatedSimulacoes[
+                                                          simIndex
+                                                        ].parcelas,
+                                                      ];
+                                                      novasParcelas[i] = {
+                                                        ...novasParcelas[i],
+                                                        dataPagamento: newDate
+                                                          ? newDate +
+                                                            "T00:00:00.000Z"
+                                                          : null,
+                                                      };
+                                                      updatedSimulacoes[
+                                                        simIndex
+                                                      ] = {
+                                                        ...updatedSimulacoes[
+                                                          simIndex
+                                                        ],
+                                                        parcelas: novasParcelas,
+                                                      };
+                                                      const updatedClient = {
+                                                        ...latestClient,
+                                                        simulacoes:
+                                                          updatedSimulacoes,
+                                                      };
+                                                      const success =
+                                                        await updateClientWithUndo(
+                                                          updatedClient,
+                                                          "Atualizar Data de Pagamento",
+                                                        );
+                                                      if (success) {
+                                                        setClients((prev) =>
+                                                          prev.map((c) =>
+                                                            c.id ===
+                                                            latestClient.id
+                                                              ? updatedClient
+                                                              : c,
+                                                          ),
+                                                        );
+                                                        setSelectedClient(
+                                                          updatedClient,
+                                                        );
+                                                      } else {
+                                                        throw new Error(
+                                                          "Failed to update",
+                                                        );
+                                                      }
+                                                    } catch (error) {
+                                                      console.error(
+                                                        "Error updating data pagamento:",
+                                                        error,
+                                                      );
+                                                      toast.error(
+                                                        "Erro ao atualizar data de pagamento",
+                                                      );
+                                                    }
+                                                  }}
+                                                  className="w-full px-2 py-1 border border-emerald-200 rounded text-slate-700 focus:outline-none focus:border-emerald-500 bg-white"
+                                                />
+                                              </div>
+                                            )}
+
+                                            {!p.paga && isVencida && (
+                                              <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={
+                                                    p.jurosCongelados || false
+                                                  }
+                                                  onChange={async (e) => {
+                                                    const isFrozen =
+                                                      e.target.checked;
                                                     if (!selectedClient) return;
                                                     try {
                                                       const res = await fetch(
@@ -7419,8 +8017,14 @@ if (view === "client_login") {
                                                       ];
                                                       novasParcelas[i] = {
                                                         ...novasParcelas[i],
+                                                        jurosCongelados:
+                                                          isFrozen,
                                                         dataCongelamento:
-                                                          newDate,
+                                                          isFrozen
+                                                            ? new Date()
+                                                                .toISOString()
+                                                                .split("T")[0]
+                                                            : undefined,
                                                       };
                                                       updatedSimulacoes[
                                                         simIndex
@@ -7440,7 +8044,7 @@ if (view === "client_login") {
                                                       const success =
                                                         await updateClientWithUndo(
                                                           updatedClient,
-                                                          "Atualizar Data de Congelamento",
+                                                          `Juros ${isFrozen ? "Congelados" : "Descongelados"}`,
                                                         );
                                                       if (success) {
                                                         setClients((prev) =>
@@ -7461,457 +8065,586 @@ if (view === "client_login") {
                                                       }
                                                     } catch (error) {
                                                       console.error(
-                                                        "Error updating dataCongelamento:",
+                                                        "Error toggling juros congelados:",
                                                         error,
                                                       );
                                                       toast.error(
-                                                        "Erro ao atualizar data de congelamento",
+                                                        "Erro ao atualizar status de congelamento",
                                                       );
                                                     }
                                                   }}
-                                                  className="w-full px-2 py-1 border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
+                                                  className="w-4 h-4 text-blue-500 rounded focus:ring-blue-500"
                                                 />
-                                                <p className="text-xs text-blue-600 mt-1 leading-tight">
-                                                  O valor será congelado com os
-                                                  juros calculados até esta
-                                                  data.
-                                                </p>
-                                              </div>
+                                                <span className="text-blue-600 text-sm font-medium">
+                                                  Juros congelados
+                                                </span>
+                                              </label>
                                             )}
-                                        </div>
-                                        {isEditing ? (
-                                          <div className="grid grid-cols-2 gap-2 text-sm mt-2 bg-slate-50 p-2 rounded border border-slate-200">
-                                            <div>
-                                              <label className="block text-xs text-slate-500 mb-1">
-                                                Vencimento
-                                              </label>
-                                              <input
-                                                type="date"
-                                                value={
-                                                  editParcelaData.dataVencimento
-                                                }
-                                                onChange={(e) =>
-                                                  setEditParcelaData({
-                                                    ...editParcelaData,
-                                                    dataVencimento:
-                                                      e.target.value,
-                                                  })
-                                                }
-                                                className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
-                                              />
-                                            </div>
-                                            <div>
-                                              <label className="block text-xs text-slate-500 mb-1">
-                                                Valor (R$)
-                                              </label>
-                                              <input
-                                                type="number"
-                                                step="0.01"
-                                                value={editParcelaData.valor}
-                                                onChange={(e) =>
-                                                  setEditParcelaData({
-                                                    ...editParcelaData,
-                                                    valor:
-                                                      parseFloat(
-                                                        e.target.value,
-                                                      ) || 0,
-                                                  })
-                                                }
-                                                className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
-                                              />
-                                            </div>
-                                            {p.paga && (
-                                              <div className="col-span-2">
+
+                                            {!p.paga &&
+                                              isVencida &&
+                                              p.jurosCongelados && (
+                                                <div className="mt-2 text-sm bg-blue-50 p-2 rounded border border-blue-100">
+                                                  <label className="block text-blue-800 font-medium mb-1">
+                                                    Data de Congelamento:
+                                                  </label>
+                                                  <input
+                                                    type="date"
+                                                    value={
+                                                      p.dataCongelamento || ""
+                                                    }
+                                                    onChange={async (e) => {
+                                                      const newDate =
+                                                        e.target.value;
+                                                      if (!selectedClient)
+                                                        return;
+                                                      try {
+                                                        const res = await fetch(
+                                                          `/api/clients/${selectedClient.id}`,
+                                                          {
+                                                            headers: {
+                                                              Authorization: `Bearer ${adminToken}`,
+                                                            },
+                                                          },
+                                                        );
+                                                        if (!res.ok)
+                                                          throw new Error(
+                                                            "Failed to fetch latest client data",
+                                                          );
+                                                        const latestClient =
+                                                          await res.json();
+
+                                                        const updatedSimulacoes =
+                                                          [
+                                                            ...(latestClient.simulacoes ||
+                                                              (latestClient.simulacao
+                                                                ? [
+                                                                    latestClient.simulacao,
+                                                                  ]
+                                                                : [])),
+                                                          ];
+                                                        const novasParcelas = [
+                                                          ...updatedSimulacoes[
+                                                            simIndex
+                                                          ].parcelas,
+                                                        ];
+                                                        novasParcelas[i] = {
+                                                          ...novasParcelas[i],
+                                                          dataCongelamento:
+                                                            newDate,
+                                                        };
+                                                        updatedSimulacoes[
+                                                          simIndex
+                                                        ] = {
+                                                          ...updatedSimulacoes[
+                                                            simIndex
+                                                          ],
+                                                          parcelas:
+                                                            novasParcelas,
+                                                        };
+
+                                                        const updatedClient = {
+                                                          ...latestClient,
+                                                          simulacoes:
+                                                            updatedSimulacoes,
+                                                        };
+
+                                                        const success =
+                                                          await updateClientWithUndo(
+                                                            updatedClient,
+                                                            "Atualizar Data de Congelamento",
+                                                          );
+                                                        if (success) {
+                                                          setClients((prev) =>
+                                                            prev.map((c) =>
+                                                              c.id ===
+                                                              latestClient.id
+                                                                ? updatedClient
+                                                                : c,
+                                                            ),
+                                                          );
+                                                          setSelectedClient(
+                                                            updatedClient,
+                                                          );
+                                                        } else {
+                                                          throw new Error(
+                                                            "Failed to update",
+                                                          );
+                                                        }
+                                                      } catch (error) {
+                                                        console.error(
+                                                          "Error updating dataCongelamento:",
+                                                          error,
+                                                        );
+                                                        toast.error(
+                                                          "Erro ao atualizar data de congelamento",
+                                                        );
+                                                      }
+                                                    }}
+                                                    className="w-full px-2 py-1 border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
+                                                  />
+                                                  <p className="text-xs text-blue-600 mt-1 leading-tight">
+                                                    O valor será congelado com
+                                                    os juros calculados até esta
+                                                    data.
+                                                  </p>
+                                                </div>
+                                              )}
+                                          </div>
+                                          {isEditing ? (
+                                            <div className="grid grid-cols-2 gap-2 text-sm mt-2 bg-slate-50 p-2 rounded border border-slate-200">
+                                              <div>
                                                 <label className="block text-xs text-slate-500 mb-1">
-                                                  Data de Pagamento
+                                                  Vencimento
                                                 </label>
                                                 <input
                                                   type="date"
                                                   value={
-                                                    editParcelaData.dataPagamento
+                                                    editParcelaData.dataVencimento
                                                   }
                                                   onChange={(e) =>
                                                     setEditParcelaData({
                                                       ...editParcelaData,
-                                                      dataPagamento:
+                                                      dataVencimento:
                                                         e.target.value,
                                                     })
                                                   }
                                                   className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
                                                 />
                                               </div>
-                                            )}
-                                            <div className="col-span-2 flex justify-end gap-2 mt-2">
-                                              <button
-                                                onClick={() =>
-                                                  setEditingParcela(null)
-                                                }
-                                                className="px-3 py-1 text-xs font-medium text-slate-600 bg-slate-200 hover:bg-slate-300 rounded transition-colors"
-                                              >
-                                                Cancelar
-                                              </button>
-                                              <button
-                                                onClick={async () => {
-                                                  if (!selectedClient) return;
-                                                  try {
-                                                    const res = await fetch(
-                                                      `/api/clients/${selectedClient.id}`,
-                                                      {
-                                                        headers: {
-                                                          Authorization: `Bearer ${adminToken}`,
-                                                        },
-                                                      },
-                                                    );
-                                                    if (!res.ok)
-                                                      throw new Error(
-                                                        "Failed to fetch latest client data",
-                                                      );
-                                                    const latestClient =
-                                                      await res.json();
-
-                                                    const clientSimulacoes =
-                                                      latestClient.simulacoes ||
-                                                      (latestClient.simulacao
-                                                        ? [
-                                                            latestClient.simulacao,
-                                                          ]
-                                                        : []);
-                                                    const updatedSimulacoes = [
-                                                      ...clientSimulacoes,
-                                                    ];
-                                                    const novasParcelas = [
-                                                      ...updatedSimulacoes[
-                                                        simIndex
-                                                      ].parcelas,
-                                                    ];
-                                                    novasParcelas[i] = {
-                                                      ...novasParcelas[i],
-                                                      dataVencimento:
-                                                        editParcelaData.dataVencimento,
+                                              <div>
+                                                <label className="block text-xs text-slate-500 mb-1">
+                                                  Valor (R$)
+                                                </label>
+                                                <input
+                                                  type="number"
+                                                  step="0.01"
+                                                  value={editParcelaData.valor}
+                                                  onChange={(e) =>
+                                                    setEditParcelaData({
+                                                      ...editParcelaData,
                                                       valor:
-                                                        editParcelaData.valor,
-                                                      ...(p.paga &&
-                                                      editParcelaData.dataPagamento
-                                                        ? {
-                                                            dataPagamento:
-                                                              editParcelaData.dataPagamento +
-                                                              "T12:00:00.000Z",
-                                                          }
-                                                        : {}),
-                                                    };
-                                                    updatedSimulacoes[
-                                                      simIndex
-                                                    ] = {
-                                                      ...updatedSimulacoes[
-                                                        simIndex
-                                                      ],
-                                                      parcelas: novasParcelas,
-                                                    };
-
-                                                    const updatedClient = {
-                                                      ...latestClient,
-                                                      simulacoes:
-                                                        updatedSimulacoes,
-                                                    };
-
-                                                    const success =
-                                                      await updateClientWithUndo(
-                                                        updatedClient,
-                                                        "Editar Parcela",
-                                                      );
-                                                    if (success) {
-                                                      setClients((prev) =>
-                                                        prev.map((c) =>
-                                                          c.id ===
-                                                          latestClient.id
-                                                            ? updatedClient
-                                                            : c,
-                                                        ),
-                                                      );
-                                                      setSelectedClient(
-                                                        updatedClient,
-                                                      );
-                                                      setEditingParcela(null);
-                                                      toast.success(
-                                                        "Parcela atualizada com sucesso!",
-                                                      );
-                                                    } else {
-                                                      throw new Error(
-                                                        "Failed to update",
-                                                      );
-                                                    }
-                                                  } catch (error) {
-                                                    console.error(
-                                                      "Error updating parcela:",
-                                                      error,
-                                                    );
-                                                    toast.error(
-                                                      "Erro ao atualizar parcela",
-                                                    );
-                                                  }
-                                                }}
-                                                className="flex items-center gap-1 px-3 py-1 text-xs font-medium text-white bg-yellow-500 hover:bg-yellow-600 rounded transition-colors"
-                                              >
-                                                <Save size={12} />
-                                                Salvar
-                                              </button>
-                                            </div>
-                                          </div>
-                                        ) : (
-                                          <div className="grid grid-cols-2 gap-2 text-sm">
-                                            <div>
-                                              <span className="text-slate-500">
-                                                Vencimento:
-                                              </span>{" "}
-                                              {formatDate(p.dataVencimento)}
-                                            </div>
-                                            <div>
-                                              <span className="text-slate-500">
-                                                Valor:
-                                              </span>{" "}
-                                              {formatCurrency(p.valor)}
-                                            </div>
-                                            {p.paga && p.dataPagamento && (
-                                              <div className="col-span-2 text-emerald-600 font-medium">
-                                                <span className="text-slate-500">
-                                                  Pago em:
-                                                </span>{" "}
-                                                {formatDate(
-                                                  p.dataPagamento.split("T")[0],
-                                                )}
-                                              </div>
-                                            )}
-                                          </div>
-                                        )}
-
-                                        {!isEditing && (
-                                          <div className="mt-3 pt-3 border-t border-slate-200">
-                                            <div className="flex justify-between items-center mb-2">
-                                              <h5 className="text-sm font-semibold text-slate-700">
-                                                Abatimentos
-                                              </h5>
-                                              {!p.paga && (
-                                                <button
-                                                  onClick={() =>
-                                                    setAddingAbatimento({
-                                                      simIndex,
-                                                      parcelaIndex: i,
+                                                        parseFloat(
+                                                          e.target.value,
+                                                        ) || 0,
                                                     })
                                                   }
-                                                  className="text-xs text-yellow-600 hover:text-yellow-700 font-medium flex items-center gap-1"
+                                                  className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                                />
+                                              </div>
+                                              {p.paga && (
+                                                <div className="col-span-2">
+                                                  <label className="block text-xs text-slate-500 mb-1">
+                                                    Data de Pagamento
+                                                  </label>
+                                                  <input
+                                                    type="date"
+                                                    value={
+                                                      editParcelaData.dataPagamento
+                                                    }
+                                                    onChange={(e) =>
+                                                      setEditParcelaData({
+                                                        ...editParcelaData,
+                                                        dataPagamento:
+                                                          e.target.value,
+                                                      })
+                                                    }
+                                                    className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                                  />
+                                                </div>
+                                              )}
+                                              <div className="col-span-2 flex justify-end gap-2 mt-2">
+                                                <button
+                                                  onClick={() =>
+                                                    setEditingParcela(null)
+                                                  }
+                                                  className="px-3 py-1 text-xs font-medium text-slate-600 bg-slate-200 hover:bg-slate-300 rounded transition-colors"
                                                 >
-                                                  <Plus size={12} /> Adicionar
+                                                  Cancelar
                                                 </button>
+                                                <button
+                                                  onClick={async () => {
+                                                    if (!selectedClient) return;
+                                                    try {
+                                                      const res = await fetch(
+                                                        `/api/clients/${selectedClient.id}`,
+                                                        {
+                                                          headers: {
+                                                            Authorization: `Bearer ${adminToken}`,
+                                                          },
+                                                        },
+                                                      );
+                                                      if (!res.ok)
+                                                        throw new Error(
+                                                          "Failed to fetch latest client data",
+                                                        );
+                                                      const latestClient =
+                                                        await res.json();
+
+                                                      const clientSimulacoes =
+                                                        latestClient.simulacoes ||
+                                                        (latestClient.simulacao
+                                                          ? [
+                                                              latestClient.simulacao,
+                                                            ]
+                                                          : []);
+                                                      const updatedSimulacoes =
+                                                        [...clientSimulacoes];
+                                                      const novasParcelas = [
+                                                        ...updatedSimulacoes[
+                                                          simIndex
+                                                        ].parcelas,
+                                                      ];
+                                                      novasParcelas[i] = {
+                                                        ...novasParcelas[i],
+                                                        dataVencimento:
+                                                          editParcelaData.dataVencimento,
+                                                        valor:
+                                                          editParcelaData.valor,
+                                                        ...(p.paga &&
+                                                        editParcelaData.dataPagamento
+                                                          ? {
+                                                              dataPagamento:
+                                                                editParcelaData.dataPagamento +
+                                                                "T12:00:00.000Z",
+                                                            }
+                                                          : {}),
+                                                      };
+                                                      updatedSimulacoes[
+                                                        simIndex
+                                                      ] = {
+                                                        ...updatedSimulacoes[
+                                                          simIndex
+                                                        ],
+                                                        parcelas: novasParcelas,
+                                                      };
+
+                                                      const updatedClient = {
+                                                        ...latestClient,
+                                                        simulacoes:
+                                                          updatedSimulacoes,
+                                                      };
+
+                                                      const success =
+                                                        await updateClientWithUndo(
+                                                          updatedClient,
+                                                          "Editar Parcela",
+                                                        );
+                                                      if (success) {
+                                                        setClients((prev) =>
+                                                          prev.map((c) =>
+                                                            c.id ===
+                                                            latestClient.id
+                                                              ? updatedClient
+                                                              : c,
+                                                          ),
+                                                        );
+                                                        setSelectedClient(
+                                                          updatedClient,
+                                                        );
+                                                        setEditingParcela(null);
+                                                        toast.success(
+                                                          "Parcela atualizada com sucesso!",
+                                                        );
+                                                      } else {
+                                                        throw new Error(
+                                                          "Failed to update",
+                                                        );
+                                                      }
+                                                    } catch (error) {
+                                                      console.error(
+                                                        "Error updating parcela:",
+                                                        error,
+                                                      );
+                                                      toast.error(
+                                                        "Erro ao atualizar parcela",
+                                                      );
+                                                    }
+                                                  }}
+                                                  className="flex items-center gap-1 px-3 py-1 text-xs font-medium text-white bg-yellow-500 hover:bg-yellow-600 rounded transition-colors"
+                                                >
+                                                  <Save size={12} />
+                                                  Salvar
+                                                </button>
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                              <div>
+                                                <span className="text-slate-500">
+                                                  Vencimento:
+                                                </span>{" "}
+                                                {formatDate(p.dataVencimento)}
+                                              </div>
+                                              <div>
+                                                <span className="text-slate-500">
+                                                  Valor:
+                                                </span>{" "}
+                                                {formatCurrency(p.valor)}
+                                              </div>
+                                              {p.paga && p.dataPagamento && (
+                                                <div className="col-span-2 text-emerald-600 font-medium">
+                                                  <span className="text-slate-500">
+                                                    Pago em:
+                                                  </span>{" "}
+                                                  {formatDate(
+                                                    p.dataPagamento.split(
+                                                      "T",
+                                                    )[0],
+                                                  )}
+                                                </div>
                                               )}
                                             </div>
+                                          )}
 
-                                            {p.abatimentos &&
-                                            p.abatimentos.length > 0 ? (
-                                              <div className="space-y-1 mb-2">
-                                                {p.abatimentos.map(
-                                                  (
-                                                    abatimento: any,
-                                                    aIdx: number,
-                                                  ) => (
-                                                    <div
-                                                      key={aIdx}
-                                                      className="flex justify-between text-xs text-slate-600 bg-slate-50 p-1.5 rounded"
-                                                    >
-                                                      <span>
-                                                        {formatDate(
-                                                          abatimento.data,
-                                                        )}
-                                                      </span>
-                                                      <div className="flex items-center gap-2">
-                                                        <span className="font-medium text-emerald-600">
-                                                          {formatCurrency(
-                                                            abatimento.valor,
+                                          {!isEditing && (
+                                            <div className="mt-3 pt-3 border-t border-slate-200">
+                                              <div className="flex justify-between items-center mb-2">
+                                                <h5 className="text-sm font-semibold text-slate-700">
+                                                  Abatimentos
+                                                </h5>
+                                                {!p.paga && (
+                                                  <button
+                                                    onClick={() =>
+                                                      setAddingAbatimento({
+                                                        simIndex,
+                                                        parcelaIndex: i,
+                                                      })
+                                                    }
+                                                    className="text-xs text-yellow-600 hover:text-yellow-700 font-medium flex items-center gap-1"
+                                                  >
+                                                    <Plus size={12} /> Adicionar
+                                                  </button>
+                                                )}
+                                              </div>
+
+                                              {p.abatimentos &&
+                                              p.abatimentos.length > 0 ? (
+                                                <div className="space-y-1 mb-2">
+                                                  {p.abatimentos.map(
+                                                    (
+                                                      abatimento: any,
+                                                      aIdx: number,
+                                                    ) => (
+                                                      <div
+                                                        key={aIdx}
+                                                        className="flex justify-between text-xs text-slate-600 bg-slate-50 p-1.5 rounded"
+                                                      >
+                                                        <span>
+                                                          {formatDate(
+                                                            abatimento.data,
                                                           )}
                                                         </span>
-                                                        {!p.paga && (
-                                                          <button
-                                                            type="button"
-                                                            onClick={() =>
-                                                              handleRemoveAbatimento(
-                                                                simIndex,
-                                                                i,
-                                                                aIdx,
-                                                              )
-                                                            }
-                                                            className="text-red-400 hover:text-red-600"
-                                                          >
-                                                            <Trash2 size={12} />
-                                                          </button>
-                                                        )}
+                                                        <div className="flex items-center gap-2">
+                                                          <span className="font-medium text-emerald-600">
+                                                            {formatCurrency(
+                                                              abatimento.valor,
+                                                            )}
+                                                          </span>
+                                                          {!p.paga && (
+                                                            <button
+                                                              type="button"
+                                                              onClick={() =>
+                                                                handleRemoveAbatimento(
+                                                                  simIndex,
+                                                                  i,
+                                                                  aIdx,
+                                                                )
+                                                              }
+                                                              className="text-red-400 hover:text-red-600"
+                                                            >
+                                                              <Trash2
+                                                                size={12}
+                                                              />
+                                                            </button>
+                                                          )}
+                                                        </div>
                                                       </div>
-                                                    </div>
-                                                  ),
-                                                )}
-                                                <div className="flex justify-between text-xs font-semibold text-slate-700 pt-1 border-t border-slate-200 mt-1">
-                                                  <span>Total Abatido:</span>
-                                                  <span className="text-emerald-600">
-                                                    {formatCurrency(
-                                                      p.abatimentos.reduce(
-                                                        (acc: number, a: any) =>
-                                                          acc + a.valor,
-                                                        0,
-                                                      ),
-                                                    )}
-                                                  </span>
-                                                </div>
-                                                <div className="flex justify-between text-xs font-bold text-slate-800 pt-1">
-                                                  <span>Restante:</span>
-                                                  <span>
-                                                    {formatCurrency(
-                                                      valorAtualizado,
-                                                    )}
-                                                  </span>
-                                                </div>
-                                              </div>
-                                            ) : (
-                                              <p className="text-xs text-slate-500 italic">
-                                                Nenhum abatimento registrado.
-                                              </p>
-                                            )}
-
-                                            {addingAbatimento?.simIndex ===
-                                              simIndex &&
-                                              addingAbatimento?.parcelaIndex ===
-                                                i && (
-                                                <div className="mt-2 bg-yellow-50 p-2 rounded border border-yellow-200 grid grid-cols-2 gap-2">
-                                                  <div>
-                                                    <label className="block text-xs text-slate-600 mb-1">
-                                                      Data
-                                                    </label>
-                                                    <input
-                                                      type="date"
-                                                      value={newAbatimento.data}
-                                                      onChange={(e) =>
-                                                        setNewAbatimento({
-                                                          ...newAbatimento,
-                                                          data: e.target.value,
-                                                        })
-                                                      }
-                                                      className="w-full px-2 py-1 text-xs border border-slate-300 rounded outline-none focus:border-yellow-500"
-                                                    />
+                                                    ),
+                                                  )}
+                                                  <div className="flex justify-between text-xs font-semibold text-slate-700 pt-1 border-t border-slate-200 mt-1">
+                                                    <span>Total Abatido:</span>
+                                                    <span className="text-emerald-600">
+                                                      {formatCurrency(
+                                                        p.abatimentos.reduce(
+                                                          (
+                                                            acc: number,
+                                                            a: any,
+                                                          ) => acc + a.valor,
+                                                          0,
+                                                        ),
+                                                      )}
+                                                    </span>
                                                   </div>
-                                                  <div>
-                                                    <label className="block text-xs text-slate-600 mb-1">
-                                                      Valor (R$)
-                                                    </label>
-                                                    <input
-                                                      type="number"
-                                                      step="0.01"
-                                                      value={
-                                                        newAbatimento.valor
-                                                      }
-                                                      onChange={(e) =>
-                                                        setNewAbatimento({
-                                                          ...newAbatimento,
-                                                          valor: e.target.value,
-                                                        })
-                                                      }
-                                                      className="w-full px-2 py-1 text-xs border border-slate-300 rounded outline-none focus:border-yellow-500"
-                                                    />
-                                                  </div>
-                                                  <div className="col-span-2 flex justify-end gap-2 mt-1">
-                                                    <button
-                                                      onClick={() =>
-                                                        setAddingAbatimento(
-                                                          null,
-                                                        )
-                                                      }
-                                                      className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-200 rounded"
-                                                    >
-                                                      Cancelar
-                                                    </button>
-                                                    <button
-                                                      onClick={() =>
-                                                        handleAddAbatimento(
-                                                          simIndex,
-                                                          i,
-                                                        )
-                                                      }
-                                                      className="px-2 py-1 text-xs bg-yellow-500 text-white hover:bg-yellow-600 rounded"
-                                                    >
-                                                      Salvar
-                                                    </button>
+                                                  <div className="flex justify-between text-xs font-bold text-slate-800 pt-1">
+                                                    <span>Restante:</span>
+                                                    <span>
+                                                      {formatCurrency(
+                                                        valorAtualizado,
+                                                      )}
+                                                    </span>
                                                   </div>
                                                 </div>
+                                              ) : (
+                                                <p className="text-xs text-slate-500 italic">
+                                                  Nenhum abatimento registrado.
+                                                </p>
                                               )}
-                                          </div>
-                                        )}
 
-                                        {isVencida && !isEditing && (
-                                          <div className="mt-3 pt-3 border-t border-red-200">
-                                            <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
-                                              ⚠️ Parcela Vencida
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
-                                              <div>
-                                                Atraso: {diasAtraso} dias
-                                              </div>
-                                              <div>
-                                                Taxa:{" "}
-                                                {sim.prazo === "abater" ? 0 : diasAtraso * (parseFloat(sim.taxaAtrasoDia) || 1)}%
-                                              </div>
-                                              <div className="col-span-2 font-bold text-sm mt-1">
-                                                Valor Atualizado:{" "}
-                                                {formatCurrency(
-                                                  valorAtualizado,
+                                              {addingAbatimento?.simIndex ===
+                                                simIndex &&
+                                                addingAbatimento?.parcelaIndex ===
+                                                  i && (
+                                                  <div className="mt-2 bg-yellow-50 p-2 rounded border border-yellow-200 grid grid-cols-2 gap-2">
+                                                    <div>
+                                                      <label className="block text-xs text-slate-600 mb-1">
+                                                        Data
+                                                      </label>
+                                                      <input
+                                                        type="date"
+                                                        value={
+                                                          newAbatimento.data
+                                                        }
+                                                        onChange={(e) =>
+                                                          setNewAbatimento({
+                                                            ...newAbatimento,
+                                                            data: e.target
+                                                              .value,
+                                                          })
+                                                        }
+                                                        className="w-full px-2 py-1 text-xs border border-slate-300 rounded outline-none focus:border-yellow-500"
+                                                      />
+                                                    </div>
+                                                    <div>
+                                                      <label className="block text-xs text-slate-600 mb-1">
+                                                        Valor (R$)
+                                                      </label>
+                                                      <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        value={
+                                                          newAbatimento.valor
+                                                        }
+                                                        onChange={(e) =>
+                                                          setNewAbatimento({
+                                                            ...newAbatimento,
+                                                            valor:
+                                                              e.target.value,
+                                                          })
+                                                        }
+                                                        className="w-full px-2 py-1 text-xs border border-slate-300 rounded outline-none focus:border-yellow-500"
+                                                      />
+                                                    </div>
+                                                    <div className="col-span-2 flex justify-end gap-2 mt-1">
+                                                      <button
+                                                        onClick={() =>
+                                                          setAddingAbatimento(
+                                                            null,
+                                                          )
+                                                        }
+                                                        className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-200 rounded"
+                                                      >
+                                                        Cancelar
+                                                      </button>
+                                                      <button
+                                                        onClick={() =>
+                                                          handleAddAbatimento(
+                                                            simIndex,
+                                                            i,
+                                                          )
+                                                        }
+                                                        className="px-2 py-1 text-xs bg-yellow-500 text-white hover:bg-yellow-600 rounded"
+                                                      >
+                                                        Salvar
+                                                      </button>
+                                                    </div>
+                                                  </div>
                                                 )}
+                                            </div>
+                                          )}
+
+                                          {isVencida && !isEditing && (
+                                            <div className="mt-3 pt-3 border-t border-red-200">
+                                              <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
+                                                ⚠️ Parcela Vencida
+                                              </div>
+                                              <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
+                                                <div>
+                                                  Atraso: {diasAtraso} dias
+                                                </div>
+                                                <div>
+                                                  Taxa:{" "}
+                                                  {sim.prazo === "abater"
+                                                    ? 0
+                                                    : diasAtraso *
+                                                      (parseFloat(
+                                                        sim.taxaAtrasoDia,
+                                                      ) || 1)}
+                                                  %
+                                                </div>
+                                                <div className="col-span-2 font-bold text-sm mt-1">
+                                                  Valor Atualizado:{" "}
+                                                  {formatCurrency(
+                                                    valorAtualizado,
+                                                  )}
+                                                </div>
                                               </div>
                                             </div>
-                                          </div>
-                                        )}
+                                          )}
 
-                                        {isVencida && !isEditing && (
-                                          <div className="mt-3 pt-3 border-t border-red-200 print:hidden">
-                                            <a
-                                              href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado, sim.prazo))}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                            >
-                                              <Phone size={16} />
-                                              Notificar Parcela Vencida via
-                                              WhatsApp
-                                            </a>
-                                          </div>
-                                        )}
+                                          {isVencida && !isEditing && (
+                                            <div className="mt-3 pt-3 border-t border-red-200 print:hidden">
+                                              <a
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado, sim.prazo))}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                              >
+                                                <Phone size={16} />
+                                                Notificar Parcela Vencida via
+                                                WhatsApp
+                                              </a>
+                                            </div>
+                                          )}
 
-                                        {isVencendoHoje && (
-                                          <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
-                                            <a
-                                              href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`)}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                            >
-                                              <Phone size={16} />
-                                              Notificar Vencimento Hoje via
-                                              WhatsApp
-                                            </a>
-                                          </div>
-                                        )}
+                                          {isVencendoHoje && (
+                                            <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
+                                              <a
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                              >
+                                                <Phone size={16} />
+                                                Notificar Vencimento Hoje via
+                                                WhatsApp
+                                              </a>
+                                            </div>
+                                          )}
 
-                                        {isPreVencimento && (
-                                          <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
-                                            <a
-                                              href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? 's' : ''}, no dia ${formatDate(p.dataVencimento)}.`)}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                            >
-                                              <Phone size={16} />
-                                              Pré-notificar Vencimento ({diasParaVencimento} dia{diasParaVencimento > 1 ? 's' : ''})
-                                            </a>
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                  {(sim.prazo === "abater") && (
+                                          {isPreVencimento && (
+                                            <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
+                                              <a
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`)}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                              >
+                                                <Phone size={16} />
+                                                Pré-notificar Vencimento (
+                                                {diasParaVencimento} dia
+                                                {diasParaVencimento > 1
+                                                  ? "s"
+                                                  : ""}
+                                                )
+                                              </a>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    },
+                                  )}
+                                  {sim.prazo === "abater" && (
                                     <div className="mt-4 pt-4 border-t border-slate-200">
                                       {addingParcela === simIndex ? (
                                         <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
@@ -7925,11 +8658,14 @@ if (view === "client_login") {
                                               </label>
                                               <input
                                                 type="date"
-                                                value={newParcela.dataVencimento}
+                                                value={
+                                                  newParcela.dataVencimento
+                                                }
                                                 onChange={(e) =>
                                                   setNewParcela({
                                                     ...newParcela,
-                                                    dataVencimento: e.target.value,
+                                                    dataVencimento:
+                                                      e.target.value,
                                                   })
                                                 }
                                                 className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
@@ -7957,14 +8693,19 @@ if (view === "client_login") {
                                             <button
                                               onClick={() => {
                                                 setAddingParcela(null);
-                                                setNewParcela({ dataVencimento: "", valor: "" });
+                                                setNewParcela({
+                                                  dataVencimento: "",
+                                                  valor: "",
+                                                });
                                               }}
                                               className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-200 rounded"
                                             >
                                               Cancelar
                                             </button>
                                             <button
-                                              onClick={() => handleAddParcela(simIndex)}
+                                              onClick={() =>
+                                                handleAddParcela(simIndex)
+                                              }
                                               className="px-3 py-1 text-sm bg-yellow-500 text-white hover:bg-yellow-600 rounded"
                                             >
                                               Salvar Lembrete
@@ -7973,7 +8714,9 @@ if (view === "client_login") {
                                         </div>
                                       ) : (
                                         <button
-                                          onClick={() => setAddingParcela(simIndex)}
+                                          onClick={() =>
+                                            setAddingParcela(simIndex)
+                                          }
                                           className="flex items-center gap-2 text-sm text-yellow-600 hover:text-yellow-700 font-medium"
                                         >
                                           <Plus size={16} />
@@ -8182,7 +8925,9 @@ if (view === "client_login") {
                     }
                     return status === statusFilter;
                   })
-                  .sort((a, b) => (a.nomeCompleto || "").localeCompare(b.nomeCompleto || ""));
+                  .sort((a, b) =>
+                    (a.nomeCompleto || "").localeCompare(b.nomeCompleto || ""),
+                  );
 
                 return filteredClients.length > 0 ? (
                   <div className="overflow-x-auto">
@@ -8273,8 +9018,10 @@ if (view === "client_login") {
                                   )
                                     .filter(
                                       (s: any) =>
-                                        ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                                          (!s.status && s.clientAccepted !== "nao")),
+                                        (s.status === "aprovado" &&
+                                          s.clientAccepted === "sim") ||
+                                        (!s.status &&
+                                          s.clientAccepted !== "nao"),
                                     )
                                     .reduce(
                                       (acc: number, sim: any) =>
@@ -8418,17 +9165,21 @@ if (view === "client_login") {
                       hoje.setHours(0, 0, 0, 0);
                       const vencimento = parseLocalDate(date);
                       vencimento.setHours(0, 0, 0, 0);
-                      
+
                       const amanha = new Date(hoje);
                       amanha.setDate(amanha.getDate() + 1);
 
                       const isVencida = vencimento < hoje;
                       const isVencendoHoje =
                         vencimento.getTime() === hoje.getTime();
-                        
-                      const diffParaVencimento = vencimento.getTime() - hoje.getTime();
-                      const diasParaVencimento = Math.round(diffParaVencimento / (1000 * 60 * 60 * 24));
-                      const isPreVencimento = diasParaVencimento >= 1 && diasParaVencimento <= 3;
+
+                      const diffParaVencimento =
+                        vencimento.getTime() - hoje.getTime();
+                      const diasParaVencimento = Math.round(
+                        diffParaVencimento / (1000 * 60 * 60 * 24),
+                      );
+                      const isPreVencimento =
+                        diasParaVencimento >= 1 && diasParaVencimento <= 3;
 
                       let dateLabel = formatDate(date);
                       let dateColor = "text-slate-700 bg-slate-100";
@@ -8441,7 +9192,7 @@ if (view === "client_login") {
                         dateLabel += " (Vencida)";
                         dateColor = "text-red-800 bg-red-100 border-red-200";
                       } else if (isPreVencimento) {
-                        dateLabel += ` (Vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? 's' : ''})`;
+                        dateLabel += ` (Vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`;
                         dateColor = "text-blue-800 bg-blue-100 border-blue-200";
                       } else {
                         dateLabel += " (A Vencer)";
@@ -8506,7 +9257,7 @@ if (view === "client_login") {
                                               if (isVencendoHoje) {
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
                                               } else if (isPreVencimento) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? 's' : ''}, no dia ${formatDate(p.dataVencimento)}.`;
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
                                               } else if (isVencida) {
                                                 let dataBase = hoje;
                                                 if (
@@ -8536,7 +9287,16 @@ if (view === "client_login") {
                                                   diffTime /
                                                     (1000 * 60 * 60 * 24),
                                                 );
-                                                const taxaDia = p.prazo === "abater" ? 0 : parseFloat(p.taxaAtrasoDia) || parseFloat(adminSettings.taxaAtrasoDia) || 1;
+                                                const taxaDia =
+                                                  p.prazo === "abater"
+                                                    ? 0
+                                                    : parseFloat(
+                                                        p.taxaAtrasoDia,
+                                                      ) ||
+                                                      parseFloat(
+                                                        adminSettings.taxaAtrasoDia,
+                                                      ) ||
+                                                      1;
                                                 const abatimentosTotal =
                                                   p.abatimentos
                                                     ? p.abatimentos.reduce(
@@ -8555,7 +9315,13 @@ if (view === "client_login") {
                                                   valorAtualizado -
                                                     abatimentosTotal,
                                                 );
-                                                return generateVencidaMessage(p.clientName, p, diasAtraso, valorAtualizado, p.prazo);
+                                                return generateVencidaMessage(
+                                                  p.clientName,
+                                                  p,
+                                                  diasAtraso,
+                                                  valorAtualizado,
+                                                  p.prazo,
+                                                );
                                               }
                                               return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo lembra que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vencerá em ${formatDate(p.dataVencimento)}.`;
                                             })(),
@@ -8586,15 +9352,19 @@ if (view === "client_login") {
                                   </tr>
                                 ))}
                                 <tr className="bg-slate-50 font-bold border-t-2 border-slate-200">
-                                  <td colSpan={3} className="py-3 px-6 text-right text-slate-800">
+                                  <td
+                                    colSpan={3}
+                                    className="py-3 px-6 text-right text-slate-800"
+                                  >
                                     Total a Receber no Dia:
                                   </td>
                                   <td className="py-3 px-6 text-slate-800">
                                     {formatCurrency(
                                       parcelas.reduce(
-                                        (acc, p) => acc + (p.valorRestante || 0),
-                                        0
-                                      )
+                                        (acc, p) =>
+                                          acc + (p.valorRestante || 0),
+                                        0,
+                                      ),
                                     )}
                                   </td>
                                   <td className="print:hidden"></td>
@@ -9067,13 +9837,22 @@ if (view === "client_login") {
             </div>
           )}
 
-          
           {adminTab === "produtos" && (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                <h2 className="text-lg font-bold text-slate-800">Gerenciar Produtos</h2>
+                <h2 className="text-lg font-bold text-slate-800">
+                  Gerenciar Produtos
+                </h2>
                 <button
-                  onClick={() => setEditingProduto({ nome: "", descricao: "", preco: "", precoOferta: "", imagemUrl: "" })}
+                  onClick={() =>
+                    setEditingProduto({
+                      nome: "",
+                      descricao: "",
+                      preco: "",
+                      precoOferta: "",
+                      imagemUrl: "",
+                    })
+                  }
                   className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                 >
                   Novo Produto
@@ -9082,145 +9861,225 @@ if (view === "client_login") {
               <div className="p-6">
                 {produtos.length === 0 ? (
                   <div className="text-center py-12 text-slate-500 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-                    Nenhum produto cadastrado no momento. Clique em "Novo Produto" para começar.
+                    Nenhum produto cadastrado no momento. Clique em "Novo
+                    Produto" para começar.
                   </div>
                 ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {produtos.map(p => (
-                    <div key={p.id} className="border border-slate-200 rounded-lg p-4 flex flex-col">
-                      {p.imagemUrl && <img src={p.imagemUrl} alt={p.nome} className="w-full h-40 object-cover rounded-md mb-4" />}
-                      <h3 className="font-bold text-lg mb-2">{p.nome}</h3>
-                      <p className="text-slate-600 text-sm mb-4 flex-grow">{p.descricao}</p>
-                      <div className="flex justify-between items-end mb-4">
-                        <div>
-                          {p.precoOferta ? (
-                            <>
-                              <span className="line-through text-slate-400 text-sm mr-2">{formatCurrency(parseFloat(p.preco))}</span>
-                              <span className="font-bold text-green-600">{formatCurrency(parseFloat(p.precoOferta))}</span>
-                            </>
-                          ) : (
-                            <span className="font-bold text-slate-800">{formatCurrency(parseFloat(p.preco))}</span>
-                          )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {produtos.map((p) => (
+                      <div
+                        key={p.id}
+                        className="border border-slate-200 rounded-lg p-4 flex flex-col"
+                      >
+                        {p.imagemUrl && (
+                          <img
+                            src={p.imagemUrl}
+                            alt={p.nome}
+                            className="w-full h-40 object-cover rounded-md mb-4"
+                          />
+                        )}
+                        <h3 className="font-bold text-lg mb-2">{p.nome}</h3>
+                        <p className="text-slate-600 text-sm mb-4 flex-grow">
+                          {p.descricao}
+                        </p>
+                        <div className="flex justify-between items-end mb-4">
+                          <div>
+                            {p.precoOferta ? (
+                              <>
+                                <span className="line-through text-slate-400 text-sm mr-2">
+                                  {formatCurrency(parseFloat(p.preco))}
+                                </span>
+                                <span className="font-bold text-green-600">
+                                  {formatCurrency(parseFloat(p.precoOferta))}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="font-bold text-slate-800">
+                                {formatCurrency(parseFloat(p.preco))}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex gap-2 mt-auto">
+                          <button
+                            onClick={() => setEditingProduto(p)}
+                            className="flex-1 border border-slate-300 rounded py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (
+                                window.confirm(
+                                  "Deseja realmente excluir este produto?",
+                                )
+                              ) {
+                                try {
+                                  const res = await fetch(
+                                    `/api/produtos/${p.id}`,
+                                    {
+                                      method: "DELETE",
+                                      headers: {
+                                        Authorization: `Bearer ${adminToken}`,
+                                      },
+                                    },
+                                  );
+                                  if (res.ok) fetchProdutos();
+                                } catch (e) {
+                                  console.error(e);
+                                }
+                              }
+                            }}
+                            className="flex-1 border border-red-200 text-red-600 rounded py-2 text-sm font-medium hover:bg-red-50 transition-colors"
+                          >
+                            Excluir
+                          </button>
                         </div>
                       </div>
-                      <div className="flex gap-2 mt-auto">
-                        <button
-                          onClick={() => setEditingProduto(p)}
-                          className="flex-1 border border-slate-300 rounded py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={async () => {
-                            if (window.confirm("Deseja realmente excluir este produto?")) {
-                              try {
-                                const res = await fetch(`/api/produtos/${p.id}`, {
-                                  method: "DELETE",
-                                  headers: { Authorization: `Bearer ${adminToken}` }
-                                });
-                                if (res.ok) fetchProdutos();
-                              } catch (e) {
-                                console.error(e);
-                              }
-                            }
-                          }}
-                          className="flex-1 border border-red-200 text-red-600 rounded py-2 text-sm font-medium hover:bg-red-50 transition-colors"
-                        >
-                          Excluir
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
                 )}
               </div>
-              
+
               {editingProduto && (
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                   <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl flex flex-col max-h-[90vh]">
                     <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                      <h2 className="text-xl font-bold text-slate-800">{editingProduto.id ? "Editar Produto" : "Novo Produto"}</h2>
-                      <button onClick={() => setEditingProduto(null)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                      <h2 className="text-xl font-bold text-slate-800">
+                        {editingProduto.id ? "Editar Produto" : "Novo Produto"}
+                      </h2>
+                      <button
+                        onClick={() => setEditingProduto(null)}
+                        className="text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={24} />
+                      </button>
                     </div>
                     <div className="p-6 overflow-y-auto space-y-4">
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Nome</label>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                          Nome
+                        </label>
                         <input
                           type="text"
                           value={editingProduto.nome}
-                          onChange={e => setEditingProduto({ ...editingProduto, nome: e.target.value })}
+                          onChange={(e) =>
+                            setEditingProduto({
+                              ...editingProduto,
+                              nome: e.target.value,
+                            })
+                          }
                           className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                          Descrição
+                        </label>
                         <textarea
                           value={editingProduto.descricao}
-                          onChange={e => setEditingProduto({ ...editingProduto, descricao: e.target.value })}
+                          onChange={(e) =>
+                            setEditingProduto({
+                              ...editingProduto,
+                              descricao: e.target.value,
+                            })
+                          }
                           className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
                           rows={3}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Preço Normal</label>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Preço Normal
+                          </label>
                           <input
                             type="number"
                             value={editingProduto.preco}
-                            onChange={e => setEditingProduto({ ...editingProduto, preco: e.target.value })}
+                            onChange={(e) =>
+                              setEditingProduto({
+                                ...editingProduto,
+                                preco: e.target.value,
+                              })
+                            }
                             className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Preço Oferta (Opcional)</label>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Preço Oferta (Opcional)
+                          </label>
                           <input
                             type="number"
                             value={editingProduto.precoOferta}
-                            onChange={e => setEditingProduto({ ...editingProduto, precoOferta: e.target.value })}
+                            onChange={(e) =>
+                              setEditingProduto({
+                                ...editingProduto,
+                                precoOferta: e.target.value,
+                              })
+                            }
                             className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
                           />
                         </div>
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2">Imagem do Produto</label>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                          Imagem do Produto
+                        </label>
                         <div className="flex flex-col gap-4">
                           {editingProduto.imagemUrl && (
-                            <img src={editingProduto.imagemUrl} alt="Preview" className="w-full h-48 object-cover rounded-lg border border-slate-200" />
+                            <img
+                              src={editingProduto.imagemUrl}
+                              alt="Preview"
+                              className="w-full h-48 object-cover rounded-lg border border-slate-200"
+                            />
                           )}
                           <input
                             type="file"
                             accept="image/*"
-                            onChange={e => {
+                            onChange={(e) => {
                               const file = e.target.files?.[0];
                               if (file) {
                                 const reader = new FileReader();
                                 reader.onloadend = () => {
                                   const img = new Image();
                                   img.onload = () => {
-                                    const canvas = document.createElement('canvas');
+                                    const canvas =
+                                      document.createElement("canvas");
                                     let width = img.width;
                                     let height = img.height;
                                     const maxDim = 800;
-                                    
+
                                     if (width > maxDim || height > maxDim) {
                                       if (width > height) {
-                                        height = Math.round((height * maxDim) / width);
+                                        height = Math.round(
+                                          (height * maxDim) / width,
+                                        );
                                         width = maxDim;
                                       } else {
-                                        width = Math.round((width * maxDim) / height);
+                                        width = Math.round(
+                                          (width * maxDim) / height,
+                                        );
                                         height = maxDim;
                                       }
                                     }
-                                    
+
                                     canvas.width = width;
                                     canvas.height = height;
-                                    const ctx = canvas.getContext('2d');
+                                    const ctx = canvas.getContext("2d");
                                     if (ctx) {
                                       ctx.drawImage(img, 0, 0, width, height);
-                                      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-                                      setEditingProduto({ ...editingProduto, imagemUrl: compressedDataUrl });
+                                      const compressedDataUrl =
+                                        canvas.toDataURL("image/jpeg", 0.7);
+                                      setEditingProduto({
+                                        ...editingProduto,
+                                        imagemUrl: compressedDataUrl,
+                                      });
                                     } else {
-                                      setEditingProduto({ ...editingProduto, imagemUrl: reader.result as string });
+                                      setEditingProduto({
+                                        ...editingProduto,
+                                        imagemUrl: reader.result as string,
+                                      });
                                     }
                                   };
                                   img.src = reader.result as string;
@@ -9234,27 +10093,45 @@ if (view === "client_login") {
                       </div>
                     </div>
                     <div className="p-6 border-t border-slate-100 flex justify-end gap-3">
-                      <button onClick={() => setEditingProduto(null)} className="px-6 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium">Cancelar</button>
+                      <button
+                        onClick={() => setEditingProduto(null)}
+                        className="px-6 py-2 border border-slate-300 rounded-lg text-slate-700 font-medium"
+                      >
+                        Cancelar
+                      </button>
                       <button
                         onClick={async () => {
                           try {
                             const method = editingProduto.id ? "PUT" : "POST";
-                            const url = editingProduto.id ? `/api/produtos/${editingProduto.id}` : "/api/produtos";
+                            const url = editingProduto.id
+                              ? `/api/produtos/${editingProduto.id}`
+                              : "/api/produtos";
                             const res = await fetch(url, {
                               method,
-                              headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
-                              body: JSON.stringify(editingProduto)
+                              headers: {
+                                "Content-Type": "application/json",
+                                Authorization: `Bearer ${adminToken}`,
+                              },
+                              body: JSON.stringify(editingProduto),
                             });
                             if (res.ok) {
                               setEditingProduto(null);
                               fetchProdutos();
                             } else {
-                              const errorData = await res.json().catch(() => ({}));
-                              alert("Erro ao salvar produto: " + (errorData.error || res.statusText));
+                              const errorData = await res
+                                .json()
+                                .catch(() => ({}));
+                              alert(
+                                "Erro ao salvar produto: " +
+                                  (errorData.error || res.statusText),
+                              );
                             }
-                          } catch(e: any) {
+                          } catch (e: any) {
                             console.error(e);
-                            alert("Erro de conexão ao salvar produto: " + (e.message || "Erro desconhecido"));
+                            alert(
+                              "Erro de conexão ao salvar produto: " +
+                                (e.message || "Erro desconhecido"),
+                            );
                           }
                         }}
                         className="px-6 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg font-medium transition-colors"
@@ -9267,7 +10144,7 @@ if (view === "client_login") {
               )}
             </div>
           )}
-{adminTab === "mensagens" && (
+          {adminTab === "mensagens" && (
             <div className="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row gap-6 h-[600px]">
               {/* Chat List */}
               <div className="w-full md:w-1/3 border-r border-slate-200 pr-6 flex flex-col">
@@ -9652,7 +10529,24 @@ if (view === "client_login") {
           </button>
         </div>
         <div className="absolute top-4 right-4 flex gap-3">
-          
+          <button
+            onClick={() => setShowComoFuncionaEmprestimo(true)}
+
+            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+          >
+            <Info size={16} />
+            Como funciona empréstimo
+          </button>
+
+          <button
+            onClick={() => setShowComoFuncionaProdutos(true)}
+
+            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+          >
+            <Info size={16} />
+            Como funciona produtos
+          </button>
+
           <a
             href="https://wa.me/5531972323040"
             target="_blank"
@@ -9710,160 +10604,164 @@ if (view === "client_login") {
               Simulação de Empréstimo
             </h1>
             <p className="text-slate-500">
-Preencha os dados abaixo para solicitar sua simulação.
+              Preencha os dados abaixo para solicitar sua simulação.
             </p>
           </div>
 
           <div className="p-8 space-y-8">
-              <>
-                <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-xl mb-6 text-sm">
-                  <h4 className="font-bold flex items-center gap-2 mb-1">
-                    <Info size={16} /> Opções de Prazos
-                  </h4>
-                  <p>
-                    Verifique as opções de prazos disponíveis. Temos <strong>parcela única, semanal, quinzenal e mensal</strong>. Escolha a que melhor se adapta à sua necessidade.
-                  </p>
+            <>
+              <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-xl mb-6 text-sm">
+                <h4 className="font-bold flex items-center gap-2 mb-1">
+                  <Info size={16} /> Opções de Prazos
+                </h4>
+                <p>
+                  Verifique as opções de prazos disponíveis. Temos{" "}
+                  <strong>parcela única, semanal, quinzenal e mensal</strong>.
+                  Escolha a que melhor se adapta à sua necessidade.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Valor Solicitado (R$)
+                  </label>
+                  <input
+                    type="number"
+                    value={simulacao.valorSolicitado}
+                    onChange={(e) =>
+                      setSimulacao({
+                        ...simulacao,
+                        valorSolicitado: e.target.value,
+                      })
+                    }
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
+                    placeholder="Ex: 1000"
+                  />
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Prazo das Parcelas
+                  </label>
+                  <select
+                    value={simulacao.prazo}
+                    onChange={(e) =>
+                      setSimulacao({ ...simulacao, prazo: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-white"
+                  >
+                    <option value="única">Parcela Única</option>
+                    <option value="dia">Diário</option>
+                    <option value="semanal">Semanal</option>
+                    <option value="quinzenal">Quinzenal</option>
+                    <option value="mensal">Mensal</option>
+                    <option value="abater">Abater</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Data Inicial
+                  </label>
+                  <input
+                    type="date"
+                    value={simulacao.dataInicial}
+                    onChange={(e) =>
+                      setSimulacao({
+                        ...simulacao,
+                        dataInicial: e.target.value,
+                      })
+                    }
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
+                  />
+                </div>
+                {simulacao.prazo !== "única" ? (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Valor Solicitado (R$)
+                      Quantidade de Parcelas
                     </label>
                     <input
                       type="number"
-                      value={simulacao.valorSolicitado}
+                      min="1"
+                      value={simulacao.quantidade}
                       onChange={(e) =>
                         setSimulacao({
                           ...simulacao,
-                          valorSolicitado: e.target.value,
+                          quantidade: e.target.value,
                         })
                       }
                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                      placeholder="Ex: 1000"
                     />
                   </div>
+                ) : (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Prazo das Parcelas
-                    </label>
-                    <select
-                      value={simulacao.prazo}
-                      onChange={(e) =>
-                        setSimulacao({ ...simulacao, prazo: e.target.value })
-                      }
-                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-white"
-                    >
-                      <option value="única">Parcela Única</option>
-                      <option value="dia">Diário</option>
-                      <option value="semanal">Semanal</option>
-                      <option value="quinzenal">Quinzenal</option>
-                      <option value="mensal">Mensal</option><option value="abater">Abater</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Data Inicial
+                      Data de Pagamento
                     </label>
                     <input
                       type="date"
-                      value={simulacao.dataInicial}
+                      value={simulacao.dataVencimentoUnica}
                       onChange={(e) =>
                         setSimulacao({
                           ...simulacao,
-                          dataInicial: e.target.value,
+                          dataVencimentoUnica: e.target.value,
                         })
                       }
                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
                     />
                   </div>
-                  {simulacao.prazo !== "única" ? (
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Quantidade de Parcelas
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={simulacao.quantidade}
-                        onChange={(e) =>
-                          setSimulacao({
-                            ...simulacao,
-                            quantidade: e.target.value,
-                          })
-                        }
-                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Data de Pagamento
-                      </label>
-                      <input
-                        type="date"
-                        value={simulacao.dataVencimentoUnica}
-                        onChange={(e) =>
-                          setSimulacao({
-                            ...simulacao,
-                            dataVencimentoUnica: e.target.value,
-                          })
-                        }
-                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                      />
-                    </div>
-                  )}
-                </div>
-
-
-
-                <div className="pt-4"></div>
-
-                {adminToken ? (
-                  <button
-                    onClick={calcularSimulacao}
-                    className="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 px-8 rounded-xl transition-all"
-                  >
-                    Calcular Simulação
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      if (!simulacao.valorSolicitado || !simulacao.quantidade) {
-                        alert(
-                          "Por favor, preencha o valor e a quantidade de parcelas.",
-                        );
-                        return;
-                      }
-                      if (
-                        simulacao.prazo === "única" &&
-                        !simulacao.dataVencimentoUnica
-                      ) {
-                        alert("Por favor, informe a data de pagamento.");
-                        return;
-                      }
-
-                      const novaSimulacao = {
-                        ...simulacao,
-                        taxaJuros: "",
-                        taxaAtrasoDia: "",
-                        tipoTaxa: "",
-                        parcelas: [],
-                        status: "pendente",
-                      };
-
-                      setSimulacao(novaSimulacao);
-                      setPendingSimulation(novaSimulacao);
-                      setShowSimulationConfirmModal(true);
-                    }}
-                    className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-4 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all flex justify-center items-center gap-2 text-lg"
-                  >
-                    {selectedClient
-                      ? "Solicitar Empréstimo"
-                      : "Avançar para Cadastro"}
-                  </button>
                 )}
+              </div>
 
-                {(Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0) > 0 && adminToken && (
+              <div className="pt-4"></div>
+
+              {adminToken ? (
+                <button
+                  onClick={calcularSimulacao}
+                  className="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 px-8 rounded-xl transition-all"
+                >
+                  Calcular Simulação
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (!simulacao.valorSolicitado || !simulacao.quantidade) {
+                      alert(
+                        "Por favor, preencha o valor e a quantidade de parcelas.",
+                      );
+                      return;
+                    }
+                    if (
+                      simulacao.prazo === "única" &&
+                      !simulacao.dataVencimentoUnica
+                    ) {
+                      alert("Por favor, informe a data de pagamento.");
+                      return;
+                    }
+
+                    const novaSimulacao = {
+                      ...simulacao,
+                      taxaJuros: "",
+                      taxaAtrasoDia: "",
+                      tipoTaxa: "",
+                      parcelas: [],
+                      status: "pendente",
+                    };
+
+                    setSimulacao(novaSimulacao);
+                    setPendingSimulation(novaSimulacao);
+                    setShowSimulationConfirmModal(true);
+                  }}
+                  className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-4 px-8 rounded-xl shadow-lg hover:shadow-xl transition-all flex justify-center items-center gap-2 text-lg"
+                >
+                  {selectedClient
+                    ? "Solicitar Empréstimo"
+                    : "Avançar para Cadastro"}
+                </button>
+              )}
+
+              {(Array.isArray(simulacao.parcelas)
+                ? simulacao.parcelas.length
+                : 0) > 0 &&
+                adminToken && (
                   <div className="mt-8 pt-8 border-t border-slate-200">
                     <h3 className="text-xl font-semibold text-slate-800 mb-4">
                       Resultado da Simulação
@@ -9883,8 +10781,10 @@ Preencha os dados abaixo para solicitar sua simulação.
                             Total de Parcelas
                           </p>
                           <p className="text-lg font-semibold text-slate-800">
-                            {(Array.isArray(simulacao.parcelas) ? simulacao.parcelas.length : 0)}x de{" "}
-                            {formatCurrency(simulacao.parcelas[0].valor)}
+                            {Array.isArray(simulacao.parcelas)
+                              ? simulacao.parcelas.length
+                              : 0}
+                            x de {formatCurrency(simulacao.parcelas[0].valor)}
                           </p>
                         </div>
                       </div>
@@ -9901,15 +10801,32 @@ Preencha os dados abaixo para solicitar sua simulação.
                             >
                               <span className="font-medium text-slate-700">
                                 Parcela {p.numero}
-                                {p.isCongelamento && <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">Apenas Juros</span>}
+                                {p.isCongelamento && (
+                                  <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                    Apenas Juros
+                                  </span>
+                                )}
                                 {p.jurosCongelados && p.dataCongelamento && (
                                   <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                    Congelada em {formatDate(p.dataCongelamento)}
+                                    Congelada em{" "}
+                                    {formatDate(p.dataCongelamento)}
                                     {(() => {
-                                      const v = parseLocalDate(p.dataVencimento);
-                                      const c = parseLocalDate(p.dataCongelamento);
-                                      const diff = Math.max(0, Math.round((c.getTime() - v.getTime()) / (1000 * 60 * 60 * 24)));
-                                      return diff > 0 ? ` (${diff} dias atraso)` : "";
+                                      const v = parseLocalDate(
+                                        p.dataVencimento,
+                                      );
+                                      const c = parseLocalDate(
+                                        p.dataCongelamento,
+                                      );
+                                      const diff = Math.max(
+                                        0,
+                                        Math.round(
+                                          (c.getTime() - v.getTime()) /
+                                            (1000 * 60 * 60 * 24),
+                                        ),
+                                      );
+                                      return diff > 0
+                                        ? ` (${diff} dias atraso)`
+                                        : "";
                                     })()}
                                   </span>
                                 )}
@@ -9953,7 +10870,7 @@ Preencha os dados abaixo para solicitar sua simulação.
                     </div>
                   </div>
                 )}
-              </>
+            </>
           </div>
         </div>
         {renderModals()}
@@ -10013,7 +10930,25 @@ Preencha os dados abaixo para solicitar sua simulação.
               <ArrowLeft size={16} />
               Voltar à página inicial
             </button>
-            
+
+            <button
+              onClick={() => setShowComoFuncionaEmprestimo(true)}
+
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona empréstimo
+            </button>
+
+            <button
+              onClick={() => setShowComoFuncionaProdutos(true)}
+
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona produtos
+            </button>
+
             <a
               href="https://wa.me/5531972323040"
               target="_blank"
