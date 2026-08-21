@@ -109,7 +109,18 @@
           "data": "2026-07-20T13:30:56.715Z"
         }
       ],
-      "mensagens": []
+      "mensagens": [],
+      "simulacoes": [
+        {
+          "parcelas": [
+            {
+              "numero": 1,
+              "paga": true,
+              "status": "pago"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "c2",
@@ -136,6 +147,50 @@
         }
       ],
       "mensagens": []
+    },
+    {
+      "id": "1787253415540",
+      "cpf": "999.999.999-99",
+      "nomeCompleto": "Test",
+      "arquivos": [
+        {
+          "name": "test.png",
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    },
+    {
+      "id": "1787253453422",
+      "cpf": "999.999.999-99",
+      "nomeCompleto": "Test",
+      "arquivos": [
+        {
+          "name": "test.png",
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    },
+    {
+      "id": "1787253573314",
+      "cpf": "999.999.999-99",
+      "nomeCompleto": "Test",
+      "arquivos": [
+        {
+          "name": "test.png",
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
+    },
+    {
+      "id": "1787253650632",
+      "cpf": "999.999.999-99",
+      "nomeCompleto": "Test",
+      "arquivos": [
+        {
+          "name": "test.png",
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        }
+      ]
     }
   ]
 }

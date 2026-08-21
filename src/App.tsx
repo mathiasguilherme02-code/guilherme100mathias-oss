@@ -409,6 +409,10 @@ export default function App() {
         });
         if (res.ok) {
           const fullClient = await res.json();
+          console.log("Fetched full client data:", fullClient);
+          if (fullClient.arquivos) {
+            console.log("Client has", fullClient.arquivos.length, "arquivos");
+          }
           setSelectedClient(fullClient);
         }
       } catch (e) {
@@ -797,7 +801,7 @@ export default function App() {
                       (c) => c.id === data.payload.id,
                     );
                     if (foundClient) {
-                      setSelectedClient(foundClient);
+                      handleSelectClient(foundClient);
                     } else {
                       fetch("/api/clients", {
                         headers: { Authorization: `Bearer ${adminToken}` },
@@ -807,7 +811,7 @@ export default function App() {
                           const client = clientsData.find(
                             (c: any) => c.id === data.payload.id,
                           );
-                          if (client) setSelectedClient(client);
+                          if (client) handleSelectClient(client);
                         });
                     }
                   },
@@ -837,7 +841,7 @@ export default function App() {
                     (c) => c.id === data.payload.id,
                   );
                   if (foundClient) {
-                    setSelectedClient(foundClient);
+                    handleSelectClient(foundClient);
                   } else {
                     fetch("/api/clients", {
                       headers: { Authorization: `Bearer ${adminToken}` },
@@ -847,7 +851,7 @@ export default function App() {
                         const client = clientsData.find(
                           (c: any) => c.id === data.payload.id,
                         );
-                        if (client) setSelectedClient(client);
+                        if (client) handleSelectClient(client);
                       });
                   }
                 },
@@ -1936,7 +1940,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         const vencimento = parseLocalDate(p.dataVencimento);
         vencimento.setHours(0, 0, 0, 0);
         const isVencida = vencimento < hoje;
-        let valorAtualizado = p.valor;
+        let valorAtualizado = Number(p.valor);
         const abatimentosTotal = p.abatimentos
           ? p.abatimentos.reduce((acc: number, a: any) => acc + a.valor, 0)
           : 0;
@@ -1961,7 +1965,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               : parseFloat(sim.taxaAtrasoDia) ||
                 parseFloat(adminSettings.taxaAtrasoDia) ||
                 1;
-          valorAtualizado = p.valor + p.valor * (taxaDia / 100) * diasAtraso;
+          valorAtualizado = Number(p.valor) + Number(p.valor) * (taxaDia / 100) * diasAtraso;
         }
         valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
         total += valorAtualizado;
@@ -3210,6 +3214,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             </button>
           </div>
         </div>
+
+        {renderModals()}
       </div>
     );
   }
@@ -4409,7 +4415,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 !p.paga &&
                                 vencimento.getTime() === hoje.getTime();
                               let diasAtraso = 0;
-                              let valorAtualizado = p.valor;
+                              let valorAtualizado = Number(p.valor);
                               const abatimentosTotal = p.abatimentos
                                 ? p.abatimentos.reduce(
                                     (acc: number, a: any) => acc + a.valor,
@@ -4440,8 +4446,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     ? 0
                                     : parseFloat(sim.taxaAtrasoDia) || 1;
                                 valorAtualizado =
-                                  p.valor +
-                                  p.valor * (taxaDia / 100) * diasAtraso;
+                                  Number(p.valor) +
+                                  Number(p.valor) * (taxaDia / 100) * diasAtraso;
                               }
 
                               valorAtualizado = Math.max(
@@ -5756,19 +5762,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 };
               }
             } else {
+              const isNowPaid = newTipo === "entrada";
               updatedParcelas[pIdx] = {
                 ...updatedParcelas[pIdx],
                 valor: newVal,
-                dataPagamento:
-                  tipo === "entrada"
-                    ? newDate.includes("T")
-                      ? newDate
-                      : `${newDate}T00:00:00`
-                    : updatedParcelas[pIdx].dataPagamento,
-                dataVencimento:
-                  tipo === "entrada_prevista"
+                paga: isNowPaid,
+                status: isNowPaid ? "pago" : "pendente",
+                dataPagamento: isNowPaid
+                  ? newDate.includes("T")
                     ? newDate
-                    : updatedParcelas[pIdx].dataVencimento,
+                    : `${newDate}T00:00:00`
+                  : updatedParcelas[pIdx].dataPagamento,
+                dataVencimento: newTipo === "entrada_prevista"
+                  ? newDate
+                  : updatedParcelas[pIdx].dataVencimento,
               };
             }
             updatedSimulacoes[sIdx!] = {
@@ -6427,7 +6434,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           key={client.id}
                           onClick={() => {
                             setAdminTab("clientes");
-                            setSelectedClient(client);
+                            handleSelectClient(client);
                           }}
                           className="text-left bg-white/60 hover:bg-white px-3 py-2 rounded-md border border-yellow-200 text-yellow-800 transition-colors flex justify-between items-center"
                         >
@@ -6922,7 +6929,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   <h3 className="text-lg font-semibold text-slate-800 mb-4 border-b pb-2 print:hidden">
                     Documentos Anexados
                   </h3>
-                  {selectedClient.arquivos &&
+                  {selectedClient?.arquivos &&
                   selectedClient.arquivos.length > 0 ? (
                     <div className="grid grid-cols-1 gap-4 print:hidden">
                       {selectedClient.arquivos.map(
@@ -7594,7 +7601,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         diasParaVencimento <= 3;
 
                                       let diasAtraso = 0;
-                                      let valorAtualizado = p.valor;
+                                      let valorAtualizado = Number(p.valor);
                                       const abatimentosTotal = p.abatimentos
                                         ? p.abatimentos.reduce(
                                             (acc: number, a: any) =>
@@ -7630,8 +7637,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             : parseFloat(sim.taxaAtrasoDia) ||
                                               1;
                                         valorAtualizado =
-                                          p.valor +
-                                          p.valor *
+                                          Number(p.valor) +
+                                          Number(p.valor) *
                                             (taxaDia / 100) *
                                             diasAtraso;
                                       }
@@ -9306,8 +9313,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       )
                                                     : 0;
                                                 let valorAtualizado =
-                                                  p.valor +
-                                                  p.valor *
+                                                  Number(p.valor) +
+                                                  Number(p.valor) *
                                                     (taxaDia / 100) *
                                                     diasAtraso;
                                                 valorAtualizado = Math.max(
@@ -9339,7 +9346,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               (c) => c.id === p.clientId,
                                             );
                                             if (client) {
-                                              setSelectedClient(client);
+                                              handleSelectClient(client);
                                               setAdminTab("clientes");
                                             }
                                           }}
@@ -10182,7 +10189,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               (c) => c.id === chat.id,
                             );
                             if (client) {
-                              setSelectedClient(client);
+                              handleSelectClient(client);
                               fetchMessages(chat.id);
                               markChatAsRead(chat.id, "admin");
                             }
@@ -11623,8 +11630,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             </div>
 
             {isEditingClientData &&
-              formData.arquivos &&
-              formData.arquivos.length > 0 && (
+              formData?.arquivos && formData.arquivos.length > 0 && (
                 <div className="mb-6">
                   <h3 className="text-sm font-medium text-slate-700 mb-3">
                     Arquivos Anexados Anteriormente

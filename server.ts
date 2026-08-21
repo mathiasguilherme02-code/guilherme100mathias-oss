@@ -14,8 +14,8 @@ let serviceAccount;
 try {
   if (existsSync(serviceAccountPath)) {
     serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'));
-  } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'string' ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT) : process.env.FIREBASE_SERVICE_ACCOUNT;
+  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT === 'string' ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) : process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
   }
 } catch (e) {
   console.error("Failed to load service account credentials", e);
@@ -359,14 +359,24 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/api/sysinfo", (req, res) => { res.json({ hasDb: !!db, firebaseConfig: !!process.env.FIREBASE_SERVICE_ACCOUNT }); });
+app.get("/api/sysinfo", (req, res) => { res.json({ hasDb: !!db, firebaseConfig: !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT }); });
 
 // Get All Clients (Protected)
 app.get("/api/clients", requireAdmin, async (req, res) => {
   try {
     if (!db) {
-      return res.json(mockClients.sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime()));
+      const parsedMock = mockClients.map((c) => {
+        let merged = { ...c };
+        if (merged.dados) {
+            const dados = typeof merged.dados === 'string' ? JSON.parse(merged.dados) : merged.dados;
+            merged = { ...merged, ...dados };
+            delete merged.dados;
+        }
+        return merged;
+      }).sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime());
+      return res.json(parsedMock);
     }
+
     const q = query(collection(db, "clients"), orderBy("dataCadastro", "desc"));
     const querySnapshot = await getDocs(q);
       
@@ -375,9 +385,7 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
       const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
       const merged = { ...c, ...dados, id: doc.id };
       delete merged.dados;
-      if (merged.arquivos) {
-        delete merged.arquivos;
-      }
+      
       return merged;
     });
     res.json(parsedClients);
@@ -391,21 +399,34 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
 app.get("/api/clients/:id", async (req, res) => {
   try {
     if (!db) {
-      const client = mockClients.find(c => c.id === req.params.id);
-      if (client) return res.json(client);
+      const client = mockClients.find((c) => c.id === req.params.id);
+      if (client) {
+        let merged = { ...client };
+        if (merged.dados) {
+            const dados = typeof merged.dados === 'string' ? JSON.parse(merged.dados) : merged.dados;
+            merged = { ...merged, ...dados };
+            delete merged.dados;
+        }
+        return res.json(merged);
+      }
       return res.status(404).json({ error: "Cliente não encontrado" });
     }
+
     const docRef = doc(db, "clients", req.params.id);
     const docSnap = await getDoc(docRef);
-    
     if (!docSnap.exists()) {
       return res.status(404).json({ error: "Cliente não encontrado" });
     }
-    
     const data = docSnap.data();
     const clientData = typeof data.dados === 'string' ? JSON.parse(data.dados) : (data.dados || {});
-    const merged = { ...data, ...clientData, id: docSnap.id };
+    let merged = { ...data, ...clientData, id: docSnap.id };
     delete merged.dados;
+    
+    // Explicitly check for arquivos at root if missing from merged
+    if (!merged.arquivos && data.arquivos) {
+        merged.arquivos = data.arquivos;
+    }
+    
     res.json(merged);
   } catch (error) {
     console.error("Error fetching client:", error);
@@ -419,15 +440,14 @@ async function processClientFiles(client: any) {
       const arquivo = client.arquivos[i];
       if (arquivo.url && arquivo.url.startsWith('data:')) {
         try {
-          const fileRef = ref(storage, `clients/${client.id}/${Date.now()}_${arquivo.name}`);
-          await uploadString(fileRef, arquivo.url, 'data_url');
-          const downloadURL = await getDownloadURL(fileRef);
-          arquivo.url = downloadURL;
+          if (storage) {
+             const fileRef = ref(storage, `clients/${client.id}/${Date.now()}_${arquivo.name}`);
+             await uploadString(fileRef, arquivo.url, 'data_url');
+             const downloadURL = await getDownloadURL(fileRef);
+             arquivo.url = downloadURL;
+          }
         } catch (error) {
           console.error("Error uploading file to storage:", error);
-          // Fallback: keep the base64 string.
-          // Note: If the base64 string is too large, Firestore will reject the document.
-          // We don't throw here to allow small files to still be saved in Firestore if Storage is unconfigured.
         }
       }
     }
@@ -502,81 +522,73 @@ app.put("/api/clients/:id", async (req, res) => {
       return res.status(404).json({ error: "Cliente não encontrado" });
     }
     const { id } = req.params;
-    const client = req.body;
+    let client = req.body;
     
-    // Basic authorization: check if the request comes from an admin OR if the client's CPF matches the payload
     const authHeader = req.headers.authorization;
     const isAdmin = authHeader === `Bearer ${ADMIN_TOKEN}`;
     
     if (!isAdmin) {
-      // If not admin, verify that the CPF in the payload matches the CPF in the database for this ID
       const docRef = doc(db, "clients", id);
       const docSnap = await getDoc(docRef);
-        
-      if (!docSnap.exists()) {
-        return res.status(404).json({ error: "Cliente não encontrado" });
-      }
-      
-      let dbCpf = docSnap.data().cpf;
-      if (!dbCpf) {
-        const dados = typeof docSnap.data().dados === 'string' ? JSON.parse(docSnap.data().dados) : docSnap.data().dados;
-        dbCpf = dados.cpf;
-      }
-      dbCpf = dbCpf?.replace(/[^\d]+/g, '');
-      
-      const payloadCpf = client.cpf?.replace(/[^\d]+/g, '');
-      if (dbCpf !== payloadCpf) {
-        return res.status(403).json({ error: "Acesso negado para atualizar este cliente" });
-      }
-    } else if (client.cpf) {
-      // If admin, check if the new CPF already exists for a different client
-      const formattedCpf = client.cpf.replace(/[^\d]+/g, '');
-      
-      const docRef = doc(db, "clients", id);
-      const docSnap = await getDoc(docRef);
-      let dbCpf = "";
-      if (docSnap.exists()) {
-        dbCpf = docSnap.data().cpf;
-        if (!dbCpf) {
-           const dados = typeof docSnap.data().dados === 'string' ? JSON.parse(docSnap.data().dados) : docSnap.data().dados;
-           dbCpf = dados.cpf;
-        }
-        dbCpf = dbCpf ? dbCpf.replace(/[^\d]+/g, '') : "";
-      }
-      
-      if (formattedCpf !== dbCpf) {
-        const q = query(collection(db, "clients"), where("cpf", "==", formattedCpf));
-        const querySnapshot = await getDocs(q);
-        
-        const existingClient = querySnapshot.docs.find((d: any) => d.id !== id);
-        if (existingClient) {
-          return res.status(400).json({ error: "CPF já cadastrado para outro cliente" });
-        }
+      if (!docSnap.exists() || docSnap.data().cpf !== client.cpf) {
+        return res.status(403).json({ error: "Não autorizado" });
       }
     }
+
+    // Explicitly merge existing arquivos if they were sent, or keep them if they were deleted by accident in the client
+    const docRef = doc(db, "clients", id);
+    const docSnap = await getDoc(docRef);
+    let existingArquivos = [];
+    if (docSnap.exists()) {
+        const d = docSnap.data();
+        if (d.arquivos) {
+           existingArquivos = d.arquivos;
+        } else if (d.dados && typeof d.dados === 'string') {
+           const p = JSON.parse(d.dados);
+           if (p.arquivos) existingArquivos = p.arquivos;
+        } else if (d.dados && d.dados.arquivos) {
+           existingArquivos = d.dados.arquivos;
+        }
+    }
     
-    // Process files (upload to Firebase Storage)
-    const processedClient = await processClientFiles(client);
+    if (client.arquivos && client.arquivos.length > 0) {
+       // if we have new files, process them and we might need to merge them with existing if the client is just appending
+       client = await processClientFiles(client);
+    } else {
+       // preserve existing ones if the payload was sent without them to avoid data loss
+       client.arquivos = existingArquivos;
+    }
     
-    const updateData: any = sanitizeForFirestore({ dados: processedClient });
-    if (client.nomeCompleto) updateData.nomeCompleto = client.nomeCompleto;
-    if (client.cpf) updateData.cpf = client.cpf.replace(/[^\d]+/g, '');
+    let updateData = {
+      ...client
+    };
     
-    await updateDoc(doc(db, "clients", id), updateData);
-      
+    // Convert date if present
+    if (updateData.dataCadastro && updateData.dataCadastro.includes('/')) {
+        const parts = updateData.dataCadastro.split('/');
+        if (parts.length === 3) {
+            updateData.dataCadastro = `${parts[2]}-${parts[1]}-${parts[0]}`;
+        }
+    }
+    
+    const sanitized = sanitizeForFirestore(updateData);
+    
+    // we want to nest everything except top level fields in 'dados' to match the existing schema
+    const topLevelFields = ['id', 'nomeCompleto', 'cpf', 'dataCadastro', 'arquivos'];
+    const dados: any = {};
+    const finalData: any = {};
+    for (const key of Object.keys(sanitized)) {
+        if (topLevelFields.includes(key)) {
+            finalData[key] = sanitized[key];
+        } else {
+            dados[key] = sanitized[key];
+        }
+    }
+    finalData.dados = dados;
+
+    await setDoc(docRef, finalData, { merge: true });
+    
     broadcastUpdate('UPDATE_CLIENTS');
-    
-    if (req.query.action === 'Adicionar Empréstimo') {
-      const now = new Date();
-      const dateStr = now.toLocaleDateString('pt-BR');
-      const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      broadcastUpdate('NEW_LOAN_REQUEST', { 
-        id: client.id, 
-        nomeCompleto: client.nomeCompleto,
-        timestamp: `${dateStr} às ${timeStr}`
-      });
-    }
-    
     res.json({ success: true });
   } catch (error) {
     console.error("Error updating client:", error);
