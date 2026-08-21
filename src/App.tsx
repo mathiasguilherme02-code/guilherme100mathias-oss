@@ -280,20 +280,12 @@ export default function App() {
     }
   };
 
-  const handleViewFile = (file: any) => {
+  const handleViewFile = async (file: any) => {
     if (!file.url) return;
     try {
       if (file.url.startsWith("data:")) {
-        const arr = file.url.split(",");
-        const mimeMatch = arr[0].match(/:(.*?);/);
-        const mime = mimeMatch ? mimeMatch[1] : "";
-        const bstr = atob(arr[1]);
-        let n = bstr.length;
-        const u8arr = new Uint8Array(n);
-        while (n--) {
-          u8arr[n] = bstr.charCodeAt(n);
-        }
-        const blob = new Blob([u8arr], { type: mime });
+        const res = await fetch(file.url);
+        const blob = await res.blob();
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = blobUrl;
@@ -307,7 +299,7 @@ export default function App() {
       }
     } catch (e) {
       console.error("Error opening file", e);
-      window.open(file.url, "_blank");
+      alert("Erro ao abrir o arquivo. Verifique o console.");
     }
   };
 
