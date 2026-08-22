@@ -435,9 +435,13 @@ app.get("/api/clients/:id", async (req, res) => {
 });
 
 async function processClientFiles(client: any) {
-  if (client.arquivos && Array.isArray(client.arquivos)) {
-    for (let i = 0; i < client.arquivos.length; i++) {
-      const arquivo = client.arquivos[i];
+  const arraysToProcess = [];
+  if (client.arquivos && Array.isArray(client.arquivos)) arraysToProcess.push(client.arquivos);
+  if (client.dados && client.dados.arquivos && Array.isArray(client.dados.arquivos)) arraysToProcess.push(client.dados.arquivos);
+  
+  for (const arr of arraysToProcess) {
+    for (let i = 0; i < arr.length; i++) {
+      const arquivo = arr[i];
       if (arquivo.url && arquivo.url.startsWith('data:')) {
         try {
           if (storage) {
@@ -551,11 +555,9 @@ app.put("/api/clients/:id", async (req, res) => {
         }
     }
     
-    if (client.arquivos && client.arquivos.length > 0) {
-       // if we have new files, process them and we might need to merge them with existing if the client is just appending
+    if ((client.arquivos && client.arquivos.length > 0) || (client.dados && client.dados.arquivos && client.dados.arquivos.length > 0)) {
        client = await processClientFiles(client);
     } else {
-       // preserve existing ones if the payload was sent without them to avoid data loss
        client.arquivos = existingArquivos;
     }
     
@@ -586,12 +588,12 @@ app.put("/api/clients/:id", async (req, res) => {
     }
     finalData.dados = dados;
 
-    await setDoc(docRef, finalData, { merge: true });
+    await setDoc(docRef, finalData);
     
     broadcastUpdate('UPDATE_CLIENTS');
     res.json({ success: true });
   } catch (error) {
-    console.error("Error updating client:", error);
+    console.error("Error updating client:", error); require("fs").writeFileSync("put_error.txt", error.stack || error.toString());
     res.status(500).json({ error: "Falha ao atualizar cliente" });
   }
 });
