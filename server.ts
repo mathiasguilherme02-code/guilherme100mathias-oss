@@ -528,6 +528,10 @@ app.put("/api/clients/:id", async (req, res) => {
     const { id } = req.params;
     let client = req.body;
     
+    if (client.cpf) {
+      client.cpf = client.cpf.replace(/[^\d]+/g, '');
+    }
+
     const authHeader = req.headers.authorization;
     const isAdmin = authHeader === `Bearer ${ADMIN_TOKEN}`;
     
