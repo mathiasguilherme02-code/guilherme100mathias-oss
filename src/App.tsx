@@ -171,10 +171,14 @@ const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
   }
 
   let dataBase = hojeClean;
-  if (p.jurosCongelados && p.dataCongelamento) {
-    const dataCong = parseLocalDate(p.dataCongelamento);
-    if (dataCong < hojeClean) {
-      dataBase = dataCong;
+  if (p.jurosCongelados) {
+    if (p.dataCongelamento) {
+      const dataCong = parseLocalDate(p.dataCongelamento);
+      if (dataCong <= hojeClean) {
+        dataBase = dataCong;
+      }
+    } else {
+      dataBase = vencimento;
     }
   }
 
@@ -1349,7 +1353,21 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
 
   const getClientStatus = (client: any) => {
     if (client.statusManual && client.statusManual !== "automatico") {
-      return client.statusManual;
+      const allSims =
+        client.simulacoes || (client.simulacao ? [client.simulacao] : []);
+      const clientSims = allSims.filter(isSimulacaoAtiva);
+      const hasUnpaid = clientSims.some((sim: any) =>
+        (sim.parcelas || []).some((p: any) => !p.paga && p.status !== "pago"),
+      );
+      if (
+        (client.statusManual === "atrasado" ||
+          client.statusManual === "muito_atrasado") &&
+        !hasUnpaid
+      ) {
+        // Fall back to automatic because client has no unpaid debt
+      } else {
+        return client.statusManual;
+      }
     }
 
     const allSims =
@@ -1364,11 +1382,15 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     let hasAtrasado = false;
     let hasVenceHoje = false;
     let hasEmDia = false;
+    let hasCongeladas = false;
 
     for (const sim of clientSims) {
       for (const p of sim.parcelas || []) {
         if (!p.paga && p.status !== "pago") {
           const vencimento = parseLocalDate(p.dataVencimento);
+          if (p.jurosCongelados) {
+            hasCongeladas = true;
+          }
 
           if (vencimento.getTime() === hoje.getTime()) {
             hasVenceHoje = true;
@@ -1386,7 +1408,11 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
               hasAtrasado = true;
             } else {
               // Juros congelados na data de vencimento ou anterior (0 dias de atraso)
-              hasEmDia = true;
+              if (p.jurosCongelados) {
+                hasCongeladas = true;
+              } else {
+                hasEmDia = true;
+              }
             }
           }
         }
@@ -1397,6 +1423,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     if (hasMuitoAtrasado) return "muito_atrasado";
     if (hasAtrasado) return "atrasado";
     if (hasVenceHoje) return "vence_hoje";
+    if (hasCongeladas) return "congeladas";
     if (hasEmDia) return "em_dia";
 
     const hasPendente = allSims.some(
@@ -1457,6 +1484,13 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
 
   const getStatusDisplay = (status: string) => {
     switch (status) {
+      case "congeladas":
+      case "congelado":
+        return {
+          color: "bg-blue-600",
+          text: "text-white",
+          label: "Congeladas",
+        };
       case "inadimplente_antigo":
         return {
           color: "bg-rose-900",
@@ -5234,7 +5268,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             ),
           ),
       )
-      .filter((p) => !p.paga)
+      .filter((p) => !p.paga && p.status !== "pago")
       .sort((a, b) => {
         const dateCompare = (a.dataVencimento || "").localeCompare(
           b.dataVencimento || "",
@@ -5259,15 +5293,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       if (cronogramaMonth !== "all" && month !== cronogramaMonth) return false;
 
       if (cronogramaStatusFilter !== "all") {
-        if (cronogramaStatusFilter === "vencidas" && vencimento >= hoje)
+        if (cronogramaStatusFilter === "congeladas") {
+          if (!p.jurosCongelados) return false;
+        } else if (cronogramaStatusFilter === "vencidas" && vencimento >= hoje) {
           return false;
-        if (
+        } else if (
           cronogramaStatusFilter === "hoje" &&
           vencimento.getTime() !== hoje.getTime()
-        )
+        ) {
           return false;
-        if (cronogramaStatusFilter === "a_vencer" && vencimento <= hoje)
+        } else if (cronogramaStatusFilter === "a_vencer" && vencimento <= hoje) {
           return false;
+        }
       }
 
       return true;
@@ -8010,9 +8047,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           isFrozen,
                                                         dataCongelamento:
                                                           isFrozen
-                                                            ? new Date()
-                                                                .toISOString()
-                                                                .split("T")[0]
+                                                            ? getLocalISODate()
                                                             : undefined,
                                                       };
                                                       updatedSimulacoes[
@@ -8875,6 +8910,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all bg-white"
                     >
                       <option value="todos">Todos os Status</option>
+                      <option value="congeladas">Congeladas</option>
                       <option value="qualquer_atraso">Qualquer Atraso</option>
                       <option value="inadimplente_antigo">
                         Inadimplente Antigo (&gt; 60 dias)
@@ -8914,6 +8950,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         "muito_atrasado",
                         "inadimplente_antigo",
                       ].includes(status);
+                    }
+                    if (statusFilter === "congeladas") {
+                      return (
+                        status === "congeladas" ||
+                        (c.simulacoes || [c.simulacao || {}]).some(
+                          (s: any) =>
+                            isSimulacaoAtiva(s) &&
+                            (s.parcelas || []).some(
+                              (p: any) =>
+                                !p.paga &&
+                                p.status !== "pago" &&
+                                p.jurosCongelados,
+                            ),
+                        )
+                      );
                     }
                     return status === statusFilter;
                   })
@@ -9103,6 +9154,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                   >
                     <option value="all">Todos os Status</option>
+                    <option value="congeladas">Congeladas</option>
                     <option value="vencidas">Vencidas</option>
                     <option value="hoje">Vencendo Hoje</option>
                     <option value="a_vencer">A Vencer</option>
@@ -9170,7 +9222,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       let dateLabel = formatDate(date);
                       let dateColor = "text-slate-700 bg-slate-100";
 
-                      if (isVencendoHoje) {
+                      if (cronogramaStatusFilter === "congeladas") {
+                        dateLabel += " (Congeladas)";
+                        dateColor = "text-blue-800 bg-blue-100 border-blue-200";
+                      } else if (isVencendoHoje) {
                         dateLabel += " (Vence Hoje)";
                         dateColor =
                           "text-yellow-800 bg-yellow-100 border-yellow-200";
@@ -9210,6 +9265,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     Parcela
                                   </th>
                                   <th className="py-3 px-6 font-semibold text-slate-700">
+                                    Status
+                                  </th>
+                                  <th className="py-3 px-6 font-semibold text-slate-700">
                                     Valor
                                   </th>
                                   <th className="py-3 px-6 font-semibold text-slate-700 text-right print:hidden">
@@ -9231,6 +9289,25 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     </td>
                                     <td className="py-3 px-6 text-slate-600">
                                       {p.numero}
+                                    </td>
+                                    <td className="py-3 px-6">
+                                      {p.jurosCongelados ? (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
+                                          ❄️ Congeladas
+                                        </span>
+                                      ) : isVencendoHoje ? (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200 whitespace-nowrap">
+                                          Vence Hoje
+                                        </span>
+                                      ) : isVencida ? (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200 whitespace-nowrap">
+                                          Vencida ({getParcelaDiasAtraso(p, hoje)}d)
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+                                          A Vencer
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="py-3 px-6 text-slate-600">
                                       {formatCurrency(p.valorRestante)}
@@ -9312,7 +9389,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 ))}
                                 <tr className="bg-slate-50 font-bold border-t-2 border-slate-200">
                                   <td
-                                    colSpan={3}
+                                    colSpan={4}
                                     className="py-3 px-6 text-right text-slate-800"
                                   >
                                     Total a Receber no Dia:
@@ -11556,6 +11633,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     <option value="automatico">
                       Automático (Baseado nas parcelas)
                     </option>
+                    <option value="congeladas">Congeladas (Azul)</option>
                     <option value="em_dia">Em Dia (Verde)</option>
                     <option value="vence_hoje">Vence Hoje (Amarelo)</option>
                     <option value="atrasado">Atrasado (Vermelho)</option>
