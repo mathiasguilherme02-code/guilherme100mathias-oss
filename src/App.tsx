@@ -125,17 +125,79 @@ const getLocalISODateTime = (date = new Date()) => {
   return `${d}T${t}`;
 };
 
-const parseLocalDate = (dateString: string) => {
-  if (!dateString) return new Date();
-  const parts = dateString.split("-");
-  if (parts.length === 3) {
-    return new Date(
-      parseInt(parts[0]),
-      parseInt(parts[1]) - 1,
-      parseInt(parts[2]),
+const parseLocalDate = (dateString: string | any) => {
+  if (!dateString) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (dateString instanceof Date) {
+    const d = new Date(dateString.getTime());
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  const str = String(dateString).trim();
+  // Format DD/MM/YYYY or DD-MM-YYYY
+  if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(str)) {
+    const [d, m, y] = str.split(/[\/\-]/);
+    return new Date(parseInt(y), parseInt(m) - 1, parseInt(d), 0, 0, 0, 0);
+  }
+  // Format YYYY-MM-DD or YYYY/MM/DD
+  const match = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (match) {
+    let y = parseInt(match[1]);
+    if (y < 1900) y += 2000 - (y % 100);
+    return new Date(y, parseInt(match[2]) - 1, parseInt(match[3]), 0, 0, 0, 0);
+  }
+  const fallback = new Date(str);
+  if (!isNaN(fallback.getTime())) {
+    fallback.setHours(0, 0, 0, 0);
+    return fallback;
+  }
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
+  if (!p || p.paga || p.status === "pago") return 0;
+  if (!p.dataVencimento) return 0;
+
+  const vencimento = parseLocalDate(p.dataVencimento);
+  const hojeClean = parseLocalDate(hoje);
+
+  if (vencimento >= hojeClean) {
+    return 0;
+  }
+
+  let dataBase = hojeClean;
+  if (p.jurosCongelados && p.dataCongelamento) {
+    const dataCong = parseLocalDate(p.dataCongelamento);
+    if (dataCong < hojeClean) {
+      dataBase = dataCong;
+    }
+  }
+
+  const diffTime = Math.max(0, dataBase.getTime() - vencimento.getTime());
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+};
+
+const isSimulacaoAtiva = (s: any) => {
+  if (!s || s.arquivado) return false;
+  if (
+    s.status === "renegociado" ||
+    s.status === "reprovado" ||
+    s.status === "cancelado_pelo_cliente"
+  ) {
+    return false;
+  }
+  if (s.status === "aprovado") {
+    return (
+      s.clientAccepted === "sim" ||
+      (s.parcelas || []).some((p: any) => p.paga || p.status === "pago")
     );
   }
-  return new Date(dateString);
+  return !s.status && s.clientAccepted !== "nao";
 };
 
 const documentCategories = [
@@ -1263,7 +1325,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       p.abatimentos.forEach((a: any) => {
         const dataA = parseLocalDate(a.data);
         const diff = Math.max(0, hoje.getTime() - dataA.getTime());
-        const dias = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const dias = Math.round(diff / (1000 * 60 * 60 * 24));
         const dataStr = a.data ? a.data.split("-").reverse().join("/") : "";
         mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? "s" : ""})
 `;
@@ -1290,86 +1352,90 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       return client.statusManual;
     }
 
-    const clientSims =
-      client.simulacoes?.filter(
-        (s: any) =>
-          ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-            (!s.status && s.clientAccepted !== "nao")) &&
-          !s.arquivado,
-      ) || [];
-    let worstStatus = "sem_pendencias";
+    const allSims =
+      client.simulacoes || (client.simulacao ? [client.simulacao] : []);
+    const clientSims = allSims.filter(isSimulacaoAtiva);
 
     const hoje = new Date();
     hoje.setHours(0, 0, 0, 0);
 
+    let hasInadimplenteAntigo = false;
+    let hasMuitoAtrasado = false;
+    let hasAtrasado = false;
+    let hasVenceHoje = false;
+    let hasEmDia = false;
+
     for (const sim of clientSims) {
       for (const p of sim.parcelas || []) {
-        if (!p.paga) {
+        if (!p.paga && p.status !== "pago") {
           const vencimento = parseLocalDate(p.dataVencimento);
-          vencimento.setHours(0, 0, 0, 0);
 
-          const diffTime = hoje.getTime() - vencimento.getTime();
-          const diasAtraso = Math.round(diffTime / (1000 * 60 * 60 * 24));
-
-          if (diasAtraso > 60) {
-            return "inadimplente_antigo";
-          } else if (diasAtraso > 30) {
-            if (worstStatus !== "inadimplente_antigo")
-              worstStatus = "muito_atrasado";
-          } else if (diasAtraso > 0) {
-            if (
-              worstStatus !== "inadimplente_antigo" &&
-              worstStatus !== "muito_atrasado"
-            )
-              worstStatus = "atrasado";
-          } else if (diasAtraso === 0) {
-            if (worstStatus === "sem_pendencias" || worstStatus === "em_dia")
-              worstStatus = "vence_hoje";
+          if (vencimento.getTime() === hoje.getTime()) {
+            hasVenceHoje = true;
+          } else if (vencimento > hoje) {
+            hasEmDia = true;
           } else {
-            if (worstStatus === "sem_pendencias") worstStatus = "em_dia";
+            // vencimento < hoje
+            const diasAtraso = getParcelaDiasAtraso(p, hoje);
+
+            if (diasAtraso > 60) {
+              hasInadimplenteAntigo = true;
+            } else if (diasAtraso > 30) {
+              hasMuitoAtrasado = true;
+            } else if (diasAtraso > 0) {
+              hasAtrasado = true;
+            } else {
+              // Juros congelados na data de vencimento ou anterior (0 dias de atraso)
+              hasEmDia = true;
+            }
           }
         }
       }
     }
 
-    if (worstStatus === "sem_pendencias") {
-      const hasPendente = client.simulacoes?.some(
-        (s: any) => s.status === "pendente" && !s.arquivado,
-      );
-      if (hasPendente) return "em_analise";
+    if (hasInadimplenteAntigo) return "inadimplente_antigo";
+    if (hasMuitoAtrasado) return "muito_atrasado";
+    if (hasAtrasado) return "atrasado";
+    if (hasVenceHoje) return "vence_hoje";
+    if (hasEmDia) return "em_dia";
 
-      const hasAguardandoAceite = client.simulacoes?.some(
-        (s: any) =>
-          s.status === "aprovado" &&
-          s.clientAccepted !== "sim" &&
-          !s.arquivado &&
-          !s.parcelas?.some((p: any) => p.paga),
-      );
-      if (hasAguardandoAceite) return "aguardando_aceite";
+    const hasPendente = allSims.some(
+      (s: any) => s.status === "pendente" && !s.arquivado,
+    );
+    if (hasPendente) return "em_analise";
 
-      const hasReprovado = client.simulacoes?.some(
-        (s: any) => s.status === "reprovado" && !s.arquivado,
-      );
-      if (hasReprovado) return "reprovado";
+    const hasAguardandoAceite = allSims.some(
+      (s: any) =>
+        s.status === "aprovado" &&
+        s.clientAccepted !== "sim" &&
+        !s.arquivado &&
+        !(s.parcelas || []).some((p: any) => p.paga || p.status === "pago"),
+    );
+    if (hasAguardandoAceite) return "aguardando_aceite";
 
-      const hasCancelado = client.simulacoes?.some(
-        (s: any) => s.status === "cancelado_pelo_cliente",
-      );
-      if (hasCancelado && client.simulacoes?.length === 1)
-        return "cancelado_pelo_cliente";
-    }
+    const hasReprovado = allSims.some(
+      (s: any) => s.status === "reprovado" && !s.arquivado,
+    );
+    if (hasReprovado) return "reprovado";
 
-    return worstStatus;
+    const hasCancelado = allSims.some(
+      (s: any) => s.status === "cancelado_pelo_cliente",
+    );
+    if (hasCancelado && allSims.length === 1) return "cancelado_pelo_cliente";
+
+    return "sem_pendencias";
   };
 
   const getClientMaxDiasAtraso = (client: any) => {
-    const clientSims =
-      client.simulacoes?.filter(
-        (s: any) =>
-          ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-            (!s.status && s.clientAccepted !== "nao")) &&
-          !s.arquivado,
-      ) || [];
+    if (
+      client.statusManual === "em_dia" ||
+      client.statusManual === "sem_pendencias"
+    ) {
+      return 0;
+    }
+    const allSims =
+      client.simulacoes || (client.simulacao ? [client.simulacao] : []);
+    const clientSims = allSims.filter(isSimulacaoAtiva);
     let maxDias = 0;
 
     const hoje = new Date();
@@ -1378,13 +1444,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     for (const sim of clientSims) {
       if (!sim.parcelas) continue;
       for (const p of sim.parcelas) {
-        if (!p.paga) {
-          const vencimento = parseLocalDate(p.dataVencimento);
-          vencimento.setHours(0, 0, 0, 0);
-
-          const diffTime = hoje.getTime() - vencimento.getTime();
-          const diasAtraso = Math.round(diffTime / (1000 * 60 * 60 * 24));
-
+        if (!p.paga && p.status !== "pago") {
+          const diasAtraso = getParcelaDiasAtraso(p, hoje);
           if (diasAtraso > maxDias) {
             maxDias = diasAtraso;
           }
@@ -1928,9 +1989,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     hoje.setHours(0, 0, 0, 0);
 
     (sim.parcelas || []).forEach((p: any) => {
-      if (!p.paga) {
+      if (!p.paga && p.status !== "pago") {
         const vencimento = parseLocalDate(p.dataVencimento);
-        vencimento.setHours(0, 0, 0, 0);
         const isVencida = vencimento < hoje;
         let valorAtualizado = Number(p.valor);
         const abatimentosTotal = p.abatimentos
@@ -1938,19 +1998,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           : 0;
 
         if (isVencida) {
-          let dataBase = hoje;
-          if (p.jurosCongelados && p.dataCongelamento) {
-            const dataCongelamento = parseLocalDate(p.dataCongelamento);
-            dataCongelamento.setHours(0, 0, 0, 0);
-            if (dataCongelamento < hoje) {
-              dataBase = dataCongelamento;
-            }
-          }
-          const diffTime = Math.max(
-            0,
-            dataBase.getTime() - vencimento.getTime(),
-          );
-          const diasAtraso = Math.round(diffTime / (1000 * 60 * 60 * 24));
+          const diasAtraso = getParcelaDiasAtraso(p, hoje);
           const taxaDia =
             sim.prazo === "abater"
               ? 0
@@ -2042,12 +2090,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           return;
         }
 
-        const activeLoans = clientSimulacoes.filter(
-          (s: any) =>
-            ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-              (!s.status && s.clientAccepted !== "nao")) &&
-            !s.arquivado,
-        );
+        const activeLoans = clientSimulacoes.filter(isSimulacaoAtiva);
         const hasBlockingLoan = activeLoans.some((s: any) => {
           const unpaidCount = (s.parcelas || []).filter(
             (p: any) => !p.paga,
@@ -4078,13 +4121,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     return;
                   }
 
-                  const activeLoans = clientSimulacoes.filter(
-                    (s: any) =>
-                      ((s.status === "aprovado" &&
-                        s.clientAccepted === "sim") ||
-                        (!s.status && s.clientAccepted !== "nao")) &&
-                      !s.arquivado,
-                  );
+                  const activeLoans = clientSimulacoes.filter(isSimulacaoAtiva);
                   const hasBlockingLoan = activeLoans.some((s: any) => {
                     const unpaidCount = (s.parcelas || []).filter(
                       (p: any) => !p.paga,
@@ -4400,13 +4437,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               const vencimento = parseLocalDate(
                                 p.dataVencimento,
                               );
-                              vencimento.setHours(0, 0, 0, 0);
 
-                              const isVencida = !p.paga && vencimento < hoje;
+                              const isVencida = !p.paga && p.status !== "pago" && vencimento < hoje;
                               const isVencendoHoje =
                                 !p.paga &&
+                                p.status !== "pago" &&
                                 vencimento.getTime() === hoje.getTime();
-                              let diasAtraso = 0;
+                              const diasAtraso = getParcelaDiasAtraso(p, hoje);
                               let valorAtualizado = Number(p.valor);
                               const abatimentosTotal = p.abatimentos
                                 ? p.abatimentos.reduce(
@@ -4416,23 +4453,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 : 0;
 
                               if (isVencida) {
-                                let dataBase = hoje;
-                                if (p.jurosCongelados && p.dataCongelamento) {
-                                  const dataCongelamento = parseLocalDate(
-                                    p.dataCongelamento,
-                                  );
-                                  dataCongelamento.setHours(0, 0, 0, 0);
-                                  if (dataCongelamento < hoje) {
-                                    dataBase = dataCongelamento;
-                                  }
-                                }
-                                const diffTime = Math.max(
-                                  0,
-                                  dataBase.getTime() - vencimento.getTime(),
-                                );
-                                diasAtraso = Math.round(
-                                  diffTime / (1000 * 60 * 60 * 24),
-                                );
                                 const taxaDia =
                                   sim.prazo === "abater"
                                     ? 0
@@ -4572,13 +4592,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {isVencida && (
                                     <div className="mt-4 pt-4 border-t border-red-200">
                                       <div className="text-red-600 font-bold mb-2 flex items-center gap-1">
-                                        ⚠️ Atenção: Parcela em Atraso
+                                        {p.jurosCongelados && diasAtraso === 0
+                                          ? "❄️ Juros Congelados"
+                                          : "⚠️ Atenção: Parcela em Atraso"}
                                       </div>
                                       <div className="bg-white rounded-lg p-3 border border-red-100">
                                         <div className="flex justify-between text-sm text-red-800 mb-1">
                                           <span>Dias de atraso:</span>
                                           <span className="font-semibold">
-                                            {diasAtraso} dias
+                                            {diasAtraso}{" "}
+                                            {diasAtraso === 1 ? "dia" : "dias"}
                                           </span>
                                         </div>
                                         <div className="flex justify-between text-lg font-bold text-red-700 mt-2 pt-2 border-t border-red-100">
@@ -5183,12 +5206,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     const cronogramaParcelas = clients
       .flatMap((c) =>
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(
-            (s: any) =>
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao")) &&
-              !s.arquivado,
-          )
+          .filter(isSimulacaoAtiva)
           .flatMap((s: any, sIdx: number) =>
             (Array.isArray(s.parcelas) ? s.parcelas : []).map(
               (p: any, pIdx: number) => {
@@ -5332,12 +5350,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       ...clients.flatMap((c) =>
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
           .map((s: any, originalIndex: number) => ({ s, originalIndex }))
-          .filter(
-            ({ s }: any) =>
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao")) &&
-              !s.arquivado,
-          )
+          .filter(({ s }: any) => isSimulacaoAtiva(s))
           .flatMap(({ s, originalIndex }: any) =>
             (s.parcelas || [])
               .filter((p: any) => !p.paga)
@@ -5453,12 +5466,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     const monthPendentes = clients
       .flatMap((c) =>
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(
-            (s: any) =>
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao")) &&
-              !s.arquivado,
-          )
+          .filter(isSimulacaoAtiva)
           .flatMap((s: any) =>
             (s.parcelas || [])
               .filter((p: any) => {
@@ -5466,9 +5474,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 hoje.setHours(0, 0, 0, 0);
                 const date = p.dataVencimento || "";
                 const vencimento = parseLocalDate(date);
-                vencimento.setHours(0, 0, 0, 0);
+                const dias = getParcelaDiasAtraso(p, hoje);
                 return (
-                  !p.paga && vencimento >= hoje && date.startsWith(fluxoFilter)
+                  !p.paga &&
+                  p.status !== "pago" &&
+                  (vencimento >= hoje || dias === 0) &&
+                  date.startsWith(fluxoFilter)
                 );
               })
               .map((p: any) => {
@@ -5487,22 +5498,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     const monthInadimplencia = clients
       .flatMap((c) =>
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(
-            (s: any) =>
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao")) &&
-              !s.arquivado,
-          )
+          .filter(isSimulacaoAtiva)
           .flatMap((s: any) =>
             (s.parcelas || [])
               .filter((p: any) => {
                 const hoje = new Date();
                 hoje.setHours(0, 0, 0, 0);
                 const date = p.dataVencimento || "";
-                const vencimento = parseLocalDate(date);
-                vencimento.setHours(0, 0, 0, 0);
+                const dias = getParcelaDiasAtraso(p, hoje);
                 return (
-                  !p.paga && vencimento < hoje && date.startsWith(fluxoFilter)
+                  !p.paga &&
+                  p.status !== "pago" &&
+                  dias > 0 &&
+                  date.startsWith(fluxoFilter)
                 );
               })
               .map((p: any) => {
@@ -7573,12 +7581,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       const vencimento = parseLocalDate(
                                         p.dataVencimento,
                                       );
-                                      vencimento.setHours(0, 0, 0, 0);
 
                                       const isVencida =
-                                        !p.paga && vencimento < hoje;
+                                        !p.paga && p.status !== "pago" && vencimento < hoje;
                                       const isVencendoHoje =
                                         !p.paga &&
+                                        p.status !== "pago" &&
                                         vencimento.getTime() === hoje.getTime();
 
                                       const diffParaVencimento =
@@ -7589,10 +7597,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       );
                                       const isPreVencimento =
                                         !p.paga &&
+                                        p.status !== "pago" &&
                                         diasParaVencimento >= 1 &&
                                         diasParaVencimento <= 3;
 
-                                      let diasAtraso = 0;
+                                      const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                       let valorAtualizado = Number(p.valor);
                                       const abatimentosTotal = p.abatimentos
                                         ? p.abatimentos.reduce(
@@ -7603,30 +7612,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         : 0;
 
                                       if (isVencida) {
-                                        let dataBase = hoje;
-                                        if (
-                                          p.jurosCongelados &&
-                                          p.dataCongelamento
-                                        ) {
-                                          const dataCongelamento =
-                                            parseLocalDate(p.dataCongelamento);
-                                          dataCongelamento.setHours(0, 0, 0, 0);
-                                          if (dataCongelamento < hoje) {
-                                            dataBase = dataCongelamento;
-                                          }
-                                        }
-                                        const diffTime = Math.max(
-                                          0,
-                                          dataBase.getTime() -
-                                            vencimento.getTime(),
-                                        );
-                                        diasAtraso = Math.round(
-                                          diffTime / (1000 * 60 * 60 * 24),
-                                        );
                                         const taxaDia =
                                           sim.prazo === "abater"
                                             ? 0
                                             : parseFloat(sim.taxaAtrasoDia) ||
+                                              parseFloat(adminSettings.taxaAtrasoDia) ||
                                               1;
                                         valorAtualizado =
                                           Number(p.valor) +
@@ -8565,11 +8555,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isVencida && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-red-200">
                                               <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
-                                                ⚠️ Parcela Vencida
+                                                {p.jurosCongelados && diasAtraso === 0
+                                                  ? "❄️ Juros Congelados"
+                                                  : "⚠️ Parcela Vencida"}
                                               </div>
                                               <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
                                                 <div>
-                                                  Atraso: {diasAtraso} dias
+                                                  Atraso: {diasAtraso}{" "}
+                                                  {diasAtraso === 1 ? "dia" : "dias"}
                                                 </div>
                                                 <div>
                                                   Taxa:{" "}
@@ -9015,13 +9008,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     client.simulacoes ||
                                     (client.simulacao ? [client.simulacao] : [])
                                   )
-                                    .filter(
-                                      (s: any) =>
-                                        (s.status === "aprovado" &&
-                                          s.clientAccepted === "sim") ||
-                                        (!s.status &&
-                                          s.clientAccepted !== "nao"),
-                                    )
+                                    .filter(isSimulacaoAtiva)
                                     .reduce(
                                       (acc: number, sim: any) =>
                                         acc +
@@ -9258,34 +9245,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               } else if (isPreVencimento) {
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
                                               } else if (isVencida) {
-                                                let dataBase = hoje;
-                                                if (
-                                                  p.jurosCongelados &&
-                                                  p.dataCongelamento
-                                                ) {
-                                                  const dataCongelamento =
-                                                    parseLocalDate(
-                                                      p.dataCongelamento,
-                                                    );
-                                                  dataCongelamento.setHours(
-                                                    0,
-                                                    0,
-                                                    0,
-                                                    0,
-                                                  );
-                                                  if (dataCongelamento < hoje) {
-                                                    dataBase = dataCongelamento;
-                                                  }
-                                                }
-                                                const diffTime = Math.max(
-                                                  0,
-                                                  dataBase.getTime() -
-                                                    vencimento.getTime(),
-                                                );
-                                                const diasAtraso = Math.round(
-                                                  diffTime /
-                                                    (1000 * 60 * 60 * 24),
-                                                );
+                                                const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                                 const taxaDia =
                                                   p.prazo === "abater"
                                                     ? 0
