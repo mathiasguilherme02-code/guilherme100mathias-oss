@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import admin from "firebase-admin";
 import { ZipArchive } from "archiver";
@@ -127,7 +128,6 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'secret-admin-token-123';
 
 const requireAdmin = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization || req.headers.Authorization;
-  console.log('Auth header:', authHeader);
   if (authHeader === `Bearer ${ADMIN_TOKEN}`) {
     next();
   } else {
@@ -151,6 +151,9 @@ function sanitizeForFirestore(obj: any): any {
 
 const app = express();
 const PORT = 3000;
+
+// Enable HTTP compression to speed up API responses
+app.use(compression());
 
 // Increase payload limit for file uploads (base64)
 app.use(express.json({ limit: '100mb' }));
@@ -361,9 +364,45 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
 
 app.get("/api/sysinfo", (req, res) => { res.json({ hasDb: !!db, firebaseConfig: !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT }); });
 
+// Optimization: In-memory cache and payload trimming for client list
+let cachedClientsList: any[] | null = null;
+let lastClientsFetchTime = 0;
+const CLIENTS_CACHE_TTL_MS = 25000; // 25s TTL
+
+function invalidateClientsCache() {
+  cachedClientsList = null;
+  lastClientsFetchTime = 0;
+}
+
+function sanitizeClientForList(c: any) {
+  const shallow = { ...c };
+  if (Array.isArray(shallow.arquivos)) {
+    shallow.arquivos = shallow.arquivos.map((a: any) => {
+      if (typeof a === 'string') {
+        return a.startsWith('data:') ? { name: 'Comprovante', type: 'image/jpeg' } : a;
+      }
+      if (a && typeof a === 'object') {
+        const { url, preview, ...rest } = a;
+        return {
+          ...rest,
+          url: typeof url === 'string' && url.startsWith('http') ? url : undefined,
+          hasAttachment: !!(url || preview)
+        };
+      }
+      return a;
+    });
+  }
+  return shallow;
+}
+
 // Get All Clients (Protected)
 app.get("/api/clients", requireAdmin, async (req, res) => {
   try {
+    const now = Date.now();
+    if (cachedClientsList && (now - lastClientsFetchTime) < CLIENTS_CACHE_TTL_MS) {
+      return res.json(cachedClientsList);
+    }
+
     if (!db) {
       const parsedMock = mockClients.map((c) => {
         let merged = { ...c };
@@ -372,8 +411,11 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
             merged = { ...merged, ...dados };
             delete merged.dados;
         }
-        return merged;
+        return sanitizeClientForList(merged);
       }).sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime());
+      
+      cachedClientsList = parsedMock;
+      lastClientsFetchTime = now;
       return res.json(parsedMock);
     }
 
@@ -385,9 +427,11 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
       const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
       const merged = { ...c, ...dados, id: doc.id };
       delete merged.dados;
-      
-      return merged;
+      return sanitizeClientForList(merged);
     });
+
+    cachedClientsList = parsedClients;
+    lastClientsFetchTime = now;
     res.json(parsedClients);
   } catch (error) {
     console.error("Error fetching clients:", error);
@@ -504,6 +548,7 @@ app.post("/api/clients", async (req, res) => {
       dados: processedClient
     }));
       
+    invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
     broadcastUpdate('NEW_CLIENT', { id: client.id, nomeCompleto: client.nomeCompleto });
     res.status(201).json({ success: true });
@@ -521,6 +566,7 @@ app.put("/api/clients/:id", async (req, res) => {
       if (idx !== -1) {
          mockClients[idx] = { ...mockClients[idx], ...req.body };
          syncData();
+         invalidateClientsCache();
          return res.json({ success: true });
       }
       return res.status(404).json({ error: "Cliente não encontrado" });
@@ -594,10 +640,11 @@ app.put("/api/clients/:id", async (req, res) => {
 
     await setDoc(docRef, finalData);
     
+    invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
     res.json({ success: true });
   } catch (error) {
-    console.error("Error updating client:", error); require("fs").writeFileSync("put_error.txt", error.stack || error.toString());
+    console.error("Error updating client:", error);
     res.status(500).json({ error: "Falha ao atualizar cliente" });
   }
 });
@@ -611,6 +658,7 @@ app.delete("/api/clients/:id", requireAdmin, async (req, res) => {
     const { id } = req.params;
     await deleteDoc(doc(db, "clients", id));
       
+    invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
     res.json({ success: true });
   } catch (error) {
@@ -628,6 +676,7 @@ app.post("/api/clients/:id/restore", requireAdmin, async (req, res) => {
     const { id } = req.params;
     const clientData = req.body;
     await setDoc(doc(db, "clients", id), sanitizeForFirestore(clientData));
+    invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
     res.json({ success: true });
   } catch (error) {

@@ -173,10 +173,7 @@ const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
   let dataBase = hojeClean;
   if (p.jurosCongelados) {
     if (p.dataCongelamento) {
-      const dataCong = parseLocalDate(p.dataCongelamento);
-      if (dataCong <= hojeClean) {
-        dataBase = dataCong;
-      }
+      dataBase = parseLocalDate(p.dataCongelamento);
     } else {
       dataBase = vencimento;
     }
@@ -1390,6 +1387,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
           const vencimento = parseLocalDate(p.dataVencimento);
           if (p.jurosCongelados) {
             hasCongeladas = true;
+            continue;
           }
 
           if (vencimento.getTime() === hoje.getTime()) {
@@ -1407,12 +1405,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
             } else if (diasAtraso > 0) {
               hasAtrasado = true;
             } else {
-              // Juros congelados na data de vencimento ou anterior (0 dias de atraso)
-              if (p.jurosCongelados) {
-                hasCongeladas = true;
-              } else {
-                hasEmDia = true;
-              }
+              hasEmDia = true;
             }
           }
         }
@@ -4515,12 +4508,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             Apenas Juros
                                           </span>
                                         )}
-                                        {p.jurosCongelados &&
-                                          p.dataCongelamento && (
+                                        {p.jurosCongelados && (
                                             <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                              Congelada em{" "}
-                                              {formatDate(p.dataCongelamento)}
+                                              ❄️ Congeladas{p.dataCongelamento ? ` em ${formatDate(p.dataCongelamento)}` : ""}
                                               {(() => {
+                                                if (!p.dataCongelamento) return "";
                                                 const v = parseLocalDate(
                                                   p.dataVencimento,
                                                 );
@@ -4626,8 +4618,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {isVencida && (
                                     <div className="mt-4 pt-4 border-t border-red-200">
                                       <div className="text-red-600 font-bold mb-2 flex items-center gap-1">
-                                        {p.jurosCongelados && diasAtraso === 0
-                                          ? "❄️ Juros Congelados"
+                                        {p.jurosCongelados
+                                          ? "❄️ Congeladas"
                                           : "⚠️ Atenção: Parcela em Atraso"}
                                       </div>
                                       <div className="bg-white rounded-lg p-3 border border-red-100">
@@ -5237,96 +5229,116 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
   }
 
   if (view === "admin") {
-    const cronogramaParcelas = clients
-      .flatMap((c) =>
-        (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(isSimulacaoAtiva)
-          .flatMap((s: any, sIdx: number) =>
-            (Array.isArray(s.parcelas) ? s.parcelas : []).map(
-              (p: any, pIdx: number) => {
-                const abatimentosTotal = p.abatimentos
-                  ? p.abatimentos.reduce(
-                      (acc: number, a: any) => acc + a.valor,
-                      0,
-                    )
-                  : 0;
-                return {
-                  ...p,
-                  valorRestante: Math.max(
-                    0,
-                    parseFloat(p.valor || 0) - abatimentosTotal,
+    const groupedCronograma =
+      adminTab === "cronograma"
+        ? (() => {
+            const cronogramaParcelas = clients
+              .flatMap((c) =>
+                (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
+                  .filter(isSimulacaoAtiva)
+                  .flatMap((s: any, sIdx: number) =>
+                    (Array.isArray(s.parcelas) ? s.parcelas : []).map(
+                      (p: any, pIdx: number) => {
+                        const abatimentosTotal = p.abatimentos
+                          ? p.abatimentos.reduce(
+                              (acc: number, a: any) => acc + a.valor,
+                              0,
+                            )
+                          : 0;
+                        return {
+                          ...p,
+                          valorRestante: Math.max(
+                            0,
+                            parseFloat(p.valor || 0) - abatimentosTotal,
+                          ),
+                          clientId: c.id,
+                          clientName: c.nomeCompleto,
+                          clientPhone: c.telefone,
+                          simIndex: sIdx,
+                          parcelaIndex: pIdx,
+                          taxaAtrasoDia: s.taxaAtrasoDia,
+                          prazo: s.prazo,
+                        };
+                      },
+                    ),
                   ),
-                  clientId: c.id,
-                  clientName: c.nomeCompleto,
-                  clientPhone: c.telefone,
-                  simIndex: sIdx,
-                  parcelaIndex: pIdx,
-                  taxaAtrasoDia: s.taxaAtrasoDia,
-                  prazo: s.prazo,
-                };
+              )
+              .filter((p) => !p.paga && p.status !== "pago")
+              .sort((a, b) => {
+                const dateCompare = (a.dataVencimento || "").localeCompare(
+                  b.dataVencimento || "",
+                );
+                if (dateCompare !== 0) return dateCompare;
+                return (a.clientName || "").localeCompare(b.clientName || "");
+              });
+
+            const filteredCronogramaParcelas = cronogramaParcelas.filter(
+              (p: any) => {
+                const date = p.dataVencimento;
+                if (!date) return false;
+
+                const vencimento = parseLocalDate(date);
+                const year = String(vencimento.getFullYear());
+                const month = String(vencimento.getMonth() + 1).padStart(2, "0");
+
+                const hoje = new Date();
+                hoje.setHours(0, 0, 0, 0);
+                vencimento.setHours(0, 0, 0, 0);
+
+                if (cronogramaYear !== "all" && year !== cronogramaYear)
+                  return false;
+                if (cronogramaMonth !== "all" && month !== cronogramaMonth)
+                  return false;
+
+                if (cronogramaStatusFilter !== "all") {
+                  if (cronogramaStatusFilter === "congeladas") {
+                    if (!p.jurosCongelados) return false;
+                  } else if (
+                    cronogramaStatusFilter === "vencidas" &&
+                    (vencimento >= hoje || p.jurosCongelados)
+                  ) {
+                    return false;
+                  } else if (
+                    cronogramaStatusFilter === "hoje" &&
+                    (vencimento.getTime() !== hoje.getTime() ||
+                      p.jurosCongelados)
+                  ) {
+                    return false;
+                  } else if (
+                    cronogramaStatusFilter === "a_vencer" &&
+                    (vencimento <= hoje || p.jurosCongelados)
+                  ) {
+                    return false;
+                  }
+                }
+
+                return true;
               },
-            ),
-          ),
-      )
-      .filter((p) => !p.paga && p.status !== "pago")
-      .sort((a, b) => {
-        const dateCompare = (a.dataVencimento || "").localeCompare(
-          b.dataVencimento || "",
-        );
-        if (dateCompare !== 0) return dateCompare;
-        return (a.clientName || "").localeCompare(b.clientName || "");
-      });
+            );
 
-    const filteredCronogramaParcelas = cronogramaParcelas.filter((p: any) => {
-      const date = p.dataVencimento;
-      if (!date) return false;
+            return filteredCronogramaParcelas.reduce(
+              (acc: any, p: any) => {
+                if (!acc[p.dataVencimento]) {
+                  acc[p.dataVencimento] = [];
+                }
+                acc[p.dataVencimento].push(p);
+                return acc;
+              },
+              {} as Record<string, any[]>,
+            );
+          })()
+        : {};
 
-      const vencimento = parseLocalDate(date);
-      const year = String(vencimento.getFullYear());
-      const month = String(vencimento.getMonth() + 1).padStart(2, "0");
+    const isFluxoTab = adminTab === "fluxo_caixa";
 
-      const hoje = new Date();
-      hoje.setHours(0, 0, 0, 0);
-      vencimento.setHours(0, 0, 0, 0);
+    const adminTransactions = isFluxoTab
+      ? clients.find((c) => c.id === "admin-transactions")?.retiradas ||
+        clients.find((c) => c.id === "admin-transactions")?.dados?.retiradas ||
+        []
+      : [];
 
-      if (cronogramaYear !== "all" && year !== cronogramaYear) return false;
-      if (cronogramaMonth !== "all" && month !== cronogramaMonth) return false;
-
-      if (cronogramaStatusFilter !== "all") {
-        if (cronogramaStatusFilter === "congeladas") {
-          if (!p.jurosCongelados) return false;
-        } else if (cronogramaStatusFilter === "vencidas" && vencimento >= hoje) {
-          return false;
-        } else if (
-          cronogramaStatusFilter === "hoje" &&
-          vencimento.getTime() !== hoje.getTime()
-        ) {
-          return false;
-        } else if (cronogramaStatusFilter === "a_vencer" && vencimento <= hoje) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-
-    const groupedCronograma = filteredCronogramaParcelas.reduce(
-      (acc: any, p: any) => {
-        if (!acc[p.dataVencimento]) {
-          acc[p.dataVencimento] = [];
-        }
-        acc[p.dataVencimento].push(p);
-        return acc;
-      },
-      {} as Record<string, any[]>,
-    );
-
-    const adminTransactions =
-      clients.find((c) => c.id === "admin-transactions")?.retiradas ||
-      clients.find((c) => c.id === "admin-transactions")?.dados?.retiradas ||
-      [];
-
-    const unifiedTransactions = [
+    const unifiedTransactions = isFluxoTab
+      ? [
       ...clients.flatMap((c) =>
         (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
           .map((s: any, originalIndex: number) => ({ s, originalIndex }))
@@ -5437,185 +5449,205 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         detalhes: t.descricao,
         valor: parseFloat(t.valor || 0),
       })),
-    ];
+    ] : [];
 
     // Sort all transactions by date to calculate running balance
-    const sortedAllTransactions = [...unifiedTransactions].sort(
-      (a: any, b: any) => {
-        const dateA = new Date(a.data).getTime();
-        const dateB = new Date(b.data).getTime();
-        if (dateA !== dateB) return dateA - dateB;
+    const sortedAllTransactions = isFluxoTab
+      ? [...unifiedTransactions].sort((a: any, b: any) => {
+          const dateA = new Date(a.data).getTime();
+          const dateB = new Date(b.data).getTime();
+          if (dateA !== dateB) return dateA - dateB;
 
-        const descA = a.descricao || "";
-        const descB = b.descricao || "";
-        return descA.localeCompare(descB);
-      },
-    );
+          const descA = a.descricao || "";
+          const descB = b.descricao || "";
+          return descA.localeCompare(descB);
+        })
+      : [];
     let runningBalance = 0;
-    const transactionsWithBalance = sortedAllTransactions.map((t) => {
-      if (["entrada", "aporte"].includes(t.tipo)) {
-        runningBalance += t.valor;
-      } else if (["saida", "retirada", "despesa_fixa"].includes(t.tipo)) {
-        runningBalance -= t.valor;
-      }
-      return { ...t, saldoApos: runningBalance };
-    });
+    const transactionsWithBalance = isFluxoTab
+      ? sortedAllTransactions.map((t) => {
+          if (["entrada", "aporte"].includes(t.tipo)) {
+            runningBalance += t.valor;
+          } else if (["saida", "retirada", "despesa_fixa"].includes(t.tipo)) {
+            runningBalance -= t.valor;
+          }
+          return { ...t, saldoApos: runningBalance };
+        })
+      : [];
 
     const fluxoFilter =
       fluxoMonth === "all" ? fluxoYear : `${fluxoYear}-${fluxoMonth}`;
 
-    const monthEntradas = clients
-      .flatMap((c) =>
-        (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(
-            (s: any) =>
-              (s.status === "aprovado" && s.clientAccepted === "sim") ||
-              (!s.status && s.clientAccepted !== "nao") ||
-              s.status === "renegociado",
-          )
-          .flatMap((s: any) => [
-            ...(s.parcelas || [])
+    const monthEntradas = isFluxoTab
+      ? clients
+          .flatMap((c) =>
+            (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
               .filter(
-                (p: any) =>
-                  p.paga &&
-                  (p.dataPagamento || p.dataVencimento)?.startsWith(
-                    fluxoFilter,
-                  ),
+                (s: any) =>
+                  (s.status === "aprovado" && s.clientAccepted === "sim") ||
+                  (!s.status && s.clientAccepted !== "nao") ||
+                  s.status === "renegociado",
               )
-              .map((p: any) => {
-                const abatimentosTotal = p.abatimentos
-                  ? p.abatimentos.reduce(
-                      (acc: number, a: any) => acc + a.valor,
-                      0,
-                    )
-                  : 0;
-                return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
-              }),
-            ...(s.parcelas || []).flatMap((p: any) =>
-              (p.abatimentos || [])
-                .filter((a: any) => a.data?.startsWith(fluxoFilter))
-                .map((a: any) => parseFloat(a.valor || 0)),
+              .flatMap((s: any) => [
+                ...(s.parcelas || [])
+                  .filter(
+                    (p: any) =>
+                      p.paga &&
+                      (p.dataPagamento || p.dataVencimento)?.startsWith(
+                        fluxoFilter,
+                      ),
+                  )
+                  .map((p: any) => {
+                    const abatimentosTotal = p.abatimentos
+                      ? p.abatimentos.reduce(
+                          (acc: number, a: any) => acc + a.valor,
+                          0,
+                        )
+                      : 0;
+                    return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
+                  }),
+                ...(s.parcelas || []).flatMap((p: any) =>
+                  (p.abatimentos || [])
+                    .filter((a: any) => a.data?.startsWith(fluxoFilter))
+                    .map((a: any) => parseFloat(a.valor || 0)),
+                ),
+              ]),
+          )
+          .reduce((acc, val) => acc + val, 0)
+      : 0;
+
+    const monthPendentes = isFluxoTab
+      ? clients
+          .flatMap((c) =>
+            (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
+              .filter(isSimulacaoAtiva)
+              .flatMap((s: any) =>
+                (s.parcelas || [])
+                  .filter((p: any) => {
+                    const hoje = new Date();
+                    hoje.setHours(0, 0, 0, 0);
+                    const date = p.dataVencimento || "";
+                    const vencimento = parseLocalDate(date);
+                    const dias = getParcelaDiasAtraso(p, hoje);
+                    return (
+                      !p.paga &&
+                      p.status !== "pago" &&
+                      (vencimento >= hoje || dias === 0) &&
+                      date.startsWith(fluxoFilter)
+                    );
+                  })
+                  .map((p: any) => {
+                    const abatimentosTotal = p.abatimentos
+                      ? p.abatimentos.reduce(
+                          (acc: number, a: any) => acc + a.valor,
+                          0,
+                        )
+                      : 0;
+                    return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
+                  }),
+              ),
+          )
+          .reduce((acc, val) => acc + val, 0)
+      : 0;
+
+    const monthInadimplencia = isFluxoTab
+      ? clients
+          .flatMap((c) =>
+            (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
+              .filter(isSimulacaoAtiva)
+              .flatMap((s: any) =>
+                (s.parcelas || [])
+                  .filter((p: any) => {
+                    const hoje = new Date();
+                    hoje.setHours(0, 0, 0, 0);
+                    const date = p.dataVencimento || "";
+                    const dias = getParcelaDiasAtraso(p, hoje);
+                    return (
+                      !p.paga &&
+                      p.status !== "pago" &&
+                      dias > 0 &&
+                      date.startsWith(fluxoFilter)
+                    );
+                  })
+                  .map((p: any) => {
+                    const abatimentosTotal = p.abatimentos
+                      ? p.abatimentos.reduce(
+                          (acc: number, a: any) => acc + a.valor,
+                          0,
+                        )
+                      : 0;
+                    return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
+                  }),
+              ),
+          )
+          .reduce((acc, val) => acc + val, 0)
+      : 0;
+
+    const monthSaidas = isFluxoTab
+      ? clients
+          .flatMap((c) =>
+            (c.simulacoes || (c.simulacao ? [c.simulacao] : [])).filter(
+              (s: any) => {
+                // If sim has dataCriacao, use it. Otherwise use client's dataCadastro
+                const date = s.dataCriacao || c.dataCadastro;
+                return (
+                  date &&
+                  date.startsWith(fluxoFilter) &&
+                  ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                    (!s.status && s.clientAccepted !== "nao")) &&
+                  !s.isRenegociacao
+                );
+              },
             ),
-          ]),
-      )
-      .reduce((acc, val) => acc + val, 0);
+          )
+          .reduce((acc, s) => acc + parseFloat(s.valorSolicitado || 0), 0)
+      : 0;
 
-    const monthPendentes = clients
-      .flatMap((c) =>
-        (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(isSimulacaoAtiva)
-          .flatMap((s: any) =>
-            (s.parcelas || [])
-              .filter((p: any) => {
-                const hoje = new Date();
-                hoje.setHours(0, 0, 0, 0);
-                const date = p.dataVencimento || "";
-                const vencimento = parseLocalDate(date);
-                const dias = getParcelaDiasAtraso(p, hoje);
-                return (
-                  !p.paga &&
-                  p.status !== "pago" &&
-                  (vencimento >= hoje || dias === 0) &&
-                  date.startsWith(fluxoFilter)
-                );
-              })
-              .map((p: any) => {
-                const abatimentosTotal = p.abatimentos
-                  ? p.abatimentos.reduce(
-                      (acc: number, a: any) => acc + a.valor,
-                      0,
-                    )
-                  : 0;
-                return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
-              }),
-          ),
-      )
-      .reduce((acc, val) => acc + val, 0);
+    const monthRetiradas = isFluxoTab
+      ? adminTransactions
+          .filter(
+            (t: any) =>
+              (t.data || "").startsWith(fluxoFilter) && t.tipo === "retirada",
+          )
+          .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0)
+      : 0;
 
-    const monthInadimplencia = clients
-      .flatMap((c) =>
-        (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
-          .filter(isSimulacaoAtiva)
-          .flatMap((s: any) =>
-            (s.parcelas || [])
-              .filter((p: any) => {
-                const hoje = new Date();
-                hoje.setHours(0, 0, 0, 0);
-                const date = p.dataVencimento || "";
-                const dias = getParcelaDiasAtraso(p, hoje);
-                return (
-                  !p.paga &&
-                  p.status !== "pago" &&
-                  dias > 0 &&
-                  date.startsWith(fluxoFilter)
-                );
-              })
-              .map((p: any) => {
-                const abatimentosTotal = p.abatimentos
-                  ? p.abatimentos.reduce(
-                      (acc: number, a: any) => acc + a.valor,
-                      0,
-                    )
-                  : 0;
-                return Math.max(0, parseFloat(p.valor || 0) - abatimentosTotal);
-              }),
-          ),
-      )
-      .reduce((acc, val) => acc + val, 0);
+    const monthDespesasPrevistas = isFluxoTab
+      ? adminTransactions
+          .filter(
+            (t: any) =>
+              (t.data || "").startsWith(fluxoFilter) &&
+              t.tipo === "despesa_prevista",
+          )
+          .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0)
+      : 0;
 
-    const monthSaidas = clients
-      .flatMap((c) =>
-        (c.simulacoes || (c.simulacao ? [c.simulacao] : [])).filter(
-          (s: any) => {
-            // If sim has dataCriacao, use it. Otherwise use client's dataCadastro
-            const date = s.dataCriacao || c.dataCadastro;
-            return (
-              date &&
-              date.startsWith(fluxoFilter) &&
-              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
-                (!s.status && s.clientAccepted !== "nao")) &&
-              !s.isRenegociacao
-            );
-          },
-        ),
-      )
-      .reduce((acc, s) => acc + parseFloat(s.valorSolicitado || 0), 0);
+    const monthAportes = isFluxoTab
+      ? adminTransactions
+          .filter(
+            (t: any) =>
+              (t.data || "").startsWith(fluxoFilter) && t.tipo === "aporte",
+          )
+          .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0)
+      : 0;
 
-    const monthRetiradas = adminTransactions
-      .filter(
-        (t: any) =>
-          (t.data || "").startsWith(fluxoFilter) && t.tipo === "retirada",
-      )
-      .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
+    const saldo = isFluxoTab
+      ? monthEntradas + monthAportes - monthSaidas - monthRetiradas
+      : 0;
 
-    const monthDespesasPrevistas = adminTransactions
-      .filter(
-        (t: any) =>
-          (t.data || "").startsWith(fluxoFilter) &&
-          t.tipo === "despesa_prevista",
-      )
-      .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
-
-    const monthAportes = adminTransactions
-      .filter(
-        (t: any) =>
-          (t.data || "").startsWith(fluxoFilter) && t.tipo === "aporte",
-      )
-      .reduce((acc: number, t: any) => acc + parseFloat(t.valor || 0), 0);
-
-    const saldo = monthEntradas + monthAportes - monthSaidas - monthRetiradas;
-
-    const fundoDeCaixa = unifiedTransactions.reduce((acc: number, t: any) => {
-      const tPeriod = t.data ? t.data.substring(0, fluxoFilter.length) : "";
-      if (tPeriod && tPeriod <= fluxoFilter) {
-        if (["entrada", "aporte"].includes(t.tipo)) {
-          return acc + t.valor;
-        } else if (["saida", "retirada"].includes(t.tipo)) {
-          return acc - t.valor;
-        }
-      }
-      return acc;
-    }, 0);
+    const fundoDeCaixa = isFluxoTab
+      ? unifiedTransactions.reduce((acc: number, t: any) => {
+          const tPeriod = t.data ? t.data.substring(0, fluxoFilter.length) : "";
+          if (tPeriod && tPeriod <= fluxoFilter) {
+            if (["entrada", "aporte"].includes(t.tipo)) {
+              return acc + t.valor;
+            } else if (["saida", "retirada"].includes(t.tipo)) {
+              return acc - t.valor;
+            }
+          }
+          return acc;
+        }, 0)
+      : 0;
 
     const handleAddRetirada = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -7685,14 +7717,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     Apenas Juros
                                                   </span>
                                                 )}
-                                                {p.jurosCongelados &&
-                                                  p.dataCongelamento && (
+                                                {p.jurosCongelados && (
                                                     <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                                      Congelada em{" "}
-                                                      {formatDate(
-                                                        p.dataCongelamento,
-                                                      )}
+                                                      ❄️ Congeladas{p.dataCongelamento ? ` em ${formatDate(p.dataCongelamento)}` : ""}
                                                       {(() => {
+                                                        if (!p.dataCongelamento) return "";
                                                         const v =
                                                           parseLocalDate(
                                                             p.dataVencimento,
@@ -8590,8 +8619,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isVencida && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-red-200">
                                               <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
-                                                {p.jurosCongelados && diasAtraso === 0
-                                                  ? "❄️ Juros Congelados"
+                                                {p.jurosCongelados
+                                                  ? "❄️ Congeladas"
                                                   : "⚠️ Parcela Vencida"}
                                               </div>
                                               <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
@@ -9032,7 +9061,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {(() => {
                                     const diasAtraso =
                                       getClientMaxDiasAtraso(client);
-                                    if (diasAtraso > 0) {
+                                    if (status === "congeladas") {
+                                      return (
+                                        <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap">
+                                          ❄️ Congeladas{diasAtraso > 0 ? ` (${diasAtraso.toString().padStart(2, "0")}d)` : ""}
+                                        </span>
+                                      );
+                                    } else if (diasAtraso > 0) {
                                       return (
                                         <span className="bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap">
                                           Atraso{" "}
@@ -9222,7 +9257,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       let dateLabel = formatDate(date);
                       let dateColor = "text-slate-700 bg-slate-100";
 
-                      if (cronogramaStatusFilter === "congeladas") {
+                      const allFrozen =
+                        parcelas.length > 0 &&
+                        parcelas.every((p: any) => p.jurosCongelados);
+
+                      if (cronogramaStatusFilter === "congeladas" || allFrozen) {
                         dateLabel += " (Congeladas)";
                         dateColor = "text-blue-800 bg-blue-100 border-blue-200";
                       } else if (isVencendoHoje) {
@@ -9317,7 +9356,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         <a
                                           href={`https://wa.me/55${(p.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
                                             (() => {
-                                              if (isVencendoHoje) {
+                                              if (p.jurosCongelados) {
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} está com juros Congelados no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
+                                              } else if (isVencendoHoje) {
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
                                               } else if (isPreVencimento) {
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
@@ -10842,11 +10883,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     Apenas Juros
                                   </span>
                                 )}
-                                {p.jurosCongelados && p.dataCongelamento && (
+                                {p.jurosCongelados && (
                                   <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
-                                    Congelada em{" "}
-                                    {formatDate(p.dataCongelamento)}
+                                    ❄️ Congeladas{p.dataCongelamento ? ` em ${formatDate(p.dataCongelamento)}` : ""}
                                     {(() => {
+                                      if (!p.dataCongelamento) return "";
                                       const v = parseLocalDate(
                                         p.dataVencimento,
                                       );
