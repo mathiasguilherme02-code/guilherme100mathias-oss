@@ -4502,7 +4502,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   <div className="flex justify-between items-center mb-3">
                                     <div className="flex items-center gap-2">
                                       <span className="font-bold text-lg text-slate-800">
-                                        Parcela {p.numero}
+                                        {sim.prazo === "abater" ? "Lembrete" : `Parcela ${p.numero}`}
                                         {p.isCongelamento && (
                                           <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
                                             Apenas Juros
@@ -4917,8 +4917,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
   };
 
   const handleAddParcela = async (simIndex: number) => {
+    const isAbater = (selectedClient?.simulacoes || (selectedClient?.simulacao ? [selectedClient.simulacao] : []))[simIndex]?.prazo === "abater";
+    const itemType = isAbater ? "Lembrete" : "Parcela";
+
     if (!newParcela.dataVencimento || !newParcela.valor) {
-      toast.error("Preencha a data e o valor da parcela.");
+      toast.error(`Preencha a data e o valor ${isAbater ? "do lembrete" : "da parcela"}.`);
       return;
     }
 
@@ -4945,7 +4948,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
       const maxNumero =
         novasParcelas.length > 0
-          ? Math.max(...novasParcelas.map((p) => p.numero))
+          ? Math.max(...novasParcelas.map((p: any) => p.numero || 0))
           : 0;
 
       novasParcelas.push({
@@ -4956,8 +4959,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       });
 
       updatedSimulacoes[simIndex].parcelas = novasParcelas;
-
-      // Also update quantidade
       updatedSimulacoes[simIndex].quantidade = novasParcelas.length.toString();
 
       const updatedClient = {
@@ -4965,30 +4966,96 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         simulacoes: updatedSimulacoes,
       };
 
-      const updateRes = await fetch(`/api/clients/${selectedClient.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${adminToken}`,
-        },
-        body: JSON.stringify(updatedClient),
-      });
+      const success = await updateClientWithUndo(
+        updatedClient,
+        `Adicionar ${itemType}`,
+      );
 
-      if (updateRes.ok) {
+      if (success) {
         setClients((prev) =>
           prev.map((c) => (c.id === selectedClient.id ? updatedClient : c)),
         );
         setSelectedClient(updatedClient);
         setAddingParcela(null);
         setNewParcela({ dataVencimento: "", valor: "" });
-        toast.success("Parcela adicionada com sucesso!");
+        toast.success(`${itemType} adicionado com sucesso!`);
       } else {
         throw new Error("Failed to update");
       }
     } catch (error) {
-      console.error("Error adding parcela:", error);
-      toast.error("Erro ao adicionar parcela");
+      console.error(`Error adding ${itemType}:`, error);
+      toast.error(`Erro ao adicionar ${itemType}`);
     }
+  };
+
+  const handleDeleteParcela = async (simIndex: number, parcelaIndex: number) => {
+    if (!selectedClient) return;
+    const clientSims = selectedClient.simulacoes || (selectedClient.simulacao ? [selectedClient.simulacao] : []);
+    const isAbater = clientSims[simIndex]?.prazo === "abater";
+    const itemType = isAbater ? "Lembrete" : "Parcela";
+
+    setConfirmModal({
+      title: `Excluir ${itemType}`,
+      message: isAbater
+        ? "Deseja realmente excluir este lembrete de pagamento? Você poderá criar outros lembretes a qualquer momento."
+        : "Deseja realmente excluir esta parcela?",
+      confirmText: "Sim, Excluir",
+      cancelText: "Cancelar",
+      type: "danger",
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/clients/${selectedClient.id}`, {
+            headers: { Authorization: `Bearer ${adminToken}` },
+          });
+          if (!res.ok) throw new Error("Failed to fetch latest client data");
+          const latestClient = await res.json();
+
+          const latestSims =
+            latestClient.simulacoes ||
+            (latestClient.simulacao ? [latestClient.simulacao] : []);
+          const updatedSimulacoes = [...latestSims];
+          const targetSim = updatedSimulacoes[simIndex];
+          if (!targetSim || !Array.isArray(targetSim.parcelas)) return;
+
+          const currentParcelas = [...targetSim.parcelas];
+          currentParcelas.splice(parcelaIndex, 1);
+
+          const updatedParcelas = currentParcelas.map((p: any, idx: number) => ({
+            ...p,
+            numero: idx + 1,
+          }));
+
+          updatedSimulacoes[simIndex] = {
+            ...targetSim,
+            parcelas: updatedParcelas,
+            quantidade: updatedParcelas.length.toString(),
+          };
+
+          const updatedClient = {
+            ...latestClient,
+            simulacoes: updatedSimulacoes,
+          };
+
+          const success = await updateClientWithUndo(
+            updatedClient,
+            `Excluir ${itemType}`,
+          );
+
+          if (success) {
+            setClients((prev) =>
+              prev.map((c) => (c.id === selectedClient.id ? updatedClient : c)),
+            );
+            setSelectedClient(updatedClient);
+            toast.success(`${itemType} excluído com sucesso!`);
+          } else {
+            throw new Error("Failed to update");
+          }
+        } catch (error) {
+          console.error(`Error deleting ${itemType}:`, error);
+          toast.error(`Erro ao excluir ${itemType}`);
+        }
+      },
+    });
   };
 
   const handleRemoveAbatimento = async (
@@ -5363,7 +5430,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   data: p.dataPagamento || p.dataVencimento,
                   tipo: "entrada",
                   descricao: `Pagamento: ${c.nomeCompleto}`,
-                  detalhes: `Parcela ${p.numero} - CPF: ${c.cpf}`,
+                  detalhes: s.prazo === "abater" ? `Lembrete - CPF: ${c.cpf}` : `Parcela ${p.numero} - CPF: ${c.cpf}`,
                   valor: Math.max(
                     0,
                     parseFloat(p.valor || 0) - abatimentosTotal,
@@ -5389,7 +5456,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 data: a.data,
                 tipo: "entrada",
                 descricao: `Abatimento: ${c.nomeCompleto}`,
-                detalhes: `Parcela ${p.numero} - CPF: ${c.cpf}`,
+                detalhes: s.prazo === "abater" ? `Lembrete (Abatimento) - CPF: ${c.cpf}` : `Parcela ${p.numero} - CPF: ${c.cpf}`,
                 valor: parseFloat(a.valor || 0),
                 clienteId: c.id,
               })),
@@ -5415,7 +5482,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   data: p.dataVencimento,
                   tipo: "entrada_prevista",
                   descricao: `Previsão: ${c.nomeCompleto}`,
-                  detalhes: `Parcela ${p.numero} (Pendente) - CPF: ${c.cpf}`,
+                  detalhes: s.prazo === "abater" ? `Lembrete (Pendente) - CPF: ${c.cpf}` : `Parcela ${p.numero} (Pendente) - CPF: ${c.cpf}`,
                   valor: Math.max(
                     0,
                     parseFloat(p.valor || 0) - abatimentosTotal,
@@ -7374,7 +7441,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {editSimData.prazo !== "única" ? (
                                     <div>
                                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                                        Quantidade de Parcelas
+                                        {editSimData.prazo === "abater"
+                                          ? "Quantidade de Lembretes"
+                                          : "Quantidade de Parcelas"}
                                       </label>
                                       <input
                                         type="number"
@@ -7409,7 +7478,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   )}
                                   <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                                      Valor da Parcela (Opcional)
+                                      {editSimData.prazo === "abater"
+                                        ? "Valor do Lembrete (Opcional)"
+                                        : "Valor da Parcela (Opcional)"}
                                     </label>
                                     <input
                                       type="number"
@@ -7571,10 +7642,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {sim.prazo !== "única" ? (
                                     <div>
                                       <p className="text-sm text-slate-500">
-                                        Qtd. Parcelas
+                                        {sim.prazo === "abater"
+                                          ? "Qtd. Lembretes"
+                                          : "Qtd. Parcelas"}
                                       </p>
                                       <p className="text-lg font-semibold text-slate-800">
-                                        {sim.quantidade}x
+                                        {sim.prazo === "abater"
+                                          ? `${sim.quantidade} lembretes`
+                                          : `${sim.quantidade}x`}
                                       </p>
                                     </div>
                                   ) : (
@@ -7616,7 +7691,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                                 <div className="flex justify-between items-center mb-3">
                                   <h4 className="font-semibold text-slate-700">
-                                    Controle de Parcelas
+                                    {sim.prazo === "abater"
+                                      ? "Lembretes de Pagamento"
+                                      : "Controle de Parcelas"}
                                   </h4>
                                   <div className="flex gap-2 print:hidden">
                                     <button
@@ -7643,6 +7720,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   </div>
                                 </div>
                                 <div className="grid grid-cols-1 gap-4">
+                                  {(!sim.parcelas || sim.parcelas.length === 0) && (
+                                    <div className="bg-slate-50 border border-dashed border-slate-300 rounded-lg p-6 text-center text-slate-500 text-sm">
+                                      {sim.prazo === "abater"
+                                        ? "Nenhum lembrete cadastrado. Clique no botão abaixo para adicionar um novo lembrete de pagamento."
+                                        : "Nenhuma parcela cadastrada."}
+                                    </div>
+                                  )}
                                   {(sim.parcelas || []).map(
                                     (p: any, i: number) => {
                                       const hoje = new Date();
@@ -7711,7 +7795,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           <div className="flex justify-between items-center mb-2">
                                             <div className="flex items-center gap-2">
                                               <span className="font-semibold text-slate-800">
-                                                Parcela {p.numero}
+                                                {sim.prazo === "abater" ? "Lembrete" : `Parcela ${p.numero}`}
                                                 {p.isCongelamento && (
                                                   <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
                                                     Apenas Juros
@@ -7767,10 +7851,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           : "",
                                                     });
                                                   }}
-                                                  className="text-slate-400 hover:text-yellow-600 transition-colors ml-2"
-                                                  title="Editar Parcela"
+                                                  className="text-slate-400 hover:text-yellow-600 transition-colors ml-2 p-1"
+                                                  title={sim.prazo === "abater" ? "Editar Lembrete" : "Editar Parcela"}
                                                 >
                                                   <Edit2 size={14} />
+                                                </button>
+                                              )}
+                                              {!isEditing && (
+                                                <button
+                                                  onClick={() => handleDeleteParcela(simIndex, i)}
+                                                  className="text-slate-400 hover:text-red-600 transition-colors ml-1 p-1"
+                                                  title={sim.prazo === "abater" ? "Excluir Lembrete" : "Excluir Parcela"}
+                                                >
+                                                  <Trash2 size={14} />
                                                 </button>
                                               )}
                                               {isVencendoHoje && (
@@ -8378,10 +8471,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           updatedSimulacoes,
                                                       };
 
+                                                      const isAbater = sim.prazo === "abater";
                                                       const success =
                                                         await updateClientWithUndo(
                                                           updatedClient,
-                                                          "Editar Parcela",
+                                                          isAbater ? "Editar Lembrete" : "Editar Parcela",
                                                         );
                                                       if (success) {
                                                         setClients((prev) =>
@@ -8397,7 +8491,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                         );
                                                         setEditingParcela(null);
                                                         toast.success(
-                                                          "Parcela atualizada com sucesso!",
+                                                          isAbater
+                                                            ? "Lembrete atualizado com sucesso!"
+                                                            : "Parcela atualizada com sucesso!",
                                                         );
                                                       } else {
                                                         throw new Error(
@@ -8410,14 +8506,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                         error,
                                                       );
                                                       toast.error(
-                                                        "Erro ao atualizar parcela",
+                                                        sim.prazo === "abater"
+                                                          ? "Erro ao atualizar lembrete"
+                                                          : "Erro ao atualizar parcela",
                                                       );
                                                     }
                                                   }}
                                                   className="flex items-center gap-1 px-3 py-1 text-xs font-medium text-white bg-yellow-500 hover:bg-yellow-600 rounded transition-colors"
                                                 >
                                                   <Save size={12} />
-                                                  Salvar
+                                                  {sim.prazo === "abater" ? "Salvar Lembrete" : "Salvar"}
                                                 </button>
                                               </div>
                                             </div>
@@ -8621,7 +8719,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
                                                 {p.jurosCongelados
                                                   ? "❄️ Congeladas"
-                                                  : "⚠️ Parcela Vencida"}
+                                                  : sim.prazo === "abater"
+                                                    ? "⚠️ Lembrete Vencido"
+                                                    : "⚠️ Parcela Vencida"}
                                               </div>
                                               <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
                                                 <div>
@@ -8657,8 +8757,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                               >
                                                 <Phone size={16} />
-                                                Notificar Parcela Vencida via
-                                                WhatsApp
+                                                {sim.prazo === "abater"
+                                                  ? "Notificar Lembrete Vencido via WhatsApp"
+                                                  : "Notificar Parcela Vencida via WhatsApp"}
                                               </a>
                                             </div>
                                           )}
@@ -8666,14 +8767,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isVencendoHoje && (
                                             <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(valorAtualizado)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`)}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                               >
                                                 <Phone size={16} />
-                                                Notificar Vencimento Hoje via
-                                                WhatsApp
+                                                {sim.prazo === "abater"
+                                                  ? "Notificar Lembrete de Vencimento Hoje via WhatsApp"
+                                                  : "Notificar Vencimento Hoje via WhatsApp"}
                                               </a>
                                             </div>
                                           )}
@@ -8681,18 +8783,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isPreVencimento && (
                                             <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(valorAtualizado)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(valorAtualizado)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`)}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                               >
                                                 <Phone size={16} />
-                                                Pré-notificar Vencimento (
-                                                {diasParaVencimento} dia
-                                                {diasParaVencimento > 1
-                                                  ? "s"
-                                                  : ""}
-                                                )
+                                                {sim.prazo === "abater"
+                                                  ? `Pré-notificar Lembrete (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`
+                                                  : `Pré-notificar Vencimento (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`}
                                               </a>
                                             </div>
                                           )}
@@ -9301,7 +9400,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     Telefone
                                   </th>
                                   <th className="py-3 px-6 font-semibold text-slate-700">
-                                    Parcela
+                                    Parcela / Lembrete
                                   </th>
                                   <th className="py-3 px-6 font-semibold text-slate-700">
                                     Status
@@ -9327,7 +9426,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       {p.clientPhone}
                                     </td>
                                     <td className="py-3 px-6 text-slate-600">
-                                      {p.numero}
+                                      {p.prazo === "abater" ? "Lembrete" : p.numero}
                                     </td>
                                     <td className="py-3 px-6">
                                       {p.jurosCongelados ? (
@@ -9356,12 +9455,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         <a
                                           href={`https://wa.me/55${(p.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
                                             (() => {
+                                              const itemDesc = p.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`;
                                               if (p.jurosCongelados) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} está com juros Congelados no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} está com juros Congelados no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
                                               } else if (isVencendoHoje) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
                                               } else if (isPreVencimento) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
                                               } else if (isVencida) {
                                                 const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                                 const taxaDia =
@@ -9400,7 +9500,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   p.prazo,
                                                 );
                                               }
-                                              return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo lembra que sua Parcela ${p.numero} no valor de ${formatCurrency(p.valorRestante)} vencerá em ${formatDate(p.dataVencimento)}.`;
+                                              return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo lembra que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vencerá em ${formatDate(p.dataVencimento)}.`;
                                             })(),
                                           )}`}
                                           target="_blank"
@@ -10753,7 +10853,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 {simulacao.prazo !== "única" ? (
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Quantidade de Parcelas
+                      {simulacao.prazo === "abater"
+                        ? "Quantidade de Lembretes"
+                        : "Quantidade de Parcelas"}
                     </label>
                     <input
                       type="number"
@@ -10855,20 +10957,26 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         </div>
                         <div>
                           <p className="text-sm text-slate-500">
-                            Total de Parcelas
+                            {simulacao.prazo === "abater"
+                              ? "Total de Lembretes"
+                              : "Total de Parcelas"}
                           </p>
                           <p className="text-lg font-semibold text-slate-800">
                             {Array.isArray(simulacao.parcelas)
                               ? simulacao.parcelas.length
                               : 0}
-                            x de {formatCurrency(simulacao.parcelas[0].valor)}
+                            {simulacao.prazo === "abater"
+                              ? " lembretes"
+                              : `x de ${formatCurrency(simulacao.parcelas[0]?.valor || 0)}`}
                           </p>
                         </div>
                       </div>
 
                       <div className="space-y-3 mt-6">
                         <h4 className="font-medium text-slate-700 border-b border-yellow-200 pb-2">
-                          Cronograma de Pagamento:
+                          {simulacao.prazo === "abater"
+                            ? "Lembretes de Pagamento:"
+                            : "Cronograma de Pagamento:"}
                         </h4>
                         <div className="max-h-60 overflow-y-auto pr-2 space-y-2">
                           {(simulacao.parcelas || []).map((p, i) => (
@@ -10877,7 +10985,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               className="flex justify-between items-center bg-white p-3 rounded-lg border border-yellow-100 shadow-sm"
                             >
                               <span className="font-medium text-slate-700">
-                                Parcela {p.numero}
+                                {simulacao.prazo === "abater"
+                                  ? "Lembrete"
+                                  : `Parcela ${p.numero}`}
                                 {p.isCongelamento && (
                                   <span className="ml-2 text-xs bg-cyan-100 text-cyan-800 px-2 py-0.5 rounded-full font-medium align-middle">
                                     Apenas Juros
