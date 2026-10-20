@@ -642,6 +642,7 @@ export default function App() {
     parcelas: [] as any[],
     isRenegociacao: false,
     renegociadoFromSimIndices: [] as number[],
+    aplicarJurosDiarios: false,
   });
   const [editingSimIndex, setEditingSimIndex] = useState<number | null>(null);
   const [editSimData, setEditSimData] = useState({
@@ -654,6 +655,7 @@ export default function App() {
     dataInicial: getLocalISODate(),
     dataVencimentoUnica: "",
     valorParcela: "",
+    aplicarJurosDiarios: false,
   });
 
   // Chat State
@@ -1619,7 +1621,10 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         prev.prazo === "abater"
           ? "0"
           : prev.taxaJuros || adminSettings.taxaJuros,
-      taxaAtrasoDia: prev.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
+      taxaAtrasoDia:
+        prev.prazo === "abater" && !prev.aplicarJurosDiarios
+          ? "0"
+          : prev.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
       tipoTaxa: prev.tipoTaxa || adminSettings.tipoTaxa || "mensal",
       parcelas: novasParcelas,
     }));
@@ -2026,12 +2031,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
         if (isVencida) {
           const diasAtraso = getParcelaDiasAtraso(p, hoje);
-          const taxaDia =
+          const hasDailyInterest =
             sim.prazo === "abater"
-              ? 0
-              : parseFloat(sim.taxaAtrasoDia) ||
-                parseFloat(adminSettings.taxaAtrasoDia) ||
-                1;
+              ? Boolean(sim.aplicarJurosDiarios) ||
+                (sim.aplicarJurosDiarios !== false &&
+                  parseFloat(sim.taxaAtrasoDia || "0") > 0)
+              : true;
+          const taxaDia = hasDailyInterest
+            ? parseFloat(sim.taxaAtrasoDia) ||
+              parseFloat(adminSettings.taxaAtrasoDia) ||
+              1
+            : 0;
           valorAtualizado = Number(p.valor) + Number(p.valor) * (taxaDia / 100) * diasAtraso;
         }
         valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
@@ -4480,10 +4490,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 : 0;
 
                               if (isVencida) {
-                                const taxaDia =
+                                const hasDailyInterest =
                                   sim.prazo === "abater"
-                                    ? 0
-                                    : parseFloat(sim.taxaAtrasoDia) || 1;
+                                    ? Boolean(sim.aplicarJurosDiarios) ||
+                                      (sim.aplicarJurosDiarios !== false &&
+                                        parseFloat(sim.taxaAtrasoDia || "0") > 0)
+                                    : true;
+                                const taxaDia = hasDailyInterest
+                                  ? parseFloat(sim.taxaAtrasoDia) || 1
+                                  : 0;
                                 valorAtualizado =
                                   Number(p.valor) +
                                   Number(p.valor) * (taxaDia / 100) * diasAtraso;
@@ -5324,6 +5339,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           simIndex: sIdx,
                           parcelaIndex: pIdx,
                           taxaAtrasoDia: s.taxaAtrasoDia,
+                          aplicarJurosDiarios: s.aplicarJurosDiarios,
                           prazo: s.prazo,
                         };
                       },
@@ -6113,6 +6129,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
     const startEditingSimulacao = (simIndex: number, sim: any) => {
       setEditingSimIndex(simIndex);
+      const isAbater = sim.prazo === "abater";
+      const aplicarJuros = isAbater
+        ? (sim.aplicarJurosDiarios !== undefined
+            ? Boolean(sim.aplicarJurosDiarios)
+            : parseFloat(sim.taxaAtrasoDia || "0") > 0)
+        : true;
       setEditSimData({
         valorSolicitado: sim.valorSolicitado || "",
         prazo: sim.prazo || "mensal",
@@ -6130,6 +6152,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               : sim.dataVencimentoUnica || ""
             : "",
         valorParcela: "", // Do not pre-fill, let it auto-calculate unless user overrides
+        aplicarJurosDiarios: aplicarJuros,
       });
     };
 
@@ -6279,6 +6302,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         updatedSimulacoes[simIndex] = {
           ...updatedSimulacoes[simIndex],
           ...editSimData,
+          aplicarJurosDiarios:
+            editSimData.prazo === "abater"
+              ? editSimData.aplicarJurosDiarios
+              : undefined,
+          taxaAtrasoDia:
+            editSimData.prazo === "abater" && !editSimData.aplicarJurosDiarios
+              ? "0"
+              : editSimData.taxaAtrasoDia || adminSettings.taxaAtrasoDia,
           dataCriacao: editSimData.dataInicial
             ? `${editSimData.dataInicial}T00:00:00`
             : updatedSimulacoes[simIndex].dataCriacao,
@@ -7592,6 +7623,63 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
                                     />
                                   </div>
+                                  {editSimData.prazo === "abater" && (
+                                    <div className="col-span-1 md:col-span-2 bg-amber-50/80 border border-amber-200 rounded-xl p-4">
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div>
+                                          <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-800">
+                                            <input
+                                              type="checkbox"
+                                              checked={Boolean(editSimData.aplicarJurosDiarios)}
+                                              onChange={(e) =>
+                                                setEditSimData({
+                                                  ...editSimData,
+                                                  aplicarJurosDiarios: e.target.checked,
+                                                  taxaAtrasoDia: e.target.checked
+                                                    ? (editSimData.taxaAtrasoDia && editSimData.taxaAtrasoDia !== "0"
+                                                        ? editSimData.taxaAtrasoDia
+                                                        : adminSettings.taxaAtrasoDia || "8")
+                                                    : "0",
+                                                })
+                                              }
+                                              className="w-5 h-5 text-yellow-600 rounded focus:ring-yellow-500 border-slate-300"
+                                            />
+                                            <span className="text-sm font-semibold text-slate-800">
+                                              Aplicar juros diários em caso de atraso (Inadimplência)
+                                            </span>
+                                          </label>
+                                          <p className="text-xs text-slate-500 mt-1 ml-7">
+                                            {editSimData.aplicarJurosDiarios
+                                              ? "Lembretes vencidos acumularão juros diários para clientes inadimplentes."
+                                              : "Lembretes vencidos não acumularão juros (0%). Marque para cobrar juros de inadimplentes."}
+                                          </p>
+                                        </div>
+
+                                        {editSimData.aplicarJurosDiarios && (
+                                          <div className="flex items-center gap-2 ml-7 sm:ml-0 bg-white px-3 py-1.5 rounded-lg border border-amber-200 shadow-sm">
+                                            <label className="text-xs font-medium text-slate-700 whitespace-nowrap">
+                                              Juros ao dia (%):
+                                            </label>
+                                            <input
+                                              type="number"
+                                              step="0.1"
+                                              min="0"
+                                              value={editSimData.taxaAtrasoDia}
+                                              onChange={(e) =>
+                                                setEditSimData({
+                                                  ...editSimData,
+                                                  taxaAtrasoDia: e.target.value,
+                                                })
+                                              }
+                                              className="w-20 px-2 py-1 text-sm bg-white border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                              placeholder="Ex: 8"
+                                            />
+                                            <span className="text-xs text-slate-500 font-bold">%</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="flex justify-end gap-3 mt-6">
                                   <button
@@ -7765,12 +7853,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         : 0;
 
                                       if (isVencida) {
-                                        const taxaDia =
+                                        const hasDailyInterest =
                                           sim.prazo === "abater"
-                                            ? 0
-                                            : parseFloat(sim.taxaAtrasoDia) ||
-                                              parseFloat(adminSettings.taxaAtrasoDia) ||
-                                              1;
+                                            ? Boolean(sim.aplicarJurosDiarios) ||
+                                              (sim.aplicarJurosDiarios !== false &&
+                                                parseFloat(sim.taxaAtrasoDia || "0") > 0)
+                                            : true;
+                                        const taxaDia = hasDailyInterest
+                                          ? parseFloat(sim.taxaAtrasoDia) ||
+                                            parseFloat(adminSettings.taxaAtrasoDia) ||
+                                            1
+                                          : 0;
                                         valorAtualizado =
                                           Number(p.valor) +
                                           Number(p.valor) *
@@ -8730,12 +8823,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 </div>
                                                 <div>
                                                   Taxa:{" "}
-                                                  {sim.prazo === "abater"
+                                                  {sim.prazo === "abater" && (!sim.aplicarJurosDiarios && (!sim.taxaAtrasoDia || parseFloat(sim.taxaAtrasoDia) === 0))
                                                     ? 0
                                                     : diasAtraso *
                                                       (parseFloat(
                                                         sim.taxaAtrasoDia,
-                                                      ) || 1)}
+                                                      ) || parseFloat(adminSettings.taxaAtrasoDia) || 1)}
                                                   %
                                                 </div>
                                                 <div className="col-span-2 font-bold text-sm mt-1">
@@ -9464,16 +9557,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
                                               } else if (isVencida) {
                                                 const diasAtraso = getParcelaDiasAtraso(p, hoje);
-                                                const taxaDia =
+                                                const hasDailyInterest =
                                                   p.prazo === "abater"
-                                                    ? 0
-                                                    : parseFloat(
-                                                        p.taxaAtrasoDia,
-                                                      ) ||
-                                                      parseFloat(
-                                                        adminSettings.taxaAtrasoDia,
-                                                      ) ||
-                                                      1;
+                                                    ? Boolean(p.aplicarJurosDiarios) ||
+                                                      (p.aplicarJurosDiarios !== false &&
+                                                        parseFloat(p.taxaAtrasoDia || "0") > 0)
+                                                    : true;
+                                                const taxaDia = hasDailyInterest
+                                                  ? parseFloat(
+                                                      p.taxaAtrasoDia,
+                                                    ) ||
+                                                    parseFloat(
+                                                      adminSettings.taxaAtrasoDia,
+                                                    ) ||
+                                                    1
+                                                  : 0;
                                                 const abatimentosTotal =
                                                   p.abatimentos
                                                     ? p.abatimentos.reduce(
@@ -10886,6 +10984,64 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       }
                       className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
                     />
+                  </div>
+                )}
+
+                {simulacao.prazo === "abater" && (
+                  <div className="col-span-1 md:col-span-2 lg:col-span-4 bg-amber-50/80 border border-amber-200 rounded-xl p-4 transition-all">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(simulacao.aplicarJurosDiarios)}
+                            onChange={(e) =>
+                              setSimulacao({
+                                ...simulacao,
+                                aplicarJurosDiarios: e.target.checked,
+                                taxaAtrasoDia: e.target.checked
+                                  ? (simulacao.taxaAtrasoDia && simulacao.taxaAtrasoDia !== "0"
+                                      ? simulacao.taxaAtrasoDia
+                                      : adminSettings.taxaAtrasoDia || "8")
+                                  : "0",
+                              })
+                            }
+                            className="w-5 h-5 text-yellow-600 rounded focus:ring-yellow-500 border-slate-300"
+                          />
+                          <span className="text-sm font-semibold text-slate-800">
+                            Aplicar juros diários em caso de atraso (Inadimplência)
+                          </span>
+                        </label>
+                        <p className="text-xs text-slate-500 mt-1 ml-7">
+                          {simulacao.aplicarJurosDiarios
+                            ? "Lembretes vencidos acumularão juros diários para clientes inadimplentes."
+                            : "Lembretes vencidos não acumularão juros (0%). Marque para cobrar juros de inadimplentes."}
+                        </p>
+                      </div>
+
+                      {simulacao.aplicarJurosDiarios && (
+                        <div className="flex items-center gap-2 ml-7 sm:ml-0 bg-white px-3 py-1.5 rounded-lg border border-amber-200 shadow-sm">
+                          <label className="text-xs font-medium text-slate-700 whitespace-nowrap">
+                            Juros ao dia (%):
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            value={simulacao.taxaAtrasoDia}
+                            onChange={(e) =>
+                              setSimulacao({
+                                ...simulacao,
+                                taxaAtrasoDia: e.target.value,
+                              })
+                            }
+                            className="w-20 px-2 py-1 text-sm bg-white border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                            placeholder="Ex: 8"
+                          />
+                          <span className="text-xs text-slate-500 font-bold">%</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
