@@ -508,7 +508,24 @@ app.post("/api/clients", async (req, res) => {
   try {
     if (!db) {
       const client = { id: Date.now().toString(), ...req.body };
-      mockClients.push(client); syncData();
+      mockClients.push(client);
+      syncData();
+      invalidateClientsCache();
+      const valorSol =
+        client.simulacoes?.[0]?.valorSolicitado ||
+        client.simulacao?.valorSolicitado ||
+        client.valorSolicitado ||
+        null;
+      broadcastUpdate('UPDATE_CLIENTS');
+      broadcastUpdate('NEW_CLIENT', {
+        id: client.id,
+        nomeCompleto: client.nomeCompleto,
+        cpf: client.cpf,
+        telefone: client.telefone,
+        valorSolicitado: valorSol,
+        dataCadastro: client.dataCadastro || new Date().toISOString(),
+        timestamp: new Date().toISOString(),
+      });
       return res.json(client);
     }
     const client = req.body;
@@ -549,8 +566,21 @@ app.post("/api/clients", async (req, res) => {
     }));
       
     invalidateClientsCache();
+    const valorSol =
+      client.simulacoes?.[0]?.valorSolicitado ||
+      client.simulacao?.valorSolicitado ||
+      client.valorSolicitado ||
+      null;
     broadcastUpdate('UPDATE_CLIENTS');
-    broadcastUpdate('NEW_CLIENT', { id: client.id, nomeCompleto: client.nomeCompleto });
+    broadcastUpdate('NEW_CLIENT', {
+      id: client.id,
+      nomeCompleto: client.nomeCompleto,
+      cpf: formattedCpf,
+      telefone: client.telefone,
+      valorSolicitado: valorSol,
+      dataCadastro: pgDate,
+      timestamp: new Date().toISOString(),
+    });
     res.status(201).json({ success: true });
   } catch (error: any) {
     console.error("Error saving client:", error);

@@ -48,7 +48,22 @@ import {
   ShoppingCart,
   Minus,
   Image as ImageIcon,
+  Bell,
+  BellRing,
 } from "lucide-react";
+
+export interface AdminNotification {
+  id: string;
+  type: "new_client" | "new_loan" | "info";
+  title: string;
+  message: string;
+  clientId?: string;
+  clientName?: string;
+  cpf?: string;
+  valorSolicitado?: string | number | null;
+  timestamp: string;
+  read: boolean;
+}
 
 export interface Produto {
   id: string;
@@ -211,13 +226,49 @@ const documentCategories = [
   { id: "reserva2", label: "Anexo Reserva 2", required: false },
 ];
 
+const playWebAudioChime = () => {
+  try {
+    const AudioContextClass =
+      window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(587.33, now); // D5
+    gain1.gain.setValueAtTime(0.18, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.45);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(880, now + 0.12); // A5
+    gain2.gain.setValueAtTime(0.22, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.7);
+  } catch (e) {}
+};
+
 const playNotificationSound = () => {
   try {
     const audio = new Audio(
       "https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3",
     );
-    audio.play().catch((e) => console.log("Audio play failed:", e));
-  } catch (e) {}
+    audio.play().catch(() => {
+      playWebAudioChime();
+    });
+  } catch (e) {
+    playWebAudioChime();
+  }
 };
 
 export default function App() {
@@ -666,6 +717,39 @@ export default function App() {
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Admin Notifications State
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem("gm_admin_notifications");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const notificationRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        notificationRef.current &&
+        !notificationRef.current.contains(e.target as Node)
+      ) {
+        setIsNotificationOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (adminToken && typeof window !== "undefined" && "Notification" in window) {
+      if (Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+      }
+    }
+  }, [adminToken]);
+
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -844,15 +928,58 @@ export default function App() {
           window.dispatchEvent(new CustomEvent("app:update_clients"));
         } else if (data.type === "NEW_CLIENT") {
           if (adminToken) {
+            playNotificationSound();
+
+            // Native Desktop Browser Notification
+            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+              try {
+                const n = new Notification("📋 Nova Ficha Cadastral Recebida!", {
+                  body: `O cliente ${data.payload?.nomeCompleto || "Novo Cliente"}${data.payload?.cpf ? ` (CPF: ${data.payload.cpf})` : ""} acabou de preencher a ficha cadastral.`,
+                  icon: "/favicon.ico",
+                });
+                n.onclick = () => {
+                  window.focus();
+                  setView("admin");
+                  setAdminTab("clientes");
+                  if (data.payload?.id) {
+                    const found = clientsRef.current.find((c) => c.id === data.payload.id);
+                    if (found) handleSelectClient(found);
+                  }
+                };
+              } catch (e) {}
+            }
+
+            // Save to in-app admin notifications
+            const newNotif: AdminNotification = {
+              id: `notif-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+              type: "new_client",
+              title: "Nova Ficha Cadastral",
+              message: `O cliente ${data.payload?.nomeCompleto || "Novo Cliente"} realizou o preenchimento da ficha cadastral.`,
+              clientId: data.payload?.id,
+              clientName: data.payload?.nomeCompleto,
+              cpf: data.payload?.cpf,
+              valorSolicitado: data.payload?.valorSolicitado,
+              timestamp: data.payload?.timestamp || new Date().toISOString(),
+              read: false,
+            };
+            setAdminNotifications((prev) => {
+              const updated = [newNotif, ...prev.filter((n) => n.id !== newNotif.id)];
+              try {
+                localStorage.setItem("gm_admin_notifications", JSON.stringify(updated.slice(0, 50)));
+              } catch (err) {}
+              return updated;
+            });
+
+            // Trigger sonner toast
             toast.success(
-              `Novo cliente cadastrado: ${data.payload?.nomeCompleto || "Desconhecido"}`,
+              `📋 Nova Ficha Cadastral: ${data.payload?.nomeCompleto || "Novo Cliente"}`,
               {
-                description: "Um novo cadastro foi realizado no sistema.",
-                duration: 10000,
+                description: `Novo cadastro realizado no sistema.${data.payload?.cpf ? ` CPF: ${data.payload.cpf}` : ""}`,
+                duration: 15000,
                 action: {
-                  label: "Ver Cliente",
+                  label: "Ver Ficha",
                   onClick: () => {
-                    setView("admin_dashboard");
+                    setView("admin");
                     setAdminTab("clientes");
                     const foundClient = clientsRef.current.find(
                       (c) => c.id === data.payload.id,
@@ -865,6 +992,7 @@ export default function App() {
                       })
                         .then((res) => res.json())
                         .then((clientsData) => {
+                          setClients(clientsData);
                           const client = clientsData.find(
                             (c: any) => c.id === data.payload.id,
                           );
@@ -878,6 +1006,7 @@ export default function App() {
           }
         } else if (data.type === "NEW_LOAN_REQUEST") {
           if (adminToken) {
+            playNotificationSound();
             const now = new Date();
             const timeStr =
               now.toLocaleDateString("pt-BR") +
@@ -888,11 +1017,11 @@ export default function App() {
               });
             toast.info(`Nova solicitação de empréstimo!`, {
               description: `Cliente: ${data.payload?.nomeCompleto || "Desconhecido"} - Data e Hora: ${timeStr}`,
-              duration: 10000,
+              duration: 15000,
               action: {
                 label: "Ver Solicitação",
                 onClick: () => {
-                  setView("admin_dashboard");
+                  setView("admin");
                   setAdminTab("clientes");
                   const foundClient = clientsRef.current.find(
                     (c) => c.id === data.payload.id,
@@ -905,6 +1034,7 @@ export default function App() {
                     })
                       .then((res) => res.json())
                       .then((clientsData) => {
+                        setClients(clientsData);
                         const client = clientsData.find(
                           (c: any) => c.id === data.payload.id,
                         );
@@ -6538,7 +6668,137 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 Gerenciamento de clientes cadastrados
               </p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Notification Bell Dropdown */}
+              <div className="relative" ref={notificationRef}>
+                <button
+                  onClick={() => setIsNotificationOpen(!isNotificationOpen)}
+                  className="relative flex items-center justify-center p-2.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition-colors shadow-sm"
+                  title="Notificações de novas fichas e alertas"
+                >
+                  {adminNotifications.some((n) => !n.read) ? (
+                    <BellRing size={18} className="text-yellow-600 animate-bounce" />
+                  ) : (
+                    <Bell size={18} className="text-slate-600" />
+                  )}
+                  {adminNotifications.filter((n) => !n.read).length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full shadow-md min-w-[18px] text-center">
+                      {adminNotifications.filter((n) => !n.read).length}
+                    </span>
+                  )}
+                </button>
+
+                {isNotificationOpen && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
+                    <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Bell size={16} className="text-yellow-600" />
+                        <h4 className="font-bold text-slate-800 text-sm">
+                          Notificações
+                        </h4>
+                        {adminNotifications.filter((n) => !n.read).length > 0 && (
+                          <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded-full font-semibold">
+                            {adminNotifications.filter((n) => !n.read).length} nova(s)
+                          </span>
+                        )}
+                      </div>
+                      {adminNotifications.length > 0 && (
+                        <div className="flex items-center gap-2 text-xs">
+                          <button
+                            onClick={() => {
+                              const marked = adminNotifications.map((n) => ({ ...n, read: true }));
+                              setAdminNotifications(marked);
+                              try {
+                                localStorage.setItem("gm_admin_notifications", JSON.stringify(marked));
+                              } catch (err) {}
+                            }}
+                            className="text-slate-500 hover:text-slate-800 font-medium"
+                          >
+                            Marcar lidas
+                          </button>
+                          <span>•</span>
+                          <button
+                            onClick={() => {
+                              setAdminNotifications([]);
+                              try {
+                                localStorage.removeItem("gm_admin_notifications");
+                              } catch (err) {}
+                            }}
+                            className="text-red-500 hover:text-red-700 font-medium"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                      {adminNotifications.length === 0 ? (
+                        <div className="p-8 text-center text-slate-400 text-sm">
+                          <Bell size={28} className="mx-auto mb-2 opacity-40" />
+                          Nenhuma notificação no momento.
+                        </div>
+                      ) : (
+                        adminNotifications.map((n) => (
+                          <div
+                            key={n.id}
+                            onClick={() => {
+                              const updated = adminNotifications.map((item) =>
+                                item.id === n.id ? { ...item, read: true } : item,
+                              );
+                              setAdminNotifications(updated);
+                              try {
+                                localStorage.setItem("gm_admin_notifications", JSON.stringify(updated));
+                              } catch (err) {}
+
+                              if (n.clientId) {
+                                const client = clients.find((c) => c.id === n.clientId);
+                                if (client) {
+                                  setAdminTab("clientes");
+                                  handleSelectClient(client);
+                                  setIsNotificationOpen(false);
+                                }
+                              }
+                            }}
+                            className={`p-3.5 hover:bg-slate-50 cursor-pointer transition-colors ${
+                              !n.read ? "bg-yellow-50/70 font-medium" : ""
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                <span className={`inline-block w-2 h-2 rounded-full ${!n.read ? "bg-yellow-500" : "bg-slate-300"}`}></span>
+                                {n.title}
+                              </span>
+                              <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                {new Date(n.timestamp).toLocaleTimeString("pt-BR", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 mt-1 line-clamp-2">
+                              {n.message}
+                            </p>
+                            {n.clientId && (
+                              <div className="mt-2 flex items-center justify-between">
+                                <span className="text-[11px] text-yellow-700 font-semibold hover:underline">
+                                  Ver ficha cadastral &rarr;
+                                </span>
+                                {!n.read && (
+                                  <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
+                                    Nova
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <button
                 onClick={() => {
                   setView("simulation");
@@ -6547,7 +6807,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
               >
                 <ArrowLeft size={18} />
-                Página Principal
+                <span className="hidden sm:inline">Página Principal</span>
               </button>
               <button
                 onClick={() => {
@@ -6559,7 +6819,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 className="flex items-center gap-2 bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm font-medium"
               >
                 <UserPlus size={18} />
-                Cadastrar Novo Cliente
+                <span className="hidden sm:inline">Cadastrar Novo Cliente</span>
+                <span className="sm:hidden">Novo</span>
               </button>
               <button
                 onClick={() => {
@@ -6569,10 +6830,66 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-900 transition-colors shadow-sm font-medium"
               >
                 <LogOut size={18} />
-                Sair
+                <span className="hidden sm:inline">Sair</span>
               </button>
             </div>
           </div>
+
+          {(() => {
+            const todayStr = getLocalISODate();
+            const newFichasToday = clients.filter((c) => {
+              const d = c.dataCadastro ? (c.dataCadastro.includes("T") ? c.dataCadastro.split("T")[0] : c.dataCadastro) : "";
+              return d === todayStr;
+            });
+            if (newFichasToday.length > 0) {
+              return (
+                <div className="mb-4 bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-r-lg shadow-sm flex items-start gap-3">
+                  <UserPlus
+                    className="text-emerald-600 mt-0.5 flex-shrink-0"
+                    size={20}
+                  />
+                  <div className="w-full">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-emerald-900 font-bold flex items-center gap-2">
+                        📋 Novas Fichas Cadastrais Hoje
+                        <span className="bg-emerald-200 text-emerald-800 text-xs px-2 py-0.5 rounded-full font-bold">
+                          {newFichasToday.length} nova(s)
+                        </span>
+                      </h3>
+                    </div>
+                    <p className="text-emerald-700 text-xs mt-1 mb-2">
+                      Cliente(s) que preencheram a ficha cadastral hoje:
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {newFichasToday.map((client) => (
+                        <button
+                          key={client.id}
+                          onClick={() => {
+                            setAdminTab("clientes");
+                            handleSelectClient(client);
+                          }}
+                          className="text-left bg-white/80 hover:bg-white p-2.5 rounded-lg border border-emerald-200 text-emerald-900 transition-all flex justify-between items-center shadow-xs hover:shadow-sm"
+                        >
+                          <div className="truncate mr-2">
+                            <p className="font-semibold text-xs truncate">
+                              {client.nomeCompleto}
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              CPF: {client.cpf}
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">
+                            Ver Ficha &rarr;
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           {(() => {
             const pendingClients = clients.filter((c) =>
@@ -9243,6 +9560,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               <td className="py-4 px-6 font-medium text-slate-800">
                                 <div className="flex items-center gap-2">
                                   <span>{client.nomeCompleto}</span>
+                                  {(() => {
+                                    const d = client.dataCadastro
+                                      ? client.dataCadastro.includes("T")
+                                        ? client.dataCadastro.split("T")[0]
+                                        : client.dataCadastro
+                                      : "";
+                                    if (d === getLocalISODate()) {
+                                      return (
+                                        <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
+                                          Nova Ficha
+                                        </span>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
                                   {client.simulacoes?.some(
                                     (s: any) => s.status === "pendente",
                                   ) && (
