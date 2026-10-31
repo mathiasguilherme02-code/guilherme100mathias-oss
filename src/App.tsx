@@ -506,8 +506,70 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("todos");
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
 
+  // Admin Notifications State
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem("gm_admin_notifications");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // Track viewed client fichas by ID to dismiss badges and alert banners
+  const [viewedFichas, setViewedFichas] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("gm_viewed_fichas");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const markFichaAsViewed = (clientId: string) => {
+    if (!clientId) return;
+    try {
+      toast.dismiss(`new-client-${clientId}`);
+    } catch (e) {}
+
+    setViewedFichas((prev) => {
+      if (prev.includes(clientId)) return prev;
+      const updated = [...prev, clientId];
+      try {
+        localStorage.setItem("gm_viewed_fichas", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
+    setClients((prev) =>
+      prev.map((c) =>
+        c.id === clientId ? { ...c, fichaVisualizada: true } : c,
+      ),
+    );
+
+    setAdminNotifications((prev) => {
+      const updated = prev.map((n) =>
+        n.clientId === clientId ? { ...n, read: true } : n,
+      );
+      try {
+        localStorage.setItem("gm_admin_notifications", JSON.stringify(updated));
+      } catch (err) {}
+      return updated;
+    });
+
+    if (adminToken) {
+      fetch(`/api/clients/${clientId}/view-ficha`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }).catch(() => {});
+    }
+  };
+
   const handleSelectClient = async (client: any) => {
     setSelectedClient(client);
+    if (client?.id) {
+      markFichaAsViewed(client.id);
+    }
     if (adminToken) {
       try {
         const res = await fetch(`/api/clients/${client.id}`, {
@@ -717,15 +779,7 @@ export default function App() {
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Admin Notifications State
-  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() => {
-    try {
-      const saved = localStorage.getItem("gm_admin_notifications");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
+
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
 
@@ -939,6 +993,9 @@ export default function App() {
                 });
                 n.onclick = () => {
                   window.focus();
+                  if (data.payload?.id) {
+                    markFichaAsViewed(data.payload.id);
+                  }
                   setView("admin");
                   setAdminTab("clientes");
                   if (data.payload?.id) {
@@ -971,14 +1028,20 @@ export default function App() {
             });
 
             // Trigger sonner toast
+            const toastId = `new-client-${data.payload?.id || Date.now()}`;
             toast.success(
               `📋 Nova Ficha Cadastral: ${data.payload?.nomeCompleto || "Novo Cliente"}`,
               {
+                id: toastId,
                 description: `Novo cadastro realizado no sistema.${data.payload?.cpf ? ` CPF: ${data.payload.cpf}` : ""}`,
                 duration: 15000,
                 action: {
                   label: "Ver Ficha",
                   onClick: () => {
+                    toast.dismiss(toastId);
+                    if (data.payload?.id) {
+                      markFichaAsViewed(data.payload.id);
+                    }
                     setView("admin");
                     setAdminTab("clientes");
                     const foundClient = clientsRef.current.find(
@@ -6708,6 +6771,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             onClick={() => {
                               const marked = adminNotifications.map((n) => ({ ...n, read: true }));
                               setAdminNotifications(marked);
+                              adminNotifications.forEach((n) => {
+                                if (n.clientId) {
+                                  markFichaAsViewed(n.clientId);
+                                }
+                              });
                               try {
                                 localStorage.setItem("gm_admin_notifications", JSON.stringify(marked));
                               } catch (err) {}
@@ -6839,7 +6907,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             const todayStr = getLocalISODate();
             const newFichasToday = clients.filter((c) => {
               const d = c.dataCadastro ? (c.dataCadastro.includes("T") ? c.dataCadastro.split("T")[0] : c.dataCadastro) : "";
-              return d === todayStr;
+              const isViewed = viewedFichas.includes(c.id) || !!c.fichaVisualizada;
+              return d === todayStr && !isViewed;
             });
             if (newFichasToday.length > 0) {
               return (
@@ -6856,15 +6925,25 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           {newFichasToday.length} nova(s)
                         </span>
                       </h3>
+                      <button
+                        onClick={() => {
+                          newFichasToday.forEach((c) => markFichaAsViewed(c.id));
+                        }}
+                        className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded transition-colors"
+                        title="Marcar todas como vistas e fechar o aviso"
+                      >
+                        Dispensar aviso
+                      </button>
                     </div>
                     <p className="text-emerald-700 text-xs mt-1 mb-2">
-                      Cliente(s) que preencheram a ficha cadastral hoje:
+                      Cliente(s) que preencheram a ficha cadastral hoje e ainda não foram visualizados:
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                       {newFichasToday.map((client) => (
                         <button
                           key={client.id}
                           onClick={() => {
+                            markFichaAsViewed(client.id);
                             setAdminTab("clientes");
                             handleSelectClient(client);
                           }}
@@ -9566,7 +9645,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         ? client.dataCadastro.split("T")[0]
                                         : client.dataCadastro
                                       : "";
-                                    if (d === getLocalISODate()) {
+                                    const isViewed =
+                                      viewedFichas.includes(client.id) ||
+                                      !!client.fichaVisualizada;
+                                    if (d === getLocalISODate() && !isViewed) {
                                       return (
                                         <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
                                           Nova Ficha

@@ -679,6 +679,29 @@ app.put("/api/clients/:id", async (req, res) => {
   }
 });
 
+// Mark Client Ficha as Viewed by Admin (Protected)
+app.post("/api/clients/:id/view-ficha", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      const idx = mockClients.findIndex((c) => c.id === id);
+      if (idx !== -1) {
+        mockClients[idx].fichaVisualizada = true;
+        syncData();
+        invalidateClientsCache();
+      }
+      return res.json({ success: true });
+    }
+    const docRef = doc(db, "clients", id);
+    await setDoc(docRef, { fichaVisualizada: true }, { merge: true });
+    invalidateClientsCache();
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error marking ficha as viewed:", error);
+    res.status(500).json({ error: "Falha ao marcar ficha como visualizada" });
+  }
+});
+
 // Delete Client (Protected)
 app.delete("/api/clients/:id", requireAdmin, async (req, res) => {
   try {
