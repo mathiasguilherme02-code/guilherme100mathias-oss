@@ -174,6 +174,79 @@ const parseLocalDate = (dateString: string | any) => {
   return d;
 };
 
+/**
+ * Retorna a data correspondente ao 5º dia útil do mês especificado.
+ * Dias úteis: Segunda a Sexta-feira (excluindo fins de semana e feriados nacionais fixos no Brasil).
+ * @param year Ano (ex: 2026)
+ * @param month Mês (0 para Janeiro, 11 para Dezembro - aceita valores > 11 com rollover automático)
+ */
+const getQuintoDiaUtil = (year: number, month: number): Date => {
+  const feriadosFixos = [
+    "01-01", // Confraternização Universal
+    "04-21", // Tiradentes
+    "05-01", // Dia do Trabalhador
+    "09-07", // Independência do Brasil
+    "10-12", // Nossa Senhora Aparecida
+    "11-02", // Finados
+    "11-15", // Proclamação da República
+    "11-20", // Dia da Consciência Negra
+    "12-25", // Natal
+  ];
+
+  // Normalizar ano e mês (para o caso de month > 11 ou < 0)
+  const base = new Date(year, month, 1, 12, 0, 0, 0);
+  const targetYear = base.getFullYear();
+  const targetMonth = base.getMonth();
+
+  let businessDaysCount = 0;
+  let currentDay = 1;
+
+  while (businessDaysCount < 5 && currentDay <= 31) {
+    const candidate = new Date(targetYear, targetMonth, currentDay, 12, 0, 0, 0);
+    if (candidate.getMonth() !== targetMonth) break;
+
+    const dayOfWeek = candidate.getDay(); // 0 = Domingo, 6 = Sábado
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    const mStr = String(candidate.getMonth() + 1).padStart(2, "0");
+    const dStr = String(candidate.getDate()).padStart(2, "0");
+    const isHoliday = feriadosFixos.includes(`${mStr}-${dStr}`);
+
+    if (!isWeekend && !isHoliday) {
+      businessDaysCount++;
+      if (businessDaysCount === 5) {
+        return candidate;
+      }
+    }
+    currentDay++;
+  }
+
+  return new Date(targetYear, targetMonth, Math.min(currentDay, 7), 12, 0, 0, 0);
+};
+
+const getPrazoLabel = (prazo?: string) => {
+  if (!prazo) return "-";
+  switch (prazo) {
+    case "dia":
+      return "Diário";
+    case "semanal":
+      return "Semanal";
+    case "quinzenal":
+      return "Quinzenal";
+    case "mensal":
+      return "Mensal";
+    case "quinto_dia_util":
+      return "5º Dia Útil";
+    case "abater":
+      return "Abater";
+    case "única":
+      return "Parcela Única";
+    default:
+      return prazo.charAt(0).toUpperCase() + prazo.slice(1);
+  }
+};
+
+
 const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
   if (!p || p.paga || p.status === "pago") return 0;
   if (!p.dataVencimento) return 0;
@@ -347,12 +420,48 @@ export default function App() {
   }, []);
 
   const [cronogramaDate, setCronogramaDate] = useState(getLocalISODate());
-  const [cronogramaYear, setCronogramaYear] = useState(getLocalISOYear());
-  const [cronogramaMonth, setCronogramaMonth] = useState(getLocalMonthDigits());
-  const [cronogramaStatusFilter, setCronogramaStatusFilter] = useState("all");
-  const [fluxoYear, setFluxoYear] = useState(getLocalISOYear()); // YYYY
-  const [fluxoMonth, setFluxoMonth] = useState(getLocalMonthDigits()); // 'all' or '01' to '12'
-  const [fluxoTypeFilter, setFluxoTypeFilter] = useState("all"); // 'all', 'entrada', 'saida', 'retirada', 'aporte', 'entrada_prevista'
+  const [cronogramaYear, setCronogramaYear] = useState(() => {
+    try {
+      return localStorage.getItem("gm_cronograma_year") || getLocalISOYear();
+    } catch (e) {
+      return getLocalISOYear();
+    }
+  });
+  const [cronogramaMonth, setCronogramaMonth] = useState(() => {
+    try {
+      return localStorage.getItem("gm_cronograma_month") || getLocalMonthDigits();
+    } catch (e) {
+      return getLocalMonthDigits();
+    }
+  });
+  const [cronogramaStatusFilter, setCronogramaStatusFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_cronograma_status_filter") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
+  const [fluxoYear, setFluxoYear] = useState(() => {
+    try {
+      return localStorage.getItem("gm_fluxo_year") || getLocalISOYear();
+    } catch (e) {
+      return getLocalISOYear();
+    }
+  });
+  const [fluxoMonth, setFluxoMonth] = useState(() => {
+    try {
+      return localStorage.getItem("gm_fluxo_month") || getLocalMonthDigits();
+    } catch (e) {
+      return getLocalMonthDigits();
+    }
+  });
+  const [fluxoTypeFilter, setFluxoTypeFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_fluxo_type_filter") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
   const [newRetirada, setNewRetirada] = useState({
     valor: "",
     descricao: "",
@@ -503,7 +612,27 @@ export default function App() {
     clientsRef.current = clients;
   }, [clients]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("todos");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_clientes_status_filter") || "todos";
+    } catch (e) {
+      return "todos";
+    }
+  });
+  const [clientesMonth, setClientesMonth] = useState(() => {
+    try {
+      return localStorage.getItem("gm_clientes_month") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
+  const [clientesYear, setClientesYear] = useState(() => {
+    try {
+      return localStorage.getItem("gm_clientes_year") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
 
   // Admin Notifications State
@@ -1767,7 +1896,11 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     if (simulacao.prazo === "dia") diasTotais = qtd;
     else if (simulacao.prazo === "semanal") diasTotais = qtd * 7;
     else if (simulacao.prazo === "quinzenal") diasTotais = qtd * 15;
-    else if (simulacao.prazo === "mensal" || simulacao.prazo === "abater")
+    else if (
+      simulacao.prazo === "mensal" ||
+      simulacao.prazo === "abater" ||
+      simulacao.prazo === "quinto_dia_util"
+    )
       diasTotais = qtd * 30;
     else if (simulacao.prazo === "única") {
       if (!simulacao.dataVencimentoUnica) {
@@ -1796,6 +1929,10 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         dataVencimento.setDate(dataVencimento.getDate() + i * 15);
       } else if (simulacao.prazo === "mensal" || simulacao.prazo === "abater") {
         dataVencimento.setMonth(dataVencimento.getMonth() + i);
+      } else if (simulacao.prazo === "quinto_dia_util") {
+        const targetYear = dataAtual.getFullYear();
+        const targetMonth = dataAtual.getMonth() + i;
+        dataVencimento = getQuintoDiaUtil(targetYear, targetMonth);
       } else if (simulacao.prazo === "única") {
         dataVencimento = parseLocalDate(simulacao.dataVencimentoUnica);
       }
@@ -6391,7 +6528,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       if (editSimData.prazo === "dia") diasTotais = qtd;
       else if (editSimData.prazo === "semanal") diasTotais = qtd * 7;
       else if (editSimData.prazo === "quinzenal") diasTotais = qtd * 15;
-      else if (editSimData.prazo === "mensal" || editSimData.prazo === "abater")
+      else if (
+        editSimData.prazo === "mensal" ||
+        editSimData.prazo === "abater" ||
+        editSimData.prazo === "quinto_dia_util"
+      )
         diasTotais = qtd * 30;
       else if (editSimData.prazo === "única") {
         if (!editSimData.dataVencimentoUnica) {
@@ -6455,6 +6596,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             editSimData.prazo === "abater"
           ) {
             dataVencimento.setMonth(dataVencimento.getMonth() + i);
+          } else if (editSimData.prazo === "quinto_dia_util") {
+            const targetYear = dataAtual.getFullYear();
+            const targetMonth = dataAtual.getMonth() + i;
+            dataVencimento = getQuintoDiaUtil(targetYear, targetMonth);
           } else if (editSimData.prazo === "única") {
             dataVencimento = parseLocalDate(editSimData.dataVencimentoUnica);
           }
@@ -7032,10 +7177,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               onClick={() => {
                 setAdminTab("cronograma");
                 setSelectedClient(null);
-                setSearchTerm("");
-                setCronogramaYear(getLocalISOYear());
-                setCronogramaMonth(getLocalMonthDigits());
-                setCronogramaStatusFilter("all");
               }}
               className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "cronograma" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
@@ -7045,10 +7186,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               onClick={() => {
                 setAdminTab("fluxo_caixa");
                 setSelectedClient(null);
-                setSearchTerm("");
-                setFluxoYear(getLocalISOYear());
-                setFluxoMonth(getLocalMonthDigits());
-                setFluxoTypeFilter("all");
               }}
               className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "fluxo_caixa" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
@@ -7760,6 +7897,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   <RefreshCw size={18} />
                                 </button>
                                 {(sim.prazo === "mensal" ||
+                                  sim.prazo === "quinto_dia_util" ||
                                   sim.prazo === "única") && (
                                   <button
                                     onClick={() => {
@@ -7859,6 +7997,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         Quinzenal
                                       </option>
                                       <option value="mensal">Mensal</option>
+                                      <option value="quinto_dia_util">
+                                        5º Dia Útil (Todo mês)
+                                      </option>
                                       <option value="abater">Abater</option>
                                       <option value="única">
                                         Parcela Única
@@ -8119,8 +8260,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     <p className="text-sm text-slate-500">
                                       Prazo
                                     </p>
-                                    <p className="text-lg font-semibold text-slate-800 capitalize">
-                                      {sim.prazo}
+                                    <p className="text-lg font-semibold text-slate-800">
+                                      {getPrazoLabel(sim.prazo)}
                                     </p>
                                   </div>
                                   {sim.prazo !== "única" ? (
@@ -9520,11 +9661,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
                     />
                   </div>
-                  <div className="w-full md:w-64">
+                  <div className="w-full sm:w-auto md:w-56">
                     <select
                       value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all bg-white"
+                      onChange={(e) => {
+                        setStatusFilter(e.target.value);
+                        try {
+                          localStorage.setItem("gm_clientes_status_filter", e.target.value);
+                        } catch (err) {}
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all bg-white text-sm"
                     >
                       <option value="todos">Todos os Status</option>
                       <option value="congeladas">Congeladas</option>
@@ -9545,6 +9691,53 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       <option value="sem_pendencias">Sem Pendências</option>
                     </select>
                   </div>
+                  <div className="w-full sm:w-auto md:w-40">
+                    <select
+                      value={clientesMonth}
+                      onChange={(e) => {
+                        setClientesMonth(e.target.value);
+                        try {
+                          localStorage.setItem("gm_clientes_month", e.target.value);
+                        } catch (err) {}
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all bg-white text-sm"
+                    >
+                      <option value="all">Ano Todo</option>
+                      <option value="01">Janeiro</option>
+                      <option value="02">Fevereiro</option>
+                      <option value="03">Março</option>
+                      <option value="04">Abril</option>
+                      <option value="05">Maio</option>
+                      <option value="06">Junho</option>
+                      <option value="07">Julho</option>
+                      <option value="08">Agosto</option>
+                      <option value="09">Setembro</option>
+                      <option value="10">Outubro</option>
+                      <option value="11">Novembro</option>
+                      <option value="12">Dezembro</option>
+                    </select>
+                  </div>
+                  <div className="w-full sm:w-auto md:w-36">
+                    <select
+                      value={clientesYear}
+                      onChange={(e) => {
+                        setClientesYear(e.target.value);
+                        try {
+                          localStorage.setItem("gm_clientes_year", e.target.value);
+                        } catch (err) {}
+                      }}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all bg-white text-sm"
+                    >
+                      <option value="all">Todos os Anos</option>
+                      <option value="2024">2024</option>
+                      <option value="2025">2025</option>
+                      <option value="2026">2026</option>
+                      <option value="2027">2027</option>
+                      <option value="2028">2028</option>
+                      <option value="2029">2029</option>
+                      <option value="2030">2030</option>
+                    </select>
+                  </div>
                 </div>
               </div>
               {(() => {
@@ -9559,31 +9752,72 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       (c.cpf && c.cpf.includes(searchTerm)),
                   )
                   .filter((c) => {
-                    if (statusFilter === "todos") return true;
-                    const status = getClientStatus(c);
-                    if (statusFilter === "qualquer_atraso") {
-                      return [
-                        "atrasado",
-                        "muito_atrasado",
-                        "inadimplente_antigo",
-                      ].includes(status);
-                    }
-                    if (statusFilter === "congeladas") {
-                      return (
-                        status === "congeladas" ||
-                        (c.simulacoes || [c.simulacao || {}]).some(
-                          (s: any) =>
-                            isSimulacaoAtiva(s) &&
-                            (s.parcelas || []).some(
-                              (p: any) =>
-                                !p.paga &&
-                                p.status !== "pago" &&
-                                p.jurosCongelados,
-                            ),
+                    // 1. Status Filter
+                    if (statusFilter !== "todos") {
+                      const status = getClientStatus(c);
+                      if (statusFilter === "qualquer_atraso") {
+                        if (
+                          ![
+                            "atrasado",
+                            "muito_atrasado",
+                            "inadimplente_antigo",
+                          ].includes(status)
                         )
-                      );
+                          return false;
+                      } else if (statusFilter === "congeladas") {
+                        const isCongeladas =
+                          status === "congeladas" ||
+                          (c.simulacoes || [c.simulacao || {}]).some(
+                            (s: any) =>
+                              isSimulacaoAtiva(s) &&
+                              (s.parcelas || []).some(
+                                (p: any) =>
+                                  !p.paga &&
+                                  p.status !== "pago" &&
+                                  p.jurosCongelados,
+                              ),
+                          );
+                        if (!isCongeladas) return false;
+                      } else if (status !== statusFilter) {
+                        return false;
+                      }
                     }
-                    return status === statusFilter;
+
+                    // 2. Month and Year Filter for Clientes
+                    if (clientesMonth !== "all" || clientesYear !== "all") {
+                      const allSims = (
+                        c.simulacoes || (c.simulacao ? [c.simulacao] : [])
+                      ).filter(isSimulacaoAtiva);
+                      const allParcelas = allSims.flatMap(
+                        (s: any) => s.parcelas || [],
+                      );
+
+                      if (allParcelas.length > 0) {
+                        const matchesMonth = allParcelas.some((p: any) => {
+                          if (!p.dataVencimento) return false;
+                          const v = parseLocalDate(p.dataVencimento);
+                          const y = String(v.getFullYear());
+                          const m = String(v.getMonth() + 1).padStart(2, "0");
+                          if (clientesYear !== "all" && y !== clientesYear)
+                            return false;
+                          if (clientesMonth !== "all" && m !== clientesMonth)
+                            return false;
+                          return true;
+                        });
+                        if (!matchesMonth) return false;
+                      } else {
+                        if (!c.dataCadastro) return false;
+                        const v = parseLocalDate(c.dataCadastro);
+                        const y = String(v.getFullYear());
+                        const m = String(v.getMonth() + 1).padStart(2, "0");
+                        if (clientesYear !== "all" && y !== clientesYear)
+                          return false;
+                        if (clientesMonth !== "all" && m !== clientesMonth)
+                          return false;
+                      }
+                    }
+
+                    return true;
                   })
                   .sort((a, b) =>
                     (a.nomeCompleto || "").localeCompare(b.nomeCompleto || ""),
@@ -9791,7 +10025,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </button>
                   <select
                     value={cronogramaStatusFilter}
-                    onChange={(e) => setCronogramaStatusFilter(e.target.value)}
+                    onChange={(e) => {
+                      setCronogramaStatusFilter(e.target.value);
+                      try {
+                        localStorage.setItem("gm_cronograma_status_filter", e.target.value);
+                      } catch (err) {}
+                    }}
                     className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                   >
                     <option value="all">Todos os Status</option>
@@ -9802,7 +10041,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </select>
                   <select
                     value={cronogramaMonth}
-                    onChange={(e) => setCronogramaMonth(e.target.value)}
+                    onChange={(e) => {
+                      setCronogramaMonth(e.target.value);
+                      try {
+                        localStorage.setItem("gm_cronograma_month", e.target.value);
+                      } catch (err) {}
+                    }}
                     className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                   >
                     <option value="all">Ano Todo</option>
@@ -9821,7 +10065,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </select>
                   <select
                     value={cronogramaYear}
-                    onChange={(e) => setCronogramaYear(e.target.value)}
+                    onChange={(e) => {
+                      setCronogramaYear(e.target.value);
+                      try {
+                        localStorage.setItem("gm_cronograma_year", e.target.value);
+                      } catch (err) {}
+                    }}
                     className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                   >
                     <option value="all">Todos os Anos</option>
@@ -10098,7 +10347,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     </button>
                     <select
                       value={fluxoTypeFilter}
-                      onChange={(e) => setFluxoTypeFilter(e.target.value)}
+                      onChange={(e) => {
+                        setFluxoTypeFilter(e.target.value);
+                        try {
+                          localStorage.setItem("gm_fluxo_type_filter", e.target.value);
+                        } catch (err) {}
+                      }}
                       className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                     >
                       <option value="all">Todos os Tipos</option>
@@ -10115,7 +10369,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     </select>
                     <select
                       value={fluxoMonth}
-                      onChange={(e) => setFluxoMonth(e.target.value)}
+                      onChange={(e) => {
+                        setFluxoMonth(e.target.value);
+                        try {
+                          localStorage.setItem("gm_fluxo_month", e.target.value);
+                        } catch (err) {}
+                      }}
                       className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                     >
                       <option value="all">Ano Todo</option>
@@ -10134,7 +10393,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     </select>
                     <select
                       value={fluxoYear}
-                      onChange={(e) => setFluxoYear(e.target.value)}
+                      onChange={(e) => {
+                        setFluxoYear(e.target.value);
+                        try {
+                          localStorage.setItem("gm_fluxo_year", e.target.value);
+                        } catch (err) {}
+                      }}
                       className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
                     >
                       {Array.from(
@@ -11305,7 +11569,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 </h4>
                 <p>
                   Verifique as opções de prazos disponíveis. Temos{" "}
-                  <strong>parcela única, semanal, quinzenal e mensal</strong>.
+                  <strong>parcela única, diário, semanal, quinzenal, mensal e 5º dia útil</strong>.
                   Escolha a que melhor se adapta à sua necessidade.
                 </p>
               </div>
@@ -11343,6 +11607,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     <option value="semanal">Semanal</option>
                     <option value="quinzenal">Quinzenal</option>
                     <option value="mensal">Mensal</option>
+                    <option value="quinto_dia_util">5º Dia Útil (Todo mês)</option>
                     <option value="abater">Abater</option>
                   </select>
                 </div>
