@@ -252,22 +252,25 @@ const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
   if (!p.dataVencimento) return 0;
 
   const vencimento = parseLocalDate(p.dataVencimento);
-  const hojeClean = parseLocalDate(hoje);
 
+  if (p.jurosCongelados) {
+    if (p.dataCongelamento) {
+      const dataCongelada = parseLocalDate(p.dataCongelamento);
+      if (dataCongelada > vencimento) {
+        const diffTime = dataCongelada.getTime() - vencimento.getTime();
+        return Math.round(diffTime / (1000 * 60 * 60 * 24));
+      }
+      return 0;
+    }
+    return 0;
+  }
+
+  const hojeClean = parseLocalDate(hoje);
   if (vencimento >= hojeClean) {
     return 0;
   }
 
-  let dataBase = hojeClean;
-  if (p.jurosCongelados) {
-    if (p.dataCongelamento) {
-      dataBase = parseLocalDate(p.dataCongelamento);
-    } else {
-      dataBase = vencimento;
-    }
-  }
-
-  const diffTime = Math.max(0, dataBase.getTime() - vencimento.getTime());
+  const diffTime = Math.max(0, hojeClean.getTime() - vencimento.getTime());
   return Math.round(diffTime / (1000 * 60 * 60 * 24));
 };
 
@@ -1660,8 +1663,19 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     }
 
     if (p.jurosCongelados) {
-      mensagem += `O valor restante para pagamento é de ${formatCurrency(valorAtualizado)}.
+      if (p.dataCongelamento) {
+        const dataStrCongelada = p.dataCongelamento.split("T")[0].split("-").reverse().join("/");
+        if (diasAtraso > 0) {
+          mensagem += `Conforme acordo com juros congelados até ${dataStrCongelada} (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} de juros calculados), o valor total para pagamento é de ${formatCurrency(valorAtualizado)}.
 `;
+        } else {
+          mensagem += `Conforme acordo com juros congelados até ${dataStrCongelada}, o valor total para pagamento é de ${formatCurrency(valorAtualizado)}.
+`;
+        }
+      } else {
+        mensagem += `O valor acordado com juros congelados para pagamento é de ${formatCurrency(valorAtualizado)}.
+`;
+      }
     } else {
       mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
 `;
@@ -2354,13 +2368,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       if (!p.paga && p.status !== "pago") {
         const vencimento = parseLocalDate(p.dataVencimento);
         const isVencida = vencimento < hoje;
+        const diasAtraso = getParcelaDiasAtraso(p, hoje);
         let valorAtualizado = Number(p.valor);
         const abatimentosTotal = p.abatimentos
           ? p.abatimentos.reduce((acc: number, a: any) => acc + a.valor, 0)
           : 0;
 
-        if (isVencida) {
-          const diasAtraso = getParcelaDiasAtraso(p, hoje);
+        if (isVencida || diasAtraso > 0) {
           const hasDailyInterest =
             sim.prazo === "abater"
               ? Boolean(sim.aplicarJurosDiarios) ||
@@ -4819,7 +4833,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   )
                                 : 0;
 
-                              if (isVencida) {
+                              if (isVencida || diasAtraso > 0) {
                                 const hasDailyInterest =
                                   sim.prazo === "abater"
                                     ? Boolean(sim.aplicarJurosDiarios) ||
@@ -4960,7 +4974,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       </div>
                                     )}
 
-                                  {isVencida && (
+                                  {(isVencida || diasAtraso > 0 || p.jurosCongelados) && (
                                     <div className="mt-4 pt-4 border-t border-red-200">
                                       <div className="text-red-600 font-bold mb-2 flex items-center gap-1">
                                         {p.jurosCongelados
@@ -5657,11 +5671,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               0,
                             )
                           : 0;
+                        const diasAtraso = getParcelaDiasAtraso(p, new Date());
+                        const hasDailyInterest =
+                          s.prazo === "abater"
+                            ? Boolean(s.aplicarJurosDiarios) ||
+                              (s.aplicarJurosDiarios !== false &&
+                                parseFloat(s.taxaAtrasoDia || "0") > 0)
+                            : true;
+                        const taxaDia = hasDailyInterest
+                          ? parseFloat(s.taxaAtrasoDia) ||
+                            parseFloat(adminSettings.taxaAtrasoDia) ||
+                            1
+                          : 0;
+                        let valorComJuros = parseFloat(p.valor || 0);
+                        if (diasAtraso > 0) {
+                          valorComJuros +=
+                            valorComJuros * (taxaDia / 100) * diasAtraso;
+                        }
                         return {
                           ...p,
                           valorRestante: Math.max(
                             0,
-                            parseFloat(p.valor || 0) - abatimentosTotal,
+                            valorComJuros - abatimentosTotal,
                           ),
                           clientId: c.id,
                           clientName: c.nomeCompleto,
@@ -8389,7 +8420,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           )
                                         : 0;
 
-                                      if (isVencida) {
+                                      if (isVencida || diasAtraso > 0) {
                                         const hasDailyInterest =
                                           sim.prazo === "abater"
                                             ? Boolean(sim.aplicarJurosDiarios) ||
@@ -8420,7 +8451,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       return (
                                         <div
                                           key={i}
-                                          className={`border rounded-lg p-4 ${isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
+                                          className={`border rounded-lg p-4 ${p.jurosCongelados ? "border-blue-300 bg-blue-50/40" : isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
                                         >
                                           <div className="flex justify-between items-center mb-2">
                                             <div className="flex items-center gap-2">
@@ -8752,7 +8783,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               </div>
                                             )}
 
-                                            {!p.paga && isVencida && (
+                                            {!p.paga && (
                                               <label className="flex items-center gap-2 cursor-pointer mt-2">
                                                 <input
                                                   type="checkbox"
@@ -8799,7 +8830,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           isFrozen,
                                                         dataCongelamento:
                                                           isFrozen
-                                                            ? getLocalISODate()
+                                                            ? novasParcelas[i].dataCongelamento ||
+                                                              novasParcelas[i].dataVencimento ||
+                                                              getLocalISODate()
                                                             : undefined,
                                                       };
                                                       updatedSimulacoes[
@@ -8858,7 +8891,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             )}
 
                                             {!p.paga &&
-                                              isVencida &&
                                               p.jurosCongelados && (
                                                 <div className="mt-2 text-sm bg-blue-50 p-2 rounded border border-blue-100">
                                                   <label className="block text-blue-800 font-medium mb-1">
@@ -8959,11 +8991,40 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     }}
                                                     className="w-full px-2 py-1 border border-blue-200 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white text-slate-700"
                                                   />
-                                                  <p className="text-xs text-blue-600 mt-1 leading-tight">
-                                                    O valor será congelado com
-                                                    os juros calculados até esta
-                                                    data.
-                                                  </p>
+                                                  {(() => {
+                                                    if (!p.dataCongelamento) return null;
+                                                    const v = parseLocalDate(p.dataVencimento);
+                                                    const c = parseLocalDate(p.dataCongelamento);
+                                                    const diff = Math.round((c.getTime() - v.getTime()) / (1000 * 60 * 60 * 24));
+                                                    if (diff > 0) {
+                                                      const hasDaily =
+                                                        sim.prazo === "abater"
+                                                          ? Boolean(sim.aplicarJurosDiarios) ||
+                                                            (sim.aplicarJurosDiarios !== false &&
+                                                              parseFloat(sim.taxaAtrasoDia || "0") > 0)
+                                                          : true;
+                                                      const taxa = hasDaily
+                                                        ? parseFloat(sim.taxaAtrasoDia) ||
+                                                          parseFloat(adminSettings.taxaAtrasoDia) ||
+                                                          1
+                                                        : 0;
+                                                      const jurosExtra =
+                                                        Number(p.valor) * (taxa / 100) * diff;
+                                                      return (
+                                                        <div className="mt-1.5 p-1.5 bg-blue-100/70 rounded text-xs text-blue-900 leading-tight">
+                                                          <span className="font-semibold">Cálculo de juros até {formatDate(p.dataCongelamento)}:</span>
+                                                          <div className="mt-0.5">
+                                                            +{diff} {diff === 1 ? "dia" : "dias"} de atraso × {taxa}% = +{taxa * diff}% (+{formatCurrency(jurosExtra)})
+                                                          </div>
+                                                        </div>
+                                                      );
+                                                    }
+                                                    return (
+                                                      <p className="text-xs text-blue-700 mt-1 leading-tight">
+                                                        Data no vencimento ou anterior (sem juros de atraso).
+                                                      </p>
+                                                    );
+                                                  })()}
                                                 </div>
                                               )}
                                           </div>
@@ -9344,18 +9405,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             </div>
                                           )}
 
-                                          {isVencida && !isEditing && (
-                                            <div className="mt-3 pt-3 border-t border-red-200">
-                                              <div className="text-red-600 font-semibold mb-1 text-sm flex items-center gap-1">
+                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
+                                            <div className={`mt-3 pt-3 border-t ${p.jurosCongelados ? "border-blue-200 bg-blue-50/50 p-2.5 rounded-lg" : "border-red-200"}`}>
+                                              <div className={`${p.jurosCongelados ? "text-blue-700" : "text-red-600"} font-semibold mb-1 text-sm flex items-center gap-1`}>
                                                 {p.jurosCongelados
-                                                  ? "❄️ Congeladas"
+                                                  ? `❄️ Juros Congelados${p.dataCongelamento ? ` (Até ${formatDate(p.dataCongelamento)})` : ""}`
                                                   : sim.prazo === "abater"
                                                     ? "⚠️ Lembrete Vencido"
                                                     : "⚠️ Parcela Vencida"}
                                               </div>
-                                              <div className="grid grid-cols-2 gap-1 text-xs text-red-800">
+                                              <div className={`grid grid-cols-2 gap-1 text-xs ${p.jurosCongelados ? "text-blue-900" : "text-red-800"}`}>
                                                 <div>
-                                                  Atraso: {diasAtraso}{" "}
+                                                  {p.jurosCongelados ? "Atraso acordado:" : "Atraso:"} {diasAtraso}{" "}
                                                   {diasAtraso === 1 ? "dia" : "dias"}
                                                 </div>
                                                 <div>
@@ -9378,8 +9439,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             </div>
                                           )}
 
-                                          {isVencida && !isEditing && (
-                                            <div className="mt-3 pt-3 border-t border-red-200 print:hidden">
+                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
+                                            <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
                                               <a
                                                 href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado, sim.prazo))}`}
                                                 target="_blank"
@@ -9387,9 +9448,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                               >
                                                 <Phone size={16} />
-                                                {sim.prazo === "abater"
-                                                  ? "Notificar Lembrete Vencido via WhatsApp"
-                                                  : "Notificar Parcela Vencida via WhatsApp"}
+                                                {p.jurosCongelados
+                                                  ? "Enviar Acordo de Congelamento via WhatsApp"
+                                                  : sim.prazo === "abater"
+                                                    ? "Notificar Lembrete Vencido via WhatsApp"
+                                                    : "Notificar Parcela Vencida via WhatsApp"}
                                               </a>
                                             </div>
                                           )}
@@ -10187,7 +10250,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     <td className="py-3 px-6">
                                       {p.jurosCongelados ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
-                                          ❄️ Congeladas
+                                          ❄️ Congeladas{p.dataCongelamento ? ` (${formatDate(p.dataCongelamento)})` : ""}
                                         </span>
                                       ) : isVencendoHoje ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200 whitespace-nowrap">
@@ -10213,7 +10276,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             (() => {
                                               const itemDesc = p.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`;
                                               if (p.jurosCongelados) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} está com juros Congelados no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
+                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} está com juros congelados${p.dataCongelamento ? ` para pagamento até ${formatDate(p.dataCongelamento)}` : ""} no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
                                               } else if (isVencendoHoje) {
                                                 return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
                                               } else if (isPreVencimento) {
