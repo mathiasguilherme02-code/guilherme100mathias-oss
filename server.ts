@@ -330,15 +330,19 @@ app.post("/api/clients/login", async (req, res) => {
 app.get("/api/settings", async (req, res) => {
   try {
     if (!db) {
-      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal' });
+      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal', diasLembreteAntecipado: '3' });
     }
     const docRef = doc(db, "admin_settings", "1");
     const docSnap = await getDoc(docRef);
       
     if (!docSnap.exists()) {
-      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal' });
+      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal', diasLembreteAntecipado: '3' });
     }
-    res.json(docSnap.data());
+    const data = docSnap.data();
+    if (!data.diasLembreteAntecipado) {
+      data.diasLembreteAntecipado = '3';
+    }
+    res.json(data);
   } catch (error) {
     console.error("Error fetching settings:", error);
     res.status(500).json({ error: "Falha ao buscar configurações" });
@@ -351,8 +355,13 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
     if (!db) {
       return res.json({ success: true });
     }
-    const { taxaJuros, taxaAtrasoDia, tipoTaxa } = req.body;
-    await setDoc(doc(db, "admin_settings", "1"), { taxaJuros, taxaAtrasoDia, tipoTaxa }, { merge: true });
+    const { taxaJuros, taxaAtrasoDia, tipoTaxa, diasLembreteAntecipado } = req.body;
+    await setDoc(doc(db, "admin_settings", "1"), {
+      taxaJuros,
+      taxaAtrasoDia,
+      tipoTaxa,
+      diasLembreteAntecipado: diasLembreteAntecipado || '3'
+    }, { merge: true });
       
     broadcastUpdate('UPDATE_SETTINGS');
     res.json({ success: true });
