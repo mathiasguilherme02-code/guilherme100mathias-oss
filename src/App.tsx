@@ -43,6 +43,8 @@ import {
   CheckCheck,
   MessageCircle,
   Send,
+  RotateCcw,
+  History,
   MessageSquare,
   Printer,
   ShoppingCart,
@@ -7409,6 +7411,67 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     Salvar Taxas
                   </button>
                 </div>
+              </div>
+
+              <div className="mt-4 pt-4 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 bg-amber-50/70 p-3.5 rounded-xl border border-amber-200">
+                <div className="text-xs text-amber-950">
+                  <span className="font-semibold text-sm flex items-center gap-1.5 text-amber-900 mb-0.5">
+                    <History size={16} /> Backup Histórico dos Empréstimos e Anotações (07/11)
+                  </span>
+                  <span>
+                    Backup seguro gerado com sucesso às 15:48. Contém os empréstimos e anotações excluídos entre 16:00 e 16:43 (Patricia, Cássia, Karla e Fernando).
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (
+                      confirm(
+                        "Deseja restaurar os empréstimos e anotações excluídos entre 16:00 e 16:43 para Cássia, Patricia, Karla e Fernando?",
+                      )
+                    ) {
+                      try {
+                        const res = await fetch(
+                          "/api/admin/restore-deleted-simulations",
+                          {
+                            method: "POST",
+                            headers: {
+                              Authorization: `Bearer ${adminToken}`,
+                            },
+                          },
+                        );
+                        const data = await res.json();
+                        if (res.ok) {
+                          alert(data.message || "Dados restaurados com sucesso!");
+                          const clientsRes = await fetch("/api/clients", {
+                            headers: { Authorization: `Bearer ${adminToken}` },
+                          });
+                          if (clientsRes.ok) {
+                            const clientsData = await clientsRes.json();
+                            setClients(clientsData);
+                            if (selectedClient) {
+                              const updated = clientsData.find(
+                                (c: any) => c.id === selectedClient.id,
+                              );
+                              if (updated) setSelectedClient(updated);
+                            }
+                          }
+                        } else {
+                          alert(
+                            "Erro ao restaurar: " +
+                              (data.error || "Erro desconhecido"),
+                          );
+                        }
+                      } catch (err: any) {
+                        alert("Erro ao conectar com servidor: " + err.message);
+                      }
+                    }
+                  }}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs py-2 px-4 rounded-lg transition-colors whitespace-nowrap shadow-sm flex items-center gap-1.5"
+                >
+                  <RotateCcw size={14} />
+                  Restaurar Dados (16:00 - 16:43)
+                </button>
               </div>
             </div>
           )}

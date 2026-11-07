@@ -747,6 +747,20 @@ app.post("/api/clients/:id/restore", requireAdmin, async (req, res) => {
   }
 });
 
+// Restore deleted simulations from backup
+app.post("/api/admin/restore-deleted-simulations", requireAdmin, async (req, res) => {
+  try {
+    const { restoreDeletedSimulations } = await import("./restore_deleted_data");
+    await restoreDeletedSimulations(false);
+    invalidateClientsCache();
+    broadcastUpdate('UPDATE_CLIENTS');
+    res.json({ success: true, message: "Dados restaurados com sucesso!" });
+  } catch (error: any) {
+    console.error("Error running restore:", error);
+    res.status(500).json({ error: error.message || "Falha ao restaurar dados" });
+  }
+});
+
 // Get Chat Messages
 app.get("/api/chat/:clientId", async (req, res) => {
   try {
