@@ -226,6 +226,39 @@ const getQuintoDiaUtil = (year: number, month: number): Date => {
   return new Date(targetYear, targetMonth, Math.min(currentDay, 7), 12, 0, 0, 0);
 };
 
+const getQuintoDiaUtilISO = (year: number, month: number): string => {
+  return getLocalISODate(getQuintoDiaUtil(year, month));
+};
+
+const getQuintoDiaUtilFromYearMonth = (yearMonth: string) => {
+  let ym = yearMonth;
+  if (!ym || !ym.includes("-")) {
+    ym = getLocalISOMonth(new Date());
+  }
+  const parts = ym.split("-");
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const d = getQuintoDiaUtil(year, month);
+  const diasSemana = [
+    "Domingo",
+    "Segunda-feira",
+    "Terça-feira",
+    "Quarta-feira",
+    "Quinta-feira",
+    "Sexta-feira",
+    "Sábado",
+  ];
+  const diaStr = String(d.getDate()).padStart(2, "0");
+  const mesStr = String(d.getMonth() + 1).padStart(2, "0");
+  const anoStr = d.getFullYear();
+  return {
+    date: d,
+    iso: getLocalISODate(d),
+    diaSemana: diasSemana[d.getDay()],
+    label: `${diaStr}/${mesStr}/${anoStr} (${diasSemana[d.getDay()]})`,
+  };
+};
+
 const getPrazoLabel = (prazo?: string) => {
   if (!prazo) return "-";
   switch (prazo) {
@@ -741,6 +774,8 @@ export default function App() {
     dataVencimento: "",
     valor: 0,
     dataPagamento: "",
+    opcaoVencimento: "data" as "data" | "quinto_dia_util",
+    mesQuintoDiaUtil: getLocalISOMonth(),
   });
   const [addingAbatimento, setAddingAbatimento] = useState<{
     simIndex: number;
@@ -751,6 +786,8 @@ export default function App() {
   const [newParcela, setNewParcela] = useState({
     dataVencimento: "",
     valor: "",
+    opcaoVencimento: "data" as "data" | "quinto_dia_util",
+    mesQuintoDiaUtil: getLocalISOMonth(),
   });
 
   const [editingTransaction, setEditingTransaction] = useState<any | null>(
@@ -890,6 +927,7 @@ export default function App() {
     isRenegociacao: false,
     renegociadoFromSimIndices: [] as number[],
     aplicarJurosDiarios: false,
+    modoLembrete: "data",
   });
   const [editingSimIndex, setEditingSimIndex] = useState<number | null>(null);
   const [editSimData, setEditSimData] = useState({
@@ -903,6 +941,7 @@ export default function App() {
     dataVencimentoUnica: "",
     valorParcela: "",
     aplicarJurosDiarios: false,
+    modoLembrete: "data",
   });
 
   // Chat State
@@ -1944,7 +1983,13 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       } else if (simulacao.prazo === "quinzenal") {
         dataVencimento.setDate(dataVencimento.getDate() + i * 15);
       } else if (simulacao.prazo === "mensal" || simulacao.prazo === "abater") {
-        dataVencimento.setMonth(dataVencimento.getMonth() + i);
+        if (simulacao.prazo === "abater" && simulacao.modoLembrete === "quinto_dia_util") {
+          const targetYear = dataAtual.getFullYear();
+          const targetMonth = dataAtual.getMonth() + i;
+          dataVencimento = getQuintoDiaUtil(targetYear, targetMonth);
+        } else {
+          dataVencimento.setMonth(dataVencimento.getMonth() + i);
+        }
       } else if (simulacao.prazo === "quinto_dia_util") {
         const targetYear = dataAtual.getFullYear();
         const targetMonth = dataAtual.getMonth() + i;
@@ -5281,7 +5326,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     const isAbater = (selectedClient?.simulacoes || (selectedClient?.simulacao ? [selectedClient.simulacao] : []))[simIndex]?.prazo === "abater";
     const itemType = isAbater ? "Lembrete" : "Parcela";
 
-    if (!newParcela.dataVencimento || !newParcela.valor) {
+    let finalDataVencimento = newParcela.dataVencimento;
+    if (!finalDataVencimento && newParcela.opcaoVencimento === "quinto_dia_util") {
+      finalDataVencimento = getQuintoDiaUtilFromYearMonth(newParcela.mesQuintoDiaUtil || getLocalISOMonth()).iso;
+    }
+
+    if (!finalDataVencimento || !newParcela.valor) {
       toast.error(`Preencha a data e o valor ${isAbater ? "do lembrete" : "da parcela"}.`);
       return;
     }
@@ -5314,7 +5364,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
       novasParcelas.push({
         numero: maxNumero + 1,
-        dataVencimento: newParcela.dataVencimento,
+        dataVencimento: finalDataVencimento,
         valor: valorNum,
         paga: false,
       });
@@ -5338,7 +5388,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         );
         setSelectedClient(updatedClient);
         setAddingParcela(null);
-        setNewParcela({ dataVencimento: "", valor: "" });
+        setNewParcela({
+          dataVencimento: "",
+          valor: "",
+          opcaoVencimento: "data",
+          mesQuintoDiaUtil: getLocalISOMonth(),
+        });
         toast.success(`${itemType} adicionado com sucesso!`);
       } else {
         throw new Error("Failed to update");
@@ -6516,6 +6571,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             : "",
         valorParcela: "", // Do not pre-fill, let it auto-calculate unless user overrides
         aplicarJurosDiarios: aplicarJuros,
+        modoLembrete: sim.modoLembrete || "data",
       });
     };
 
@@ -6628,7 +6684,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             editSimData.prazo === "mensal" ||
             editSimData.prazo === "abater"
           ) {
-            dataVencimento.setMonth(dataVencimento.getMonth() + i);
+            if (editSimData.prazo === "abater" && editSimData.modoLembrete === "quinto_dia_util") {
+              const targetYear = dataAtual.getFullYear();
+              const targetMonth = dataAtual.getMonth() + i;
+              dataVencimento = getQuintoDiaUtil(targetYear, targetMonth);
+            } else {
+              dataVencimento.setMonth(dataVencimento.getMonth() + i);
+            }
           } else if (editSimData.prazo === "quinto_dia_util") {
             const targetYear = dataAtual.getFullYear();
             const targetMonth = dataAtual.getMonth() + i;
@@ -8309,6 +8371,40 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           </div>
                                         )}
                                       </div>
+                                      <div className="mt-3 pt-3 border-t border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div>
+                                          <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">
+                                            Vencimento dos Lembretes
+                                          </span>
+                                          <span className="text-xs text-slate-600">
+                                            Escolha se os lembretes seguem a data inicial mensalmente ou o 5º dia útil de cada mês:
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-amber-200">
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditSimData({ ...editSimData, modoLembrete: "data" })}
+                                            className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                                              editSimData.modoLembrete !== "quinto_dia_util"
+                                                ? "bg-yellow-500 text-white shadow-sm"
+                                                : "text-slate-600 hover:text-slate-900"
+                                            }`}
+                                          >
+                                            📅 Marcar Data
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditSimData({ ...editSimData, modoLembrete: "quinto_dia_util" })}
+                                            className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                                              editSimData.modoLembrete === "quinto_dia_util"
+                                                ? "bg-yellow-500 text-white shadow-sm"
+                                                : "text-slate-600 hover:text-slate-900"
+                                            }`}
+                                          >
+                                            🏢 5º Dia Útil
+                                          </button>
+                                        </div>
+                                      </div>
                                     </div>
                                   )}
                                 </div>
@@ -8354,8 +8450,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     <p className="text-sm text-slate-500">
                                       Prazo
                                     </p>
-                                    <p className="text-lg font-semibold text-slate-800">
-                                      {getPrazoLabel(sim.prazo)}
+                                    <p className="text-lg font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                                      <span>{getPrazoLabel(sim.prazo)}</span>
+                                      {sim.prazo === "abater" && sim.modoLembrete === "quinto_dia_util" && (
+                                        <span className="text-xs text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full font-medium">
+                                          5º Dia Útil
+                                        </span>
+                                      )}
                                     </p>
                                   </div>
                                   {sim.prazo !== "única" ? (
@@ -8563,6 +8664,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       simIndex,
                                                       parcelaIndex: i,
                                                     });
+                                                    const pMonth = p.dataVencimento ? p.dataVencimento.substring(0, 7) : getLocalISOMonth();
                                                     setEditParcelaData({
                                                       dataVencimento:
                                                         p.dataVencimento,
@@ -8573,6 +8675,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                               "T",
                                                             )[0]
                                                           : "",
+                                                      opcaoVencimento: "data",
+                                                      mesQuintoDiaUtil: pMonth,
                                                     });
                                                   }}
                                                   className="text-slate-400 hover:text-yellow-600 transition-colors ml-2 p-1"
@@ -9093,6 +9197,112 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           </div>
                                           {isEditing ? (
                                             <div className="grid grid-cols-2 gap-2 text-sm mt-2 bg-slate-50 p-2 rounded border border-slate-200">
+                                              {sim.prazo === "abater" && (
+                                                <div className="col-span-2 mb-1 p-2 bg-amber-50/70 border border-amber-200/60 rounded-md">
+                                                  <div className="flex items-center justify-between mb-1.5">
+                                                    <span className="text-xs font-semibold text-slate-700">
+                                                      Vencimento do Lembrete:
+                                                    </span>
+                                                    <div className="flex items-center gap-1.5 bg-white p-0.5 rounded border border-amber-200">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                          setEditParcelaData((prev) => ({
+                                                            ...prev,
+                                                            opcaoVencimento: "data",
+                                                          }))
+                                                        }
+                                                        className={`px-2 py-0.5 text-xs font-semibold rounded transition-colors ${
+                                                          editParcelaData.opcaoVencimento !== "quinto_dia_util"
+                                                            ? "bg-yellow-500 text-white"
+                                                            : "text-slate-600 hover:text-slate-900"
+                                                        }`}
+                                                      >
+                                                        📅 Marcar Data
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                          const targetM = editParcelaData.mesQuintoDiaUtil || getLocalISOMonth();
+                                                          const q = getQuintoDiaUtilFromYearMonth(targetM);
+                                                          setEditParcelaData((prev) => ({
+                                                            ...prev,
+                                                            opcaoVencimento: "quinto_dia_util",
+                                                            dataVencimento: q.iso,
+                                                            mesQuintoDiaUtil: targetM,
+                                                          }));
+                                                        }}
+                                                        className={`px-2 py-0.5 text-xs font-semibold rounded transition-colors ${
+                                                          editParcelaData.opcaoVencimento === "quinto_dia_util"
+                                                            ? "bg-yellow-500 text-white"
+                                                            : "text-slate-600 hover:text-slate-900"
+                                                        }`}
+                                                      >
+                                                        🏢 5º Dia Útil
+                                                      </button>
+                                                    </div>
+                                                  </div>
+                                                  {editParcelaData.opcaoVencimento === "quinto_dia_util" ? (
+                                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-1">
+                                                      <div className="flex items-center gap-2">
+                                                        <label className="text-xs text-slate-600 font-medium">Mês:</label>
+                                                        <input
+                                                          type="month"
+                                                          value={editParcelaData.mesQuintoDiaUtil || getLocalISOMonth()}
+                                                          onChange={(e) => {
+                                                            const newM = e.target.value;
+                                                            const q = getQuintoDiaUtilFromYearMonth(newM);
+                                                            setEditParcelaData((prev) => ({
+                                                              ...prev,
+                                                              mesQuintoDiaUtil: newM,
+                                                              dataVencimento: q.iso,
+                                                            }));
+                                                          }}
+                                                          className="px-2 py-0.5 text-xs bg-white border border-slate-300 rounded outline-none focus:ring-1 focus:ring-yellow-500"
+                                                        />
+                                                      </div>
+                                                      <div className="text-xs font-medium text-amber-900 flex items-center gap-1">
+                                                        <Calendar size={13} className="text-amber-700" />
+                                                        {getQuintoDiaUtilFromYearMonth(editParcelaData.mesQuintoDiaUtil || getLocalISOMonth()).label}
+                                                      </div>
+                                                    </div>
+                                                  ) : (
+                                                    <div className="flex items-center gap-1.5 mt-1">
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                          const q = getQuintoDiaUtilFromYearMonth(getLocalISOMonth());
+                                                          setEditParcelaData((prev) => ({
+                                                            ...prev,
+                                                            dataVencimento: q.iso,
+                                                            mesQuintoDiaUtil: getLocalISOMonth(),
+                                                          }));
+                                                        }}
+                                                        className="text-[11px] bg-white hover:bg-yellow-100 text-slate-700 px-2 py-0.5 rounded border border-amber-200 transition-colors"
+                                                      >
+                                                        5º dia útil deste mês
+                                                      </button>
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                          const now = new Date();
+                                                          now.setMonth(now.getMonth() + 1);
+                                                          const nextM = getLocalISOMonth(now);
+                                                          const q = getQuintoDiaUtilFromYearMonth(nextM);
+                                                          setEditParcelaData((prev) => ({
+                                                            ...prev,
+                                                            dataVencimento: q.iso,
+                                                            mesQuintoDiaUtil: nextM,
+                                                          }));
+                                                        }}
+                                                        className="text-[11px] bg-white hover:bg-yellow-100 text-slate-700 px-2 py-0.5 rounded border border-amber-200 transition-colors"
+                                                      >
+                                                        5º dia útil próx. mês
+                                                      </button>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              )}
                                               <div>
                                                 <label className="block text-xs text-slate-500 mb-1">
                                                   Vencimento
@@ -9572,33 +9782,138 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {sim.prazo === "abater" && (
                                     <div className="mt-4 pt-4 border-t border-slate-200">
                                       {addingParcela === simIndex ? (
-                                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                                          <h5 className="font-semibold text-slate-700 mb-2">
+                                        <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200 shadow-sm">
+                                          <h5 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                                            <Calendar size={18} className="text-yellow-600" />
                                             Adicionar Lembrete de Pagamento
                                           </h5>
-                                          <div className="grid grid-cols-2 gap-2 mb-3">
-                                            <div>
-                                              <label className="block text-xs font-medium text-slate-600 mb-1">
-                                                Data de Vencimento
+
+                                          {/* Seleção do Tipo de Vencimento: Marcar Data ou 5º Dia Útil */}
+                                          <div className="mb-3 bg-white p-3 rounded-lg border border-amber-200">
+                                            <label className="block text-xs font-semibold text-slate-700 mb-2">
+                                              Opção de Vencimento do Lembrete:
+                                            </label>
+                                            <div className="flex flex-wrap items-center gap-4">
+                                              <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-slate-700">
+                                                <input
+                                                  type="radio"
+                                                  name={`opcaoVencimentoLembrete-${simIndex}`}
+                                                  value="data"
+                                                  checked={newParcela.opcaoVencimento !== "quinto_dia_util"}
+                                                  onChange={() =>
+                                                    setNewParcela((prev) => ({
+                                                      ...prev,
+                                                      opcaoVencimento: "data",
+                                                    }))
+                                                  }
+                                                  className="w-4 h-4 text-yellow-600 focus:ring-yellow-500 border-slate-300"
+                                                />
+                                                <span>📅 Marcar Data</span>
                                               </label>
-                                              <input
-                                                type="date"
-                                                value={
-                                                  newParcela.dataVencimento
-                                                }
-                                                onChange={(e) =>
-                                                  setNewParcela({
-                                                    ...newParcela,
-                                                    dataVencimento:
-                                                      e.target.value,
-                                                  })
-                                                }
-                                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
-                                              />
+                                              <label className="flex items-center gap-2 cursor-pointer text-sm font-medium text-amber-900">
+                                                <input
+                                                  type="radio"
+                                                  name={`opcaoVencimentoLembrete-${simIndex}`}
+                                                  value="quinto_dia_util"
+                                                  checked={newParcela.opcaoVencimento === "quinto_dia_util"}
+                                                  onChange={() => {
+                                                    const targetM = newParcela.mesQuintoDiaUtil || getLocalISOMonth();
+                                                    const q = getQuintoDiaUtilFromYearMonth(targetM);
+                                                    setNewParcela((prev) => ({
+                                                      ...prev,
+                                                      opcaoVencimento: "quinto_dia_util",
+                                                      dataVencimento: q.iso,
+                                                      mesQuintoDiaUtil: targetM,
+                                                    }));
+                                                  }}
+                                                  className="w-4 h-4 text-yellow-600 focus:ring-yellow-500 border-slate-300"
+                                                />
+                                                <span>🏢 5º Dia Útil</span>
+                                              </label>
                                             </div>
+                                          </div>
+
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                                            {newParcela.opcaoVencimento === "quinto_dia_util" ? (
+                                              <div className="bg-white p-3 rounded-lg border border-amber-200">
+                                                <label className="block text-xs font-medium text-slate-600 mb-1">
+                                                  Mês de Referência (5º Dia Útil)
+                                                </label>
+                                                <input
+                                                  type="month"
+                                                  value={newParcela.mesQuintoDiaUtil || getLocalISOMonth()}
+                                                  onChange={(e) => {
+                                                    const newM = e.target.value;
+                                                    const q = getQuintoDiaUtilFromYearMonth(newM);
+                                                    setNewParcela((prev) => ({
+                                                      ...prev,
+                                                      mesQuintoDiaUtil: newM,
+                                                      dataVencimento: q.iso,
+                                                    }));
+                                                  }}
+                                                  className="w-full px-2.5 py-1.5 text-sm bg-slate-50 border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                                />
+                                                <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200 text-xs text-amber-900 font-medium">
+                                                  Vencimento: <strong>{getQuintoDiaUtilFromYearMonth(newParcela.mesQuintoDiaUtil || getLocalISOMonth()).label}</strong>
+                                                </div>
+                                              </div>
+                                            ) : (
+                                              <div>
+                                                <label className="block text-xs font-medium text-slate-600 mb-1">
+                                                  Data de Vencimento
+                                                </label>
+                                                <input
+                                                  type="date"
+                                                  value={
+                                                    newParcela.dataVencimento
+                                                  }
+                                                  onChange={(e) =>
+                                                    setNewParcela({
+                                                      ...newParcela,
+                                                      dataVencimento:
+                                                        e.target.value,
+                                                    })
+                                                  }
+                                                  className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                                />
+                                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const q = getQuintoDiaUtilFromYearMonth(getLocalISOMonth());
+                                                      setNewParcela((prev) => ({
+                                                        ...prev,
+                                                        dataVencimento: q.iso,
+                                                        mesQuintoDiaUtil: getLocalISOMonth(),
+                                                      }));
+                                                    }}
+                                                    className="text-[11px] bg-slate-100 hover:bg-yellow-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200 transition-colors"
+                                                  >
+                                                    5º dia útil deste mês
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const now = new Date();
+                                                      now.setMonth(now.getMonth() + 1);
+                                                      const nextM = getLocalISOMonth(now);
+                                                      const q = getQuintoDiaUtilFromYearMonth(nextM);
+                                                      setNewParcela((prev) => ({
+                                                        ...prev,
+                                                        dataVencimento: q.iso,
+                                                        mesQuintoDiaUtil: nextM,
+                                                      }));
+                                                    }}
+                                                    className="text-[11px] bg-slate-100 hover:bg-yellow-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200 transition-colors"
+                                                  >
+                                                    5º dia útil próx. mês
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            )}
                                             <div>
                                               <label className="block text-xs font-medium text-slate-600 mb-1">
-                                                Valor (R$)
+                                                Valor do Lembrete (R$)
                                               </label>
                                               <input
                                                 type="number"
@@ -9610,20 +9925,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     valor: e.target.value,
                                                   })
                                                 }
-                                                className="w-full px-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
+                                                placeholder="Ex: 500.00"
+                                                className="w-full px-2.5 py-1.5 text-sm bg-white border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
                                               />
                                             </div>
                                           </div>
-                                          <div className="flex justify-end gap-2">
+                                          <div className="flex justify-end gap-2 pt-2 border-t border-amber-200">
                                             <button
                                               onClick={() => {
                                                 setAddingParcela(null);
                                                 setNewParcela({
                                                   dataVencimento: "",
                                                   valor: "",
+                                                  opcaoVencimento: "data",
+                                                  mesQuintoDiaUtil: getLocalISOMonth(),
                                                 });
                                               }}
-                                              className="px-3 py-1 text-sm text-slate-600 hover:bg-slate-200 rounded"
+                                              className="px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200 rounded-lg transition-colors font-medium"
                                             >
                                               Cancelar
                                             </button>
@@ -9631,7 +9949,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               onClick={() =>
                                                 handleAddParcela(simIndex)
                                               }
-                                              className="px-3 py-1 text-sm bg-yellow-500 text-white hover:bg-yellow-600 rounded"
+                                              className="px-4 py-1.5 text-sm bg-yellow-500 text-white hover:bg-yellow-600 font-medium rounded-lg shadow-sm transition-colors"
                                             >
                                               Salvar Lembrete
                                             </button>
@@ -9639,9 +9957,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         </div>
                                       ) : (
                                         <button
-                                          onClick={() =>
-                                            setAddingParcela(simIndex)
-                                          }
+                                          onClick={() => {
+                                            setAddingParcela(simIndex);
+                                            setNewParcela({
+                                              dataVencimento: "",
+                                              valor: "",
+                                              opcaoVencimento: "data",
+                                              mesQuintoDiaUtil: getLocalISOMonth(),
+                                            });
+                                          }}
                                           className="flex items-center gap-2 text-sm text-yellow-600 hover:text-yellow-700 font-medium"
                                         >
                                           <Plus size={16} />
@@ -11862,9 +12186,42 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             className="w-20 px-2 py-1 text-sm bg-white border border-slate-300 rounded focus:ring-1 focus:ring-yellow-500 outline-none"
                             placeholder="Ex: 8"
                           />
-                          <span className="text-xs text-slate-500 font-bold">%</span>
                         </div>
                       )}
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 uppercase tracking-wide block">
+                          Vencimento dos Lembretes
+                        </span>
+                        <span className="text-xs text-slate-600">
+                          Escolha se os lembretes seguem a data inicial mensalmente ou o 5º dia útil de cada mês:
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 bg-white p-1 rounded-lg border border-amber-200">
+                        <button
+                          type="button"
+                          onClick={() => setSimulacao({ ...simulacao, modoLembrete: "data" })}
+                          className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                            simulacao.modoLembrete !== "quinto_dia_util"
+                              ? "bg-yellow-500 text-white shadow-sm"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          📅 Marcar Data
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSimulacao({ ...simulacao, modoLembrete: "quinto_dia_util" })}
+                          className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${
+                            simulacao.modoLembrete === "quinto_dia_util"
+                              ? "bg-yellow-500 text-white shadow-sm"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          🏢 5º Dia Útil
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}

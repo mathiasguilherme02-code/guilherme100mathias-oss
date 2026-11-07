@@ -11,15 +11,32 @@ dotenv.config();
 
 // Load service account
 const serviceAccountPath = path.join(process.cwd(), 'serviceAccountKey.json');
-let serviceAccount;
+let serviceAccount: any;
+const embeddedFallbackServiceAccount = {
+  type: "service_account",
+  project_id: "gmemprestimo-69965",
+  private_key_id: "d91a245e41db3bb0d6a9202e9445300a56bbb44b",
+  private_key: "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQD4H1AvEyJMPaap\n1aEpXueIp45AXLWn7a4tKLy146/ylyuUa+xzzJgSD5DgzrKS1WMz46HcupUlkG9d\nYyQSopFatmfIF3ZLBaNnSlbThLhlMYIXXx3BgOFJ5fKp7bXI8mEdMrbfwg3gtm1i\nOy87iooOQQF0zrQtU9IqnutfxaOoguakS7qkYW/JGZh9Pi/2RlDwxzrjBBPMcFIh\nMabmsIg8hqW4dx7TMmPhg12QSxiRPVNfzLJAs76ishW3Ms5MdBmLBhrIeAia2wn3\nI7bpd843cgXcEn0ZD4jeZmDS0fP6yNwyaSXfZBhEpCIeSR46ZTQckQQSsTvT7sov\naxMgZyidAgMBAAECggEAQUavqCrO/6LKiWy/8OvcWtnF9U3OpqbDh3Lrrqh/fgFi\nQDJiaxacvUemFFacqT+FUT3mM/VMTq0gdz+hWlu1hNlvFTeC8frCQebPT+dfQZQU\nRwTJhcJbwr7BqA33IK4PeYiBjv10/DTSMyEh7Hammlhkwy+sPC6MoJTdlH0g8LA2\n1B1ajdahIgbi0ZxBpEhAFT68tpYk09O4CaVHpT/BJeZXJXqcaCoZzEdzjrHQclQ8\nboEnjZz/oKkvfWvecMttdg2yZun4/gBIONPLObeBeGzKB+Aw7NHTnmlscS4e+b1q\nfey18RoJiNVh7ZmWW6IsZ2gCVjZUIjiaRY0zbtu3uwKBgQD8OAvCmP9d3W7hbw6U\nrHVCMirbPV7YD1UG3WxT2lgofys5Dchq3QPZJNiAvIXu6GYtLOudGNXEmYQ286FJ\nUelrCiewR0rVfrtdcYvo6NnLS6ihr7ET4YsNAfXOY/MSahuJUTMHC9T9aZ0Vt4Tj\nUUxsfD8g18VomyOxNTzzVmTYwwKBgQD714ulab8ErIahKYjgNjJdg0JQd7r+hXDw\nTRVIjskUFlzuTIkYTpu74qMhGH7c/2pxoyhhoh3RrzBY98xKGrYupBm76fmRRo4Q\nkLqKYosIc/IJv0oraY8BJalYWLlbsO+Ku4J0lzPet1HPpspZG53Fl0V4nnWDDMXz\n79iwilTjHwKBgQDxbYCsVKHVKtoxhooRfId9xuHJHRTFgt+kA53nIlFS6m/oXC4l\nRMyjNabcjBk0WFc+FQqwRQ6S81Rg+ZLAyVzC7mSRU5zpgjc9uivv1bxs4k5X/wJl\nAneFCwRM/NW3IcScDBLpQsUtkcQg/puAsNiT29bdzE0V1bMztL9UOrWr2wKBgQCx\nuR3CYMq9mKb1iqMeXwDR/zRIJwZeYXsfCbbQWntKYrG4NWi2L5s1Ty4ByBCXEuRi\nR1rS854JgJEk59JSJWGVrpa+htJpFBpjVE9gI0SsdW5ENKs50adqjtJgF1TPgSC6\njbL1ZlLjhAkG+lRn59ZCP4t2IJUbI2N6zzLi+uwGzwKBgQC5sKs3OTFxjMKdslcZ\n9O8MGfFB3MPmDDG5TiWRSa/DRsWCd4ob1Lwhi/R28DEfzIPLfv0VwZYu3O1OBArR\nz2PJu1cNzPn4Gmm52r25GUQkOmCicA417MwXAP+S7BB+l1atZ1W/7VzfH3ZQv4fj\nedi25gfmeZlR3hDJ/+chLa5m3w==\n-----END PRIVATE KEY-----\n",
+  client_email: "firebase-adminsdk-fbsvc@gmemprestimo-69965.iam.gserviceaccount.com",
+  client_id: "100381538727015059185",
+  auth_uri: "https://accounts.google.com/o/oauth2/auth",
+  token_uri: "https://oauth2.googleapis.com/token",
+  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+  client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40gmemprestimo-69965.iam.gserviceaccount.com",
+  universe_domain: "googleapis.com"
+};
+
 try {
   if (existsSync(serviceAccountPath)) {
     serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'));
   } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) {
     serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT === 'string' ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) : process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
+  } else {
+    serviceAccount = embeddedFallbackServiceAccount;
   }
 } catch (e) {
-  console.error("Failed to load service account credentials", e);
+  console.error("Failed to load service account credentials, using fallback", e);
+  serviceAccount = embeddedFallbackServiceAccount;
 }
 
 let db: any;
