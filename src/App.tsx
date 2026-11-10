@@ -790,6 +790,16 @@ export default function App() {
     mesQuintoDiaUtil: getLocalISOMonth(),
   });
 
+  const [restoreDate, setRestoreDate] = useState("2026-11-07");
+  const [restoreStartTime, setRestoreStartTime] = useState("16:00");
+  const [restoreEndTime, setRestoreEndTime] = useState("16:43");
+  const [isRestoringData, setIsRestoringData] = useState(false);
+  const [restoreResultMsg, setRestoreResultMsg] = useState<{
+    type: "success" | "error" | "info";
+    text: string;
+    details?: string[];
+  } | null>(null);
+
   const [editingTransaction, setEditingTransaction] = useState<any | null>(
     null,
   );
@@ -7475,65 +7485,216 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 </div>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 bg-amber-50/70 p-3.5 rounded-xl border border-amber-200">
-                <div className="text-xs text-amber-950">
-                  <span className="font-semibold text-sm flex items-center gap-1.5 text-amber-900 mb-0.5">
-                    <History size={16} /> Backup Histórico dos Empréstimos e Anotações (07/11)
-                  </span>
-                  <span>
-                    Backup seguro gerado com sucesso às 15:48. Contém os empréstimos e anotações excluídos entre 16:00 e 16:43 (Patricia, Cássia, Karla e Fernando).
-                  </span>
+              <div className="mt-4 pt-4 border-t border-slate-200 bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-sm">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+                  <div>
+                    <span className="font-semibold text-sm flex items-center gap-2 text-amber-900">
+                      <History size={18} className="text-amber-700" />
+                      Backup Histórico dos Empréstimos e Anotações
+                    </span>
+                    <p className="text-xs text-amber-800/90 mt-0.5">
+                      Restaure dados excluídos por engano (empréstimos, anotações e fichas). Defina a data e o intervalo de horário da exclusão para recuperar os registros.
+                    </p>
+                  </div>
+                  {/* Presets rápidos */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreDate("2026-11-07");
+                        setRestoreStartTime("16:00");
+                        setRestoreEndTime("16:43");
+                      }}
+                      className="text-[11px] font-medium bg-amber-100 hover:bg-amber-200 text-amber-900 px-2.5 py-1 rounded-md border border-amber-300 transition-colors shadow-2xs"
+                      title="Período das exclusões de 07/11"
+                    >
+                      ⚡ 07/11 (16:00 - 16:43)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        const todayStr = getLocalISODate(now);
+                        const endStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+                        const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+                        const startStr = `${String(oneHourAgo.getHours()).padStart(2, "0")}:${String(oneHourAgo.getMinutes()).padStart(2, "0")}`;
+                        setRestoreDate(todayStr);
+                        setRestoreStartTime(startStr);
+                        setRestoreEndTime(endStr);
+                      }}
+                      className="text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md border border-slate-300 transition-colors shadow-2xs"
+                    >
+                      🕒 Última 1 hora
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRestoreDate(getLocalISODate());
+                        setRestoreStartTime("00:00");
+                        setRestoreEndTime("23:59");
+                      }}
+                      className="text-[11px] font-medium bg-white hover:bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md border border-slate-300 transition-colors shadow-2xs"
+                    >
+                      📅 Hoje (Dia todo)
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (
-                      confirm(
-                        "Deseja restaurar os empréstimos e anotações excluídos entre 16:00 e 16:43 para Cássia, Patricia, Karla e Fernando?",
-                      )
-                    ) {
-                      try {
-                        const res = await fetch(
-                          "/api/admin/restore-deleted-simulations",
-                          {
-                            method: "POST",
-                            headers: {
-                              Authorization: `Bearer ${adminToken}`,
-                            },
-                          },
-                        );
-                        const data = await res.json();
-                        if (res.ok) {
-                          alert(data.message || "Dados restaurados com sucesso!");
-                          const clientsRes = await fetch("/api/clients", {
-                            headers: { Authorization: `Bearer ${adminToken}` },
-                          });
-                          if (clientsRes.ok) {
-                            const clientsData = await clientsRes.json();
-                            setClients(clientsData);
-                            if (selectedClient) {
-                              const updated = clientsData.find(
-                                (c: any) => c.id === selectedClient.id,
-                              );
-                              if (updated) setSelectedClient(updated);
-                            }
-                          }
-                        } else {
-                          alert(
-                            "Erro ao restaurar: " +
-                              (data.error || "Erro desconhecido"),
-                          );
-                        }
-                      } catch (err: any) {
-                        alert("Erro ao conectar com servidor: " + err.message);
+
+                {/* Campos de Data, Horário de Início e Fim */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white p-3 rounded-lg border border-amber-200/80 mb-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Calendar size={13} className="text-amber-600" />
+                      Data da Restauração
+                    </label>
+                    <input
+                      type="date"
+                      value={restoreDate}
+                      onChange={(e) => setRestoreDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:ring-1 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Clock size={13} className="text-amber-600" />
+                      Horário de Início
+                    </label>
+                    <input
+                      type="time"
+                      value={restoreStartTime}
+                      onChange={(e) => setRestoreStartTime(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:ring-1 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Clock size={13} className="text-amber-600" />
+                      Horário de Fim
+                    </label>
+                    <input
+                      type="time"
+                      value={restoreEndTime}
+                      onChange={(e) => setRestoreEndTime(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:ring-1 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Botão de Restauração */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="text-xs text-amber-900/80">
+                    Intervalo selecionado:{" "}
+                    <strong>
+                      {restoreDate ? formatDate(restoreDate) : "-"}
+                    </strong>{" "}
+                    das <strong>{restoreStartTime || "--:--"}</strong> até{" "}
+                    <strong>{restoreEndTime || "--:--"}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isRestoringData || !restoreDate || !restoreStartTime || !restoreEndTime}
+                    onClick={async () => {
+                      if (!restoreDate || !restoreStartTime || !restoreEndTime) {
+                        alert("Por favor, preencha a data e os horários de início e fim.");
+                        return;
                       }
-                    }
-                  }}
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs py-2 px-4 rounded-lg transition-colors whitespace-nowrap shadow-sm flex items-center gap-1.5"
-                >
-                  <RotateCcw size={14} />
-                  Restaurar Dados (16:00 - 16:43)
-                </button>
+                      if (
+                        confirm(
+                          `Confirmar restauração dos dados excluídos no dia ${formatDate(restoreDate)} entre ${restoreStartTime} e ${restoreEndTime}?`,
+                        )
+                      ) {
+                        setIsRestoringData(true);
+                        setRestoreResultMsg(null);
+                        try {
+                          const res = await fetch(
+                            "/api/admin/restore-deleted-simulations",
+                            {
+                              method: "POST",
+                              headers: {
+                                "Content-Type": "application/json",
+                                Authorization: `Bearer ${adminToken}`,
+                              },
+                              body: JSON.stringify({
+                                data: restoreDate,
+                                horaInicio: restoreStartTime,
+                                horaFim: restoreEndTime,
+                              }),
+                            },
+                          );
+                          const data = await res.json();
+                          if (res.ok) {
+                            setRestoreResultMsg({
+                              type: "success",
+                              text: data.message || "Dados restaurados com sucesso!",
+                              details: data.details || [],
+                            });
+                            // Atualizar lista de clientes no front-end
+                            const clientsRes = await fetch("/api/clients", {
+                              headers: { Authorization: `Bearer ${adminToken}` },
+                            });
+                            if (clientsRes.ok) {
+                              const clientsData = await clientsRes.json();
+                              setClients(clientsData);
+                              if (selectedClient) {
+                                const updated = clientsData.find(
+                                  (c: any) => c.id === selectedClient.id,
+                                );
+                                if (updated) setSelectedClient(updated);
+                              }
+                            }
+                          } else {
+                            setRestoreResultMsg({
+                              type: "error",
+                              text: "Erro ao restaurar: " + (data.error || "Falha desconhecida"),
+                            });
+                          }
+                        } catch (err: any) {
+                          setRestoreResultMsg({
+                            type: "error",
+                            text: "Erro ao conectar com servidor: " + err.message,
+                          });
+                        } finally {
+                          setIsRestoringData(false);
+                        }
+                      }
+                    }}
+                    className={`bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs py-2 px-4 rounded-lg transition-all shadow-sm flex items-center gap-2 whitespace-nowrap ${
+                      isRestoringData ? "opacity-75 cursor-not-allowed" : ""
+                    }`}
+                  >
+                    <RotateCcw size={14} className={isRestoringData ? "animate-spin" : ""} />
+                    {isRestoringData
+                      ? "Restaurando Dados..."
+                      : "Restaurar Informações do Período"}
+                  </button>
+                </div>
+
+                {/* Mensagem de resultado da restauração */}
+                {restoreResultMsg && (
+                  <div
+                    className={`mt-3 p-3 rounded-lg border text-xs flex flex-col gap-1.5 ${
+                      restoreResultMsg.type === "success"
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                        : "bg-red-50 border-red-300 text-red-900"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 font-semibold">
+                      {restoreResultMsg.type === "success" ? (
+                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle size={16} className="text-red-600 shrink-0" />
+                      )}
+                      <span>{restoreResultMsg.text}</span>
+                    </div>
+                    {restoreResultMsg.details && restoreResultMsg.details.length > 0 && (
+                      <ul className="list-disc list-inside space-y-0.5 pl-1 opacity-90">
+                        {restoreResultMsg.details.map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -8427,7 +8588,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               </div>
                             ) : (
                               <>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
                                   <div>
                                     <p className="text-sm text-slate-500">
                                       Valor Solicitado
@@ -8457,6 +8618,30 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           5º Dia Útil
                                         </span>
                                       )}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-sm text-slate-500">
+                                      Data Inicial do Empréstimo
+                                    </p>
+                                    <p className="text-lg font-semibold text-slate-800">
+                                      {(() => {
+                                        const rawDate =
+                                          sim.dataInicial ||
+                                          (sim.dataCriacao
+                                            ? sim.dataCriacao.split("T")[0]
+                                            : "") ||
+                                          (Array.isArray(sim.parcelas) &&
+                                          sim.parcelas[0]?.dataInicial
+                                            ? sim.parcelas[0].dataInicial.split("T")[0]
+                                            : "") ||
+                                          (selectedClient?.dataCadastro
+                                            ? selectedClient.dataCadastro.split("T")[0]
+                                            : "");
+                                        return rawDate
+                                          ? formatDate(rawDate)
+                                          : "Não informada";
+                                      })()}
                                     </p>
                                   </div>
                                   {sim.prazo !== "única" ? (
@@ -8490,7 +8675,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       </p>
                                     </div>
                                   )}
-                                  <div className="col-span-2 md:col-span-4 bg-yellow-50 p-3 rounded-lg border border-yellow-200 print:hidden">
+                                  <div className="col-span-2 sm:col-span-3 lg:col-span-5 bg-yellow-50 p-3 rounded-lg border border-yellow-200 print:hidden">
                                     <p className="text-xs text-yellow-800 font-medium mb-1">
                                       Cálculo de Juros (Visão Admin)
                                     </p>

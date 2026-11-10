@@ -1,0 +1,633 @@
+{
+  "61fa7e9a-3401-4963-9cdf-50ca47277cde": {
+    "name": "Cássia Rita de Lima",
+    "simulacoes": [
+      {
+        "valorSolicitado": "500",
+        "prazo": "mensal",
+        "quantidade": "1",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-12-01",
+            "valor": 700,
+            "paga": false
+          }
+        ],
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "semanal",
+        "dataVencimentoUnica": "",
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "dataInicial": "2026-11-01",
+        "status": "aprovado",
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-11-01T00:00:00",
+        "valorParcela": "700"
+      },
+      {
+        "valorSolicitado": "500",
+        "prazo": "única",
+        "quantidade": "1",
+        "dataVencimentoUnica": "2026-11-01",
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-11-01",
+            "valor": 700,
+            "status": "pago",
+            "paga": true,
+            "dataPagamento": "2026-11-01",
+            "abatimentos": [
+              {
+                "data": "2026-11-01",
+                "valor": 280
+              }
+            ],
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-11-01"
+          }
+        ],
+        "valorTotal": 0,
+        "valorParcela": "700",
+        "isRenegociacao": true,
+        "renegociadoFromSimIndices": [
+          0
+        ],
+        "dataInicial": "2026-12-01",
+        "status": "aprovado",
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-12-01T00:00:00",
+        "arquivado": true
+      },
+      {
+        "valorSolicitado": "500.00",
+        "prazo": "mensal",
+        "quantidade": "1",
+        "taxaJuros": "40",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "dataInicial": "2026-08-31",
+        "dataVencimentoUnica": "",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-10-01",
+            "valor": 700,
+            "status": "pendente",
+            "paga": false,
+            "abatimentos": [
+              {
+                "data": "2026-10-01",
+                "valor": 280
+              }
+            ]
+          }
+        ],
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "status": "renegociado",
+        "dataCriacao": "2026-08-31T00:00:00",
+        "valorParcela": "",
+        "clientAccepted": "sim",
+        "arquivado": true,
+        "anotacoes": "\n[2026-10-01T17:37:36] Renegociado para um novo empréstimo."
+      }
+    ],
+    "dataCadastro": "2026-08-31T18:41:34"
+  },
+  "7f1fde93-c262-42fa-991a-dee031a04510": {
+    "name": "Patricia Emanuela Ferreira Da Silva",
+    "simulacoes": [
+      {
+        "valorSolicitado": "1186.80",
+        "prazo": "abater",
+        "quantidade": "2",
+        "dataVencimentoUnica": "",
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-09-15",
+            "valor": 1186.8,
+            "status": "pendente",
+            "paga": false,
+            "dataPagamento": null,
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-08-07",
+            "abatimentos": [
+              {
+                "data": "2026-09-18",
+                "valor": 130
+              },
+              {
+                "data": "2026-09-30",
+                "valor": 200
+              },
+              {
+                "data": "2026-10-01",
+                "valor": 100
+              },
+              {
+                "data": "2026-11-07",
+                "valor": 150
+              }
+            ]
+          },
+          {
+            "numero": 2,
+            "dataVencimento": "2026-12-07",
+            "valor": 300,
+            "paga": false
+          }
+        ],
+        "valorTotal": 0,
+        "valorParcela": "",
+        "isRenegociacao": true,
+        "renegociadoFromSimIndices": [
+          0
+        ],
+        "dataInicial": "2026-07-07",
+        "status": "aprovado",
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-07-07T00:00:00",
+        "arquivado": false
+      },
+      {
+        "valorSolicitado": "1186.80",
+        "prazo": "abater",
+        "quantidade": "2",
+        "dataVencimentoUnica": "",
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-09-15",
+            "valor": 1186.8,
+            "status": "pendente",
+            "paga": false,
+            "dataPagamento": null,
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-08-07",
+            "abatimentos": [
+              {
+                "data": "2026-09-18",
+                "valor": 130
+              },
+              {
+                "data": "2026-09-30",
+                "valor": 200
+              },
+              {
+                "data": "2026-10-01",
+                "valor": 100
+              }
+            ]
+          },
+          {
+            "numero": 2,
+            "dataVencimento": "2026-10-30",
+            "valor": 300,
+            "paga": false
+          }
+        ],
+        "valorTotal": 0,
+        "valorParcela": "",
+        "isRenegociacao": true,
+        "renegociadoFromSimIndices": [
+          0
+        ],
+        "dataInicial": "2026-07-07",
+        "status": "aprovado",
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-07-07T00:00:00",
+        "arquivado": true
+      },
+      {
+        "renegociadoFromSimIndices": [],
+        "quantidade": "3",
+        "valorSolicitado": "1200",
+        "parcelas": [
+          {
+            "paga": true,
+            "valor": 0,
+            "dataCongelamento": "2026-05-14",
+            "numero": 1,
+            "jurosCongelados": true,
+            "dataVencimento": "2026-05-09",
+            "abatimentos": [
+              {
+                "data": "2026-05-23",
+                "valor": 500
+              },
+              {
+                "valor": 200,
+                "data": "2026-05-30"
+              },
+              {
+                "data": "2026-06-04",
+                "valor": 170
+              },
+              {
+                "data": "2026-06-20",
+                "valor": 26
+              }
+            ],
+            "status": "pago",
+            "dataPagamento": "2026-06-20T16:14:13"
+          },
+          {
+            "paga": false,
+            "dataVencimento": "2026-05-24",
+            "valor": 640,
+            "numero": 2,
+            "jurosCongelados": true,
+            "abatimentos": [
+              {
+                "data": "2026-06-02",
+                "valor": 280
+              },
+              {
+                "data": "2026-06-20",
+                "valor": 274
+              }
+            ],
+            "dataCongelamento": "2026-06-02"
+          },
+          {
+            "valor": 640,
+            "numero": 3,
+            "paga": false,
+            "dataVencimento": "2026-06-08",
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-06-08"
+          }
+        ],
+        "isRenegociacao": false,
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "dataVencimentoUnica": "",
+        "taxaJuros": "40",
+        "status": "renegociado",
+        "prazo": "quinzenal",
+        "valorParcela": "",
+        "dataInicial": "2026-04-24",
+        "dataCriacao": "2026-04-24T00:00:00",
+        "clientAccepted": "sim",
+        "anotacoes": "Ficou de mandar 300,00 sábado, dia 06, e renegociar o resto da dívida. \n\nDepois que mandou os R$ 300, o total da dívida ficou assim: R$1.186,80.\n[2026-06-20T16:19:51] Renegociado para um novo empréstimo.",
+        "arquivado": true
+      },
+      {
+        "arquivado": true,
+        "tipoTaxa": "mensal",
+        "taxaAtrasoDia": "8",
+        "dataVencimentoUnica": "",
+        "status": "aprovado",
+        "taxaJuros": "0",
+        "prazo": "quinzenal",
+        "clientAccepted": "sim",
+        "dataInicial": "2026-04-29",
+        "dataCriacao": "2026-04-29T00:00:00",
+        "valorParcela": "",
+        "renegociadoFromSimIndices": [],
+        "quantidade": "0",
+        "valorSolicitado": "001",
+        "parcelas": [
+          {
+            "dataPagamento": "2026-05-11T14:40:53",
+            "valor": 1.2,
+            "numero": 1,
+            "paga": true,
+            "status": "pago",
+            "dataVencimento": "2026-05-14"
+          }
+        ],
+        "isRenegociacao": false
+      },
+      {
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-03-25T00:00:00",
+        "dataInicial": "2026-03-25",
+        "prazo": "quinzenal",
+        "status": "aprovado",
+        "taxaJuros": "40",
+        "dataVencimentoUnica": "",
+        "tipoTaxa": "mensal",
+        "taxaAtrasoDia": "8",
+        "arquivado": true,
+        "isRenegociacao": false,
+        "parcelas": [
+          {
+            "paga": true,
+            "valor": 560,
+            "dataPagamento": "2026-04-09T12:00:00.000Z",
+            "numero": 1,
+            "status": "pago",
+            "dataVencimento": "2026-04-09",
+            "abatimentos": [
+              {
+                "valor": 540,
+                "data": "2026-04-09"
+              }
+            ]
+          },
+          {
+            "paga": true,
+            "valor": 580,
+            "dataPagamento": "2026-04-24T12:00:00.000Z",
+            "numero": 2,
+            "status": "pago",
+            "dataVencimento": "2026-04-23"
+          }
+        ],
+        "valorSolicitado": "800",
+        "quantidade": "2",
+        "renegociadoFromSimIndices": []
+      }
+    ],
+    "dataCadastro": "2026-03-25T16:37:52"
+  },
+  "ef166f1b-c718-434a-abb0-8affd79e4ec1": {
+    "name": "karla Cristina de Jesus Lorenço",
+    "simulacoes": [
+      {
+        "valorSolicitado": "400",
+        "prazo": "abater",
+        "quantidade": "1",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-11-11",
+            "valor": 400,
+            "paga": false
+          }
+        ],
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "0",
+        "tipoTaxa": "mensal",
+        "dataVencimentoUnica": "",
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "dataInicial": "2026-11-04",
+        "status": "aprovado",
+        "clientAccepted": "sim",
+        "dataCriacao": "2026-11-06T07:56:09"
+      },
+      {
+        "dataInicial": "2026-03-21",
+        "dataVencimentoUnica": "2025-12-23",
+        "tipoTaxa": "mensal",
+        "status": "aprovado",
+        "valorSolicitado": "20000",
+        "renegociadoFromSimIndices": [],
+        "taxaJuros": "0",
+        "dataCriacao": "2026-03-21T00:00:00",
+        "parcelas": [
+          {
+            "paga": false,
+            "abatimentos": [
+              {
+                "data": "2025-12-31",
+                "valor": 400
+              },
+              {
+                "data": "2026-01-08",
+                "valor": 250
+              },
+              {
+                "valor": 250,
+                "data": "2026-01-09"
+              },
+              {
+                "data": "2026-01-23",
+                "valor": 600
+              },
+              {
+                "valor": 400,
+                "data": "2026-01-27"
+              },
+              {
+                "data": "2026-01-30",
+                "valor": 400
+              },
+              {
+                "data": "2026-02-03",
+                "valor": 400
+              },
+              {
+                "data": "2026-02-06",
+                "valor": 200
+              },
+              {
+                "data": "2026-02-28",
+                "valor": 500
+              },
+              {
+                "valor": 400,
+                "data": "2026-03-21"
+              },
+              {
+                "data": "2026-04-01",
+                "valor": 200
+              },
+              {
+                "valor": 200,
+                "data": "2026-04-14"
+              },
+              {
+                "valor": 400,
+                "data": "2026-05-19"
+              },
+              {
+                "valor": 300,
+                "data": "2026-05-26"
+              },
+              {
+                "data": "2026-05-28",
+                "valor": 150
+              },
+              {
+                "data": "2026-06-12",
+                "valor": 700
+              },
+              {
+                "data": "2026-06-22",
+                "valor": 500
+              },
+              {
+                "data": "2026-06-28",
+                "valor": 200
+              },
+              {
+                "data": "2026-07-04",
+                "valor": 200
+              },
+              {
+                "data": "2026-07-30",
+                "valor": 250
+              },
+              {
+                "data": "2026-08-06",
+                "valor": 150
+              },
+              {
+                "data": "2026-08-12",
+                "valor": 250
+              },
+              {
+                "data": "2026-08-26",
+                "valor": 300
+              },
+              {
+                "data": "2026-09-04",
+                "valor": 300
+              },
+              {
+                "data": "2026-09-08",
+                "valor": 200
+              },
+              {
+                "data": "2026-09-15",
+                "valor": 300
+              },
+              {
+                "data": "2026-11-04",
+                "valor": 400
+              }
+            ],
+            "dataVencimento": "2025-12-23",
+            "dataCongelamento": "2025-12-23",
+            "valor": 20120,
+            "jurosCongelados": true,
+            "numero": 1
+          }
+        ],
+        "quantidade": "1",
+        "prazo": "única",
+        "isRenegociacao": false,
+        "taxaAtrasoDia": "8",
+        "anotacoes": "Falta a dívida da Amanda, que não foi computada. Dívida da Amanda total: R$ 5.000,00. ",
+        "clientAccepted": "sim"
+      }
+    ],
+    "dataCadastro": "2026-03-16T15:05:48.226Z"
+  },
+  "df691c98-cb6a-49a8-9776-6fe0fc934b14": {
+    "name": "Fernando da Silva Alves Monteiro",
+    "simulacoes": [
+      {
+        "valorSolicitado": "1200",
+        "prazo": "única",
+        "quantidade": "1",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-10-30",
+            "valor": 1536,
+            "status": "pendente",
+            "paga": false,
+            "dataPagamento": null,
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-10-30"
+          }
+        ],
+        "taxaJuros": "40",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "dataVencimentoUnica": "2026-10-30",
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "dataInicial": "2026-10-09",
+        "status": "aprovado",
+        "dataCriacao": "2026-10-09T00:00:00",
+        "valorParcela": "",
+        "clientAccepted": "sim"
+      },
+      {
+        "valorSolicitado": "1100",
+        "prazo": "única",
+        "quantidade": "1",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-10-20",
+            "valor": 1430,
+            "status": "pendente",
+            "paga": false,
+            "jurosCongelados": true,
+            "dataCongelamento": "2026-10-21",
+            "abatimentos": [
+              {
+                "data": "2026-10-21",
+                "valor": 250
+              }
+            ]
+          }
+        ],
+        "taxaJuros": "40",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "dataVencimentoUnica": "2026-10-20",
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "status": "aprovado",
+        "dataCriacao": "2026-10-07T00:00:00",
+        "dataInicial": "2026-10-07",
+        "valorParcela": "",
+        "clientAccepted": "sim",
+        "anotacoes": "Eu mandei R$ 1.050,00 do telefone. \nR$ 953,27, o Fernando passou para o vendedor do telefone.  "
+      },
+      {
+        "valorSolicitado": "1100",
+        "prazo": "quinzenal",
+        "quantidade": "1",
+        "parcelas": [],
+        "taxaJuros": "",
+        "taxaAtrasoDia": "",
+        "tipoTaxa": "",
+        "dataVencimentoUnica": "",
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "status": "reprovado",
+        "dataCriacao": "2026-10-07T07:49:42",
+        "arquivado": true
+      },
+      {
+        "valorSolicitado": "1100",
+        "prazo": "única",
+        "quantidade": "1",
+        "taxaJuros": "0",
+        "taxaAtrasoDia": "8",
+        "tipoTaxa": "mensal",
+        "dataInicial": "2026-10-02",
+        "dataVencimentoUnica": "2026-10-07",
+        "parcelas": [
+          {
+            "numero": 1,
+            "dataVencimento": "2026-10-07",
+            "valor": 1430,
+            "status": "pago",
+            "paga": true,
+            "dataPagamento": "2026-10-07T07:47:42"
+          }
+        ],
+        "isRenegociacao": false,
+        "renegociadoFromSimIndices": [],
+        "status": "aprovado",
+        "dataCriacao": "2026-10-02T00:00:00",
+        "valorParcela": "1430",
+        "clientAccepted": "sim",
+        "arquivado": true
+      }
+    ],
+    "dataCadastro": "2026-10-02T17:55:34"
+  }
+}

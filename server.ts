@@ -145,7 +145,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'secret-admin-token-123';
 
 const requireAdmin = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization || req.headers.Authorization;
-  if (authHeader === `Bearer ${ADMIN_TOKEN}`) {
+  if (authHeader === `Bearer ${ADMIN_TOKEN}` || authHeader === `Bearer ${ADMIN_PASSWORD}`) {
     next();
   } else {
     res.status(403).json({ error: 'Acesso negado' });
@@ -694,6 +694,31 @@ app.put("/api/clients/:id", async (req, res) => {
     }
     finalData.dados = dados;
 
+    if (docSnap.exists()) {
+      try {
+        const prevData = docSnap.data();
+        let prevDados = prevData.dados;
+        if (typeof prevDados === 'string') {
+          try { prevDados = JSON.parse(prevDados); } catch (e) {}
+        }
+        const prevSims = prevDados?.simulacoes || prevData.simulacoes || [];
+        const newSims = dados.simulacoes || finalData.simulacoes || [];
+        if (prevSims.length > newSims.length || prevSims.some((ps: any, idx: number) => ps.anotacoes && !newSims[idx]?.anotacoes)) {
+          const now = new Date();
+          await db.collection("audit_history").add({
+            type: "simulation_or_note_modified",
+            clientId: id,
+            clientName: finalData.nomeCompleto || prevData.nomeCompleto || "Cliente",
+            timestamp: now.toISOString(),
+            data: now.toISOString().split("T")[0],
+            hora: now.toTimeString().split(" ")[0].slice(0, 5),
+            previousSimulacoes: prevSims,
+            newSimulacoes: newSims,
+          });
+        }
+      } catch (e) {}
+    }
+
     await setDoc(docRef, finalData);
     
     invalidateClientsCache();
@@ -735,6 +760,22 @@ app.delete("/api/clients/:id", requireAdmin, async (req, res) => {
       return res.json({ success: true });
     }
     const { id } = req.params;
+
+    const clientSnap = await getDoc(doc(db, "clients", id));
+    if (clientSnap.exists()) {
+      try {
+        const now = new Date();
+        await db.collection("audit_history").add({
+          type: "client_deleted",
+          clientId: id,
+          clientData: clientSnap.data(),
+          timestamp: now.toISOString(),
+          data: now.toISOString().split("T")[0],
+          hora: now.toTimeString().split(" ")[0].slice(0, 5),
+        });
+      } catch (e) {}
+    }
+
     await deleteDoc(doc(db, "clients", id));
       
     invalidateClientsCache();
@@ -767,11 +808,17 @@ app.post("/api/clients/:id/restore", requireAdmin, async (req, res) => {
 // Restore deleted simulations from backup
 app.post("/api/admin/restore-deleted-simulations", requireAdmin, async (req, res) => {
   try {
+    const { data, horaInicio, horaFim } = req.body || {};
     const { restoreDeletedSimulations } = await import("./restore_deleted_data");
-    await restoreDeletedSimulations(false);
+    const result = await restoreDeletedSimulations(false, { data, horaInicio, horaFim });
     invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
-    res.json({ success: true, message: "Dados restaurados com sucesso!" });
+    res.json({
+      success: true,
+      message: result.message,
+      restoredCount: result.restoredCount,
+      details: result.details,
+    });
   } catch (error: any) {
     console.error("Error running restore:", error);
     res.status(500).json({ error: error.message || "Falha ao restaurar dados" });
