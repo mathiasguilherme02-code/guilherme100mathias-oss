@@ -9950,7 +9950,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {p.paga && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo confirma o recebimento do pagamento de ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(p.valor)}, pago na data de ${formatDate(p.dataPagamento || p.dataVencimento)}.`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo confirma o recebimento do pagamento de ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(p.valor)}, pago na data de ${formatDate(p.dataPagamento || p.dataVencimento)}. Até a próxima.`)}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
