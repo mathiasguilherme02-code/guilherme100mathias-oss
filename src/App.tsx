@@ -508,7 +508,13 @@ export default function App() {
   }, [view]);
 
   const [adminTab, setAdminTab] = useState<
-    "clientes" | "cronograma" | "lembretes" | "fluxo_caixa" | "mensagens" | "produtos"
+    | "clientes"
+    | "cronograma"
+    | "lembretes"
+    | "fluxo_caixa"
+    | "mensagens"
+    | "produtos"
+    | "configuracoes"
   >("clientes");
   //
 
@@ -8488,6 +8494,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             >
               Produtos
             </button>
+            <button
+              onClick={() => {
+                setAdminTab("configuracoes");
+                setSelectedClient(null);
+              }}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "configuracoes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Configurações
+            </button>
             <div className="ml-auto flex items-center mb-3 shrink-0">
               <button
                 onClick={async () => {
@@ -8534,7 +8549,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             </div>
           </div>
 
-          {!selectedClient && adminTab === "clientes" && (
+          {!selectedClient && adminTab === "configuracoes" && (
             <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
