@@ -356,6 +356,7 @@ app.get("/api/settings", async (req, res) => {
     msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
     msgLembreteConfirmacao: 'Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.',
     msgLembreteVencido: '',
+    msgTelefones: {} as Record<string, string>,
     customWhatsAppTemplates: [] as any[],
   };
   try {
@@ -371,6 +372,9 @@ app.get("/api/settings", async (req, res) => {
     const data = { ...defaultSettings, ...docSnap.data() };
     if (!data.diasLembreteAntecipado) {
       data.diasLembreteAntecipado = '3';
+    }
+    if (!data.msgTelefones || typeof data.msgTelefones !== 'object' || Array.isArray(data.msgTelefones)) {
+      data.msgTelefones = {};
     }
     if (!Array.isArray(data.customWhatsAppTemplates)) {
       data.customWhatsAppTemplates = [];
@@ -399,6 +403,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       msgLembreteCongelado,
       msgLembreteConfirmacao,
       msgLembreteVencido,
+      msgTelefones,
       customWhatsAppTemplates,
     } = req.body;
     await setDoc(doc(db, "admin_settings", "1"), {
@@ -412,6 +417,13 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       ...(msgLembreteCongelado !== undefined ? { msgLembreteCongelado } : {}),
       ...(msgLembreteConfirmacao !== undefined ? { msgLembreteConfirmacao } : {}),
       ...(msgLembreteVencido !== undefined ? { msgLembreteVencido } : {}),
+      ...(msgTelefones && typeof msgTelefones === 'object' && !Array.isArray(msgTelefones)
+        ? {
+            msgTelefones: Object.fromEntries(
+              Object.entries(msgTelefones).map(([k, v]) => [k, String(v || "")]),
+            ),
+          }
+        : {}),
       ...(Array.isArray(customWhatsAppTemplates)
         ? {
             customWhatsAppTemplates: customWhatsAppTemplates.map((t: any) => ({
@@ -419,6 +431,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
               label: String(t?.label || "Modelo Personalizado"),
               situacao: String(t?.situacao || "personalizado"),
               text: String(t?.text || ""),
+              telefone: String(t?.telefone || ""),
             })),
           }
         : {}),

@@ -107,6 +107,7 @@ interface CustomWhatsAppTemplate {
   label: string;
   situacao: WaSituacaoType;
   text: string;
+  telefone?: string;
 }
 
 const WA_TEMPLATE_OPTIONS: Array<{
@@ -1052,6 +1053,7 @@ export default function App() {
     tipoTaxa: "mensal",
     diasLembreteAntecipado: "3",
     ...DEFAULT_WHATSAPP_TEMPLATES,
+    msgTelefones: {} as Partial<Record<WaTemplateKey, string>>,
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
   });
   const [activeWaTemplateKey, setActiveWaTemplateKey] = useState<string>(
@@ -1274,6 +1276,12 @@ export default function App() {
             ...DEFAULT_WHATSAPP_TEMPLATES,
             diasLembreteAntecipado: settings.diasLembreteAntecipado || "3",
             ...settings,
+            msgTelefones:
+              settings.msgTelefones &&
+              typeof settings.msgTelefones === "object" &&
+              !Array.isArray(settings.msgTelefones)
+                ? settings.msgTelefones
+                : {},
             customWhatsAppTemplates: Array.isArray(
               settings.customWhatsAppTemplates,
             )
@@ -2014,6 +2022,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     valor: number;
     dias?: number;
     dataStr?: string;
+    clientPhoneOverride?: string;
   }) => {
     const customList = (adminSettings.customWhatsAppTemplates || []).filter(
       (t: CustomWhatsAppTemplate) => t.text && t.text.trim().length > 0,
@@ -2033,6 +2042,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     return customList.map((tpl: CustomWhatsAppTemplate) => ({
       id: tpl.id,
       label: tpl.label || "Modelo Personalizado",
+      phone: tpl.telefone?.trim() || params.clientPhoneOverride || "",
+      hasCustomPhone: Boolean(tpl.telefone?.trim()),
       message: renderWhatsAppTemplate(tpl.text, {
         cliente: params.cliente,
         valor: formattedValor,
@@ -2041,6 +2052,43 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         dias: params.dias ?? 0,
       }),
     }));
+  };
+
+  const formatWhatsAppHref = (phone: string | undefined, message: string) => {
+    const digits = String(phone || "").replace(/\D/g, "");
+    const target =
+      digits.length > 11 && digits.startsWith("55") ? digits : `55${digits}`;
+    return `https://wa.me/${target}?text=${encodeURIComponent(message)}`;
+  };
+
+  const resolveWhatsAppTargetPhone = (
+    clientPhone: string | undefined,
+    type: Exclude<WaSituacaoType, "personalizado">,
+  ) => {
+    const customOverride = (
+      adminSettings.customWhatsAppTemplates || []
+    ).find(
+      (tpl: CustomWhatsAppTemplate) =>
+        tpl.situacao === type && tpl.text && tpl.text.trim().length > 0,
+    );
+    if (customOverride?.telefone && customOverride.telefone.trim()) {
+      return customOverride.telefone.trim();
+    }
+    const situacaoToKey: Record<
+      Exclude<WaSituacaoType, "personalizado">,
+      WaTemplateKey
+    > = {
+      a_vencer: "msgLembreteAVencer",
+      pre_vencimento: "msgLembretePreVencimento",
+      vence_hoje: "msgLembreteVenceHoje",
+      congelado: "msgLembreteCongelado",
+      vencido: "msgLembreteVencido",
+      confirmacao: "msgLembreteConfirmacao",
+    };
+    const configuredPhone =
+      adminSettings.msgTelefones?.[situacaoToKey[type]]?.trim();
+    if (configuredPhone) return configuredPhone;
+    return clientPhone || "";
   };
 
   const getClientStatus = (client: any) => {
@@ -8344,6 +8392,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       label: `Mensagem ${nextNum}`,
                       situacao: "personalizado",
                       text: "Olá {cliente}, a GM-Empréstimo informa sobre {referencia} no valor de {valor} com data {data}.",
+                      telefone: "",
                     };
                     setAdminSettings((prev) => ({
                       ...prev,
@@ -8666,6 +8715,77 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             </div>
                           )}
 
+                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1.5">
+                              <Phone size={12} className="text-emerald-600" />
+                              Celular de Destino para esta Mensagem (Opcional)
+                            </label>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                              <input
+                                type="tel"
+                                value={
+                                  activeCustomTemplate
+                                    ? activeCustomTemplate.telefone || ""
+                                    : adminSettings.msgTelefones?.[
+                                        resolvedBuiltIn!.key
+                                      ] || ""
+                                }
+                                onChange={(e) => {
+                                  const rawVal = e.target.value;
+                                  if (activeCustomTemplate) {
+                                    handleUpdateCustomTemplate(
+                                      activeCustomTemplate.id,
+                                      { telefone: rawVal },
+                                    );
+                                  } else if (resolvedBuiltIn) {
+                                    setAdminSettings((prev) => ({
+                                      ...prev,
+                                      msgTelefones: {
+                                        ...(prev.msgTelefones || {}),
+                                        [resolvedBuiltIn.key]: rawVal,
+                                      },
+                                    }));
+                                  }
+                                }}
+                                placeholder="(31) 99999-9999 — deixe em branco para usar o celular do cliente"
+                                className="flex-1 px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none tabular-nums"
+                              />
+                              {((activeCustomTemplate &&
+                                activeCustomTemplate.telefone) ||
+                                (!activeCustomTemplate &&
+                                  resolvedBuiltIn &&
+                                  adminSettings.msgTelefones?.[
+                                    resolvedBuiltIn.key
+                                  ])) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (activeCustomTemplate) {
+                                      handleUpdateCustomTemplate(
+                                        activeCustomTemplate.id,
+                                        { telefone: "" },
+                                      );
+                                    } else if (resolvedBuiltIn) {
+                                      setAdminSettings((prev) => ({
+                                        ...prev,
+                                        msgTelefones: {
+                                          ...(prev.msgTelefones || {}),
+                                          [resolvedBuiltIn.key]: "",
+                                        },
+                                      }));
+                                    }
+                                  }}
+                                  className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition-colors shrink-0"
+                                >
+                                  Usar celular do cliente
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-1">
+                              Se preenchido, o botão de WhatsApp enviará esta mensagem diretamente para este número em vez do celular cadastrado na ficha.
+                            </p>
+                          </div>
+
                           <p className="text-xs text-slate-600">{activeHint}</p>
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mr-1">
@@ -8731,13 +8851,52 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 {activeLabel}
                               </span>
                             </div>
-                            <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-line leading-relaxed">
-                              {previewText || (
-                                <span className="text-slate-400 italic">
-                                  Nenhuma mensagem digitada.
-                                </span>
-                              )}
-                            </div>
+                            {(() => {
+                              const configuredTargetPhone = activeCustomTemplate
+                                ? (activeCustomTemplate.telefone || "").trim()
+                                : (
+                                    adminSettings.msgTelefones?.[
+                                      resolvedBuiltIn!.key
+                                    ] || ""
+                                  ).trim();
+                              const cleanTargetDigits =
+                                configuredTargetPhone.replace(/\D/g, "");
+                              return (
+                                <>
+                                  <div className="mb-2.5 flex items-center justify-between gap-2 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+                                    <span className="font-medium">
+                                      Destino do envio:
+                                    </span>
+                                    <span className="font-semibold text-slate-800 tabular-nums">
+                                      {configuredTargetPhone ||
+                                        "Celular cadastrado do cliente"}
+                                    </span>
+                                  </div>
+                                  <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-line leading-relaxed">
+                                    {previewText || (
+                                      <span className="text-slate-400 italic">
+                                        Nenhuma mensagem digitada.
+                                      </span>
+                                    )}
+                                  </div>
+                                  {cleanTargetDigits.length >= 10 &&
+                                    previewText && (
+                                      <a
+                                        href={formatWhatsAppHref(
+                                          configuredTargetPhone,
+                                          previewText,
+                                        )}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="mt-3 inline-flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors"
+                                      >
+                                        <Phone size={14} />
+                                        Testar / Enviar para {configuredTargetPhone}
+                                      </a>
+                                    )}
+                                </>
+                              );
+                            })()}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-3">
                             Exemplo exibido com dados fictícios: Maria Silva, R$ 350,00, (20/11/2026) - Sexta-Feira. As alterações passam a valer na Ficha do Cliente, Cronograma e Lembretes Agendados após clicar em &ldquo;Salvar Mensagens&rdquo;.
@@ -11169,7 +11328,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                href={formatWhatsAppHref(
+                                                  resolveWhatsAppTargetPhone(
+                                                    selectedClient.telefone,
+                                                    p.jurosCongelados ? "congelado" : "vencido",
+                                                  ),
                                                   buildWhatsAppPaymentMessage({
                                                     type: p.jurosCongelados ? "congelado" : "vencido",
                                                     cliente: selectedClient.nomeCompleto,
@@ -11181,7 +11344,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       ? p.dataCongelamento || p.dataVencimento
                                                       : p.dataVencimento,
                                                   }),
-                                                )}`}
+                                                )}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -11199,7 +11362,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isVencendoHoje && (
                                             <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                href={formatWhatsAppHref(
+                                                  resolveWhatsAppTargetPhone(
+                                                    selectedClient.telefone,
+                                                    "vence_hoje",
+                                                  ),
                                                   buildWhatsAppPaymentMessage({
                                                     type: "vence_hoje",
                                                     cliente: selectedClient.nomeCompleto,
@@ -11208,7 +11375,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     valor: valorAtualizado,
                                                     dataStr: p.dataVencimento,
                                                   }),
-                                                )}`}
+                                                )}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -11224,7 +11391,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isPreVencimento && (
                                             <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                href={formatWhatsAppHref(
+                                                  resolveWhatsAppTargetPhone(
+                                                    selectedClient.telefone,
+                                                    "pre_vencimento",
+                                                  ),
                                                   buildWhatsAppPaymentMessage({
                                                     type: "pre_vencimento",
                                                     cliente: selectedClient.nomeCompleto,
@@ -11234,7 +11405,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     dias: diasParaVencimento,
                                                     dataStr: p.dataVencimento,
                                                   }),
-                                                )}`}
+                                                )}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -11250,7 +11421,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {p.paga && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                href={formatWhatsAppHref(
+                                                  resolveWhatsAppTargetPhone(
+                                                    selectedClient.telefone,
+                                                    "confirmacao",
+                                                  ),
                                                   buildWhatsAppPaymentMessage({
                                                     type: "confirmacao",
                                                     cliente: selectedClient.nomeCompleto,
@@ -11259,7 +11434,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     valor: Number(p.valor || 0),
                                                     dataStr: p.dataPagamento || p.dataVencimento,
                                                   }),
-                                                )}`}
+                                                )}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -11294,6 +11469,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       ? p.dataCongelamento ||
                                                         p.dataVencimento
                                                       : p.dataVencimento,
+                                                  clientPhoneOverride:
+                                                    selectedClient.telefone,
                                                 });
                                               if (customMsgs.length === 0)
                                                 return null;
@@ -11320,7 +11497,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       {customMsgs.map((cm) => (
                                                         <a
                                                           key={cm.id}
-                                                          href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(cm.message)}`}
+                                                          href={formatWhatsAppHref(
+                                                            cm.phone,
+                                                            cm.message,
+                                                          )}
                                                           target="_blank"
                                                           rel="noopener noreferrer"
                                                           onClick={() =>
@@ -11330,9 +11510,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           }
                                                           className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                                         >
-                                                          <span className="font-medium truncate">
-                                                            {cm.label}
-                                                          </span>
+                                                          <div className="min-w-0">
+                                                            <div className="font-medium truncate">
+                                                              {cm.label}
+                                                            </div>
+                                                            {cm.hasCustomPhone && (
+                                                              <div className="text-[10px] text-slate-500 tabular-nums truncate">
+                                                                Para: {cm.phone}
+                                                              </div>
+                                                            )}
+                                                          </div>
                                                           <Phone
                                                             size={13}
                                                             className="text-emerald-600 shrink-0"
@@ -12247,28 +12434,44 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     <td className="py-3 px-6 text-right print:hidden">
                                       <div className="flex items-center justify-end gap-2">
                                         <a
-                                          href={`https://wa.me/55${(p.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
-                                            (() => {
-                                              if (p.jurosCongelados) {
-                                                return buildWhatsAppPaymentMessage({
+                                          href={(() => {
+                                            if (p.jurosCongelados) {
+                                              return formatWhatsAppHref(
+                                                resolveWhatsAppTargetPhone(
+                                                  p.clientPhone,
+                                                  "congelado",
+                                                ),
+                                                buildWhatsAppPaymentMessage({
                                                   type: "congelado",
                                                   cliente: p.clientName,
                                                   p,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataCongelamento || p.dataVencimento,
-                                                });
-                                              } else if (isVencendoHoje) {
-                                                return buildWhatsAppPaymentMessage({
+                                                }),
+                                              );
+                                            } else if (isVencendoHoje) {
+                                              return formatWhatsAppHref(
+                                                resolveWhatsAppTargetPhone(
+                                                  p.clientPhone,
+                                                  "vence_hoje",
+                                                ),
+                                                buildWhatsAppPaymentMessage({
                                                   type: "vence_hoje",
                                                   cliente: p.clientName,
                                                   p,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataVencimento,
-                                                });
-                                              } else if (isPreVencimento) {
-                                                return buildWhatsAppPaymentMessage({
+                                                }),
+                                              );
+                                            } else if (isPreVencimento) {
+                                              return formatWhatsAppHref(
+                                                resolveWhatsAppTargetPhone(
+                                                  p.clientPhone,
+                                                  "pre_vencimento",
+                                                ),
+                                                buildWhatsAppPaymentMessage({
                                                   type: "pre_vencimento",
                                                   cliente: p.clientName,
                                                   p,
@@ -12276,43 +12479,49 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valor: p.valorRestante,
                                                   dias: diasParaVencimento,
                                                   dataStr: p.dataVencimento,
-                                                });
-                                              } else if (isVencida) {
-                                                const diasAtraso = getParcelaDiasAtraso(p, hoje);
-                                                const hasDailyInterest =
-                                                  p.prazo === "abater"
-                                                    ? Boolean(p.aplicarJurosDiarios) ||
-                                                      (p.aplicarJurosDiarios !== false &&
-                                                        parseFloat(p.taxaAtrasoDia || "0") > 0)
-                                                    : true;
-                                                const taxaDia = hasDailyInterest
-                                                  ? parseFloat(
-                                                      p.taxaAtrasoDia,
-                                                    ) ||
-                                                    parseFloat(
-                                                      adminSettings.taxaAtrasoDia,
-                                                    ) ||
-                                                    1
+                                                }),
+                                              );
+                                            } else if (isVencida) {
+                                              const diasAtraso = getParcelaDiasAtraso(p, hoje);
+                                              const hasDailyInterest =
+                                                p.prazo === "abater"
+                                                  ? Boolean(p.aplicarJurosDiarios) ||
+                                                    (p.aplicarJurosDiarios !== false &&
+                                                      parseFloat(p.taxaAtrasoDia || "0") > 0)
+                                                  : true;
+                                              const taxaDia = hasDailyInterest
+                                                ? parseFloat(
+                                                    p.taxaAtrasoDia,
+                                                  ) ||
+                                                  parseFloat(
+                                                    adminSettings.taxaAtrasoDia,
+                                                  ) ||
+                                                  1
+                                                : 0;
+                                              const abatimentosTotal =
+                                                p.abatimentos
+                                                  ? p.abatimentos.reduce(
+                                                      (acc: number, a: any) =>
+                                                        acc + a.valor,
+                                                      0,
+                                                    )
                                                   : 0;
-                                                const abatimentosTotal =
-                                                  p.abatimentos
-                                                    ? p.abatimentos.reduce(
-                                                        (acc: number, a: any) =>
-                                                          acc + a.valor,
-                                                        0,
-                                                      )
-                                                    : 0;
-                                                let valorAtualizado =
-                                                  Number(p.valor) +
-                                                  Number(p.valor) *
-                                                    (taxaDia / 100) *
-                                                    diasAtraso;
-                                                valorAtualizado = Math.max(
-                                                  0,
-                                                  valorAtualizado -
-                                                    abatimentosTotal,
-                                                );
-                                                return buildWhatsAppPaymentMessage({
+                                              let valorAtualizado =
+                                                Number(p.valor) +
+                                                Number(p.valor) *
+                                                  (taxaDia / 100) *
+                                                  diasAtraso;
+                                              valorAtualizado = Math.max(
+                                                0,
+                                                valorAtualizado -
+                                                  abatimentosTotal,
+                                              );
+                                              return formatWhatsAppHref(
+                                                resolveWhatsAppTargetPhone(
+                                                  p.clientPhone,
+                                                  "vencido",
+                                                ),
+                                                buildWhatsAppPaymentMessage({
                                                   type: "vencido",
                                                   cliente: p.clientName,
                                                   p,
@@ -12320,18 +12529,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valor: valorAtualizado,
                                                   dias: diasAtraso,
                                                   dataStr: p.dataVencimento,
-                                                });
-                                              }
-                                              return buildWhatsAppPaymentMessage({
+                                                }),
+                                              );
+                                            }
+                                            return formatWhatsAppHref(
+                                              resolveWhatsAppTargetPhone(
+                                                p.clientPhone,
+                                                "a_vencer",
+                                              ),
+                                              buildWhatsAppPaymentMessage({
                                                 type: "a_vencer",
                                                 cliente: p.clientName,
                                                 p,
                                                 prazo: p.prazo,
                                                 valor: p.valorRestante,
                                                 dataStr: p.dataVencimento,
-                                              });
-                                            })(),
-                                          )}`}
+                                              }),
+                                            );
+                                          })()}
                                           target="_blank"
                                           rel="noopener noreferrer"
                                           className="text-green-600 hover:text-green-800 p-1 rounded-full hover:bg-green-50 transition-colors"
@@ -12356,6 +12571,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 ? p.dataCongelamento ||
                                                   p.dataVencimento
                                                 : p.dataVencimento,
+                                              clientPhoneOverride:
+                                                p.clientPhone,
                                             });
                                           if (customMsgs.length === 0)
                                             return null;
@@ -12384,7 +12601,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   {customMsgs.map((cm) => (
                                                     <a
                                                       key={cm.id}
-                                                      href={`https://wa.me/55${(p.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(cm.message)}`}
+                                                      href={formatWhatsAppHref(
+                                                        cm.phone,
+                                                        cm.message,
+                                                      )}
                                                       target="_blank"
                                                       rel="noopener noreferrer"
                                                       onClick={() =>
@@ -12394,9 +12614,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       }
                                                       className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                                     >
-                                                      <span className="truncate font-medium">
-                                                        {cm.label}
-                                                      </span>
+                                                      <div className="min-w-0">
+                                                        <div className="truncate font-medium">
+                                                          {cm.label}
+                                                        </div>
+                                                        {cm.hasCustomPhone && (
+                                                          <div className="text-[10px] text-slate-500 tabular-nums truncate">
+                                                            Para: {cm.phone}
+                                                          </div>
+                                                        )}
+                                                      </div>
                                                       <Phone
                                                         size={12}
                                                         className="text-emerald-600 shrink-0"
@@ -12993,7 +13220,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   {item.isPago ? "Pago" : "Marcar Pago"}
                                 </button>
                                 <a
-                                  href={`https://wa.me/55${(item.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(waMessage)}`}
+                                  href={formatWhatsAppHref(
+                                    resolveWhatsAppTargetPhone(
+                                      item.clientPhone,
+                                      item.isPago
+                                        ? "confirmacao"
+                                        : item.isCongelado
+                                          ? "congelado"
+                                          : item.isVencendoHoje
+                                            ? "vence_hoje"
+                                            : item.isPreVencimento
+                                              ? "pre_vencimento"
+                                              : item.isVencido
+                                                ? "vencido"
+                                                : "a_vencer",
+                                    ),
+                                    waMessage,
+                                  )}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
@@ -13025,6 +13268,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           ? item.dataCongelamento ||
                                             item.dataVencimento
                                           : item.dataVencimento,
+                                      clientPhoneOverride: item.clientPhone,
                                     });
                                   if (customMsgs.length === 0) return null;
                                   const menuKey = `lembrete-${item.uniqueKey}`;
@@ -13052,7 +13296,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {customMsgs.map((cm) => (
                                             <a
                                               key={cm.id}
-                                              href={`https://wa.me/55${(item.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(cm.message)}`}
+                                              href={formatWhatsAppHref(
+                                                cm.phone,
+                                                cm.message,
+                                              )}
                                               target="_blank"
                                               rel="noopener noreferrer"
                                               onClick={() =>
@@ -13060,9 +13307,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               }
                                               className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                             >
-                                              <span className="truncate font-medium">
-                                                {cm.label}
-                                              </span>
+                                              <div className="min-w-0">
+                                                <div className="truncate font-medium">
+                                                  {cm.label}
+                                                </div>
+                                                {cm.hasCustomPhone && (
+                                                  <div className="text-[10px] text-slate-500 tabular-nums truncate">
+                                                    Para: {cm.phone}
+                                                  </div>
+                                                )}
+                                              </div>
                                               <Phone
                                                 size={12}
                                                 className="text-emerald-600 shrink-0"
