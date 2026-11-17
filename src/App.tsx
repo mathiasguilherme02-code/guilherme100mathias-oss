@@ -76,6 +76,67 @@ export interface Produto {
   imagemUrl?: string;
 }
 
+const DEFAULT_WHATSAPP_TEMPLATES = {
+  msgLembreteAVencer:
+    "Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.",
+  msgLembretePreVencimento:
+    "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence em {dias} dia(s), no dia {data}.",
+  msgLembreteVenceHoje:
+    "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).",
+  msgLembreteCongelado:
+    "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).",
+  msgLembreteConfirmacao:
+    "Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.",
+  msgLembreteVencido: "",
+};
+
+type WaTemplateKey = keyof typeof DEFAULT_WHATSAPP_TEMPLATES;
+
+const WA_TEMPLATE_OPTIONS: Array<{
+  key: WaTemplateKey;
+  label: string;
+  hint: string;
+}> = [
+  {
+    key: "msgLembreteAVencer",
+    label: "A Vencer",
+    hint: "Enviada para lembretes e parcelas futuras antes do período de pré-notificação.",
+  },
+  {
+    key: "msgLembretePreVencimento",
+    label: "Pré-Vencimento",
+    hint: "Enviada quando faltam poucos dias para o vencimento (tag {dias} indica quantos dias faltam).",
+  },
+  {
+    key: "msgLembreteVenceHoje",
+    label: "Vence Hoje",
+    hint: "Enviada no dia exato do vencimento da parcela ou lembrete.",
+  },
+  {
+    key: "msgLembreteCongelado",
+    label: "Juros Congelados",
+    hint: "Enviada quando há acordo de congelamento de juros (tag {data} mostra a data limite do acordo).",
+  },
+  {
+    key: "msgLembreteVencido",
+    label: "Vencido (Em Atraso)",
+    hint: "Deixe em branco para manter o detalhamento automático de juros, 40% e abatimentos, ou preencha para usar um texto personalizado (tag {dias} indica dias de atraso).",
+  },
+  {
+    key: "msgLembreteConfirmacao",
+    label: "Confirmação de Pagamento",
+    hint: "Enviada após marcar a parcela ou lembrete como pago (tag {data} mostra a data do pagamento).",
+  },
+];
+
+const WA_DYNAMIC_TAGS: Array<{ tag: string; desc: string }> = [
+  { tag: "{cliente}", desc: "Primeiro nome do cliente" },
+  { tag: "{valor}", desc: "Valor formatado (ex: R$ 350,00)" },
+  { tag: "{data}", desc: "Data e dia da semana" },
+  { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
+  { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
+];
+
 const initialFormData = {
   nomeCompleto: "",
   nomeMae: "",
@@ -428,7 +489,7 @@ export default function App() {
   }, [view]);
 
   const [adminTab, setAdminTab] = useState<
-    "clientes" | "cronograma" | "fluxo_caixa" | "mensagens" | "produtos"
+    "clientes" | "cronograma" | "lembretes" | "fluxo_caixa" | "mensagens" | "produtos"
   >("clientes");
   //
 
@@ -498,6 +559,56 @@ export default function App() {
       return localStorage.getItem("gm_fluxo_type_filter") || "all";
     } catch (e) {
       return "all";
+    }
+  });
+  const [lembretesYear, setLembretesYear] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_year") || getLocalISOYear();
+    } catch (e) {
+      return getLocalISOYear();
+    }
+  });
+  const [lembretesMonth, setLembretesMonth] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_month") || getLocalMonthDigits();
+    } catch (e) {
+      return getLocalMonthDigits();
+    }
+  });
+  const [lembretesDateFilter, setLembretesDateFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_date_filter") || "";
+    } catch (e) {
+      return "";
+    }
+  });
+  const [lembretesStatusFilter, setLembretesStatusFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_status_filter") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
+  const [lembretesClientFilter, setLembretesClientFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_client_filter") || "";
+    } catch (e) {
+      return "";
+    }
+  });
+  const [lembretesClientIdFilter, setLembretesClientIdFilter] = useState(() => {
+    try {
+      return localStorage.getItem("gm_lembretes_client_id_filter") || "all";
+    } catch (e) {
+      return "all";
+    }
+  });
+  const [lembretesScope, setLembretesScope] = useState<"abater" | "todos">(() => {
+    try {
+      const saved = localStorage.getItem("gm_lembretes_scope");
+      return saved === "todos" ? "todos" : "abater";
+    } catch (e) {
+      return "abater";
     }
   });
   const [newRetirada, setNewRetirada] = useState({
@@ -922,7 +1033,14 @@ export default function App() {
     taxaJuros: "40",
     taxaAtrasoDia: "8",
     tipoTaxa: "mensal",
+    diasLembreteAntecipado: "3",
+    ...DEFAULT_WHATSAPP_TEMPLATES,
   });
+  const [activeWaTemplateKey, setActiveWaTemplateKey] = useState<WaTemplateKey>(
+    "msgLembreteAVencer",
+  );
+  const waTemplateRef = useRef<HTMLTextAreaElement>(null);
+  const [isSavingWaSettings, setIsSavingWaSettings] = useState(false);
 
   const [simulacao, setSimulacao] = useState({
     valorSolicitado: "",
@@ -1130,7 +1248,12 @@ export default function App() {
 
         if (settingsRes.ok) {
           const settings = await settingsRes.json();
-          setAdminSettings(settings);
+          setAdminSettings((prev) => ({
+            ...prev,
+            ...DEFAULT_WHATSAPP_TEMPLATES,
+            diasLembreteAntecipado: settings.diasLembreteAntecipado || "3",
+            ...settings,
+          }));
         }
 
         if (adminToken) {
@@ -1649,6 +1772,30 @@ export default function App() {
     return dateString;
   };
 
+  const renderWhatsAppTemplate = (
+    template: string,
+    vars: {
+      cliente: string;
+      valor: string;
+      data: string;
+      referencia: string;
+      dias?: string | number;
+    },
+  ) => {
+    const firstName = vars.cliente
+      ? String(vars.cliente).trim().split(" ")[0]
+      : "Cliente";
+    return template
+      .replace(/\{cliente\}/gi, firstName || "Cliente")
+      .replace(/\{valor\}/gi, vars.valor || "")
+      .replace(/\{data\}/gi, vars.data || "")
+      .replace(/\{referencia\}/gi, vars.referencia || "")
+      .replace(
+        /\{dias\}/gi,
+        vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
+      );
+  };
+
   const generateVencidaMessage = (
     nomeCompleto: string,
     p: any,
@@ -1656,6 +1803,23 @@ export default function App() {
     valorAtualizado: number,
     prazo?: string,
   ) => {
+    if (
+      adminSettings.msgLembreteVencido &&
+      adminSettings.msgLembreteVencido.trim()
+    ) {
+      const itemDesc =
+        prazo === "abater"
+          ? "seu Lembrete de Pagamento"
+          : `sua Parcela ${p.numero}`;
+      return renderWhatsAppTemplate(adminSettings.msgLembreteVencido, {
+        cliente: nomeCompleto,
+        valor: formatCurrency(valorAtualizado),
+        data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
+        referencia: itemDesc,
+        dias: diasAtraso,
+      });
+    }
+
     const nome = nomeCompleto ? nomeCompleto.split(" ")[0] : "Cliente";
     const dataStrVencimento = p.dataVencimento
       ? p.dataVencimento.split("T")[0].split("-").reverse().join("/")
@@ -1735,6 +1899,70 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
 
     return mensagem;
+  };
+
+  const buildWhatsAppPaymentMessage = (params: {
+    type:
+      | "a_vencer"
+      | "pre_vencimento"
+      | "vence_hoje"
+      | "congelado"
+      | "vencido"
+      | "confirmacao";
+    cliente: string;
+    p: any;
+    prazo?: string;
+    valor: number;
+    dias?: number;
+    dataStr?: string;
+  }) => {
+    const itemDesc =
+      params.prazo === "abater"
+        ? "seu Lembrete de Pagamento"
+        : `sua Parcela ${params.p.numero}`;
+    const formattedValor = formatCurrency(params.valor);
+    const formattedData = params.dataStr
+      ? formatDate(params.dataStr)
+      : params.p.dataVencimento
+        ? formatDate(params.p.dataVencimento)
+        : "";
+
+    if (params.type === "vencido") {
+      return generateVencidaMessage(
+        params.cliente,
+        params.p,
+        params.dias || 0,
+        params.valor,
+        params.prazo,
+      );
+    }
+
+    const templateMap: Record<Exclude<typeof params.type, "vencido">, string> =
+      {
+        a_vencer: adminSettings.msgLembreteAVencer?.trim()
+          ? adminSettings.msgLembreteAVencer
+          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteAVencer,
+        pre_vencimento: adminSettings.msgLembretePreVencimento?.trim()
+          ? adminSettings.msgLembretePreVencimento
+          : DEFAULT_WHATSAPP_TEMPLATES.msgLembretePreVencimento,
+        vence_hoje: adminSettings.msgLembreteVenceHoje?.trim()
+          ? adminSettings.msgLembreteVenceHoje
+          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteVenceHoje,
+        congelado: adminSettings.msgLembreteCongelado?.trim()
+          ? adminSettings.msgLembreteCongelado
+          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteCongelado,
+        confirmacao: adminSettings.msgLembreteConfirmacao?.trim()
+          ? adminSettings.msgLembreteConfirmacao
+          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteConfirmacao,
+      };
+
+    return renderWhatsAppTemplate(templateMap[params.type], {
+      cliente: params.cliente,
+      valor: formattedValor,
+      data: formattedData,
+      referencia: itemDesc,
+      dias: params.dias ?? 0,
+    });
   };
 
   const getClientStatus = (client: any) => {
@@ -5840,6 +6068,326 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           })()
         : {};
 
+    const isLembretesTab = adminTab === "lembretes";
+
+    const lembretesData = isLembretesTab
+      ? (() => {
+          const hoje = new Date();
+          hoje.setHours(0, 0, 0, 0);
+          const maxDiasAntecipado =
+            parseInt(adminSettings.diasLembreteAntecipado || "3") || 3;
+
+          const allReminders = clients
+            .filter((c) => c.id !== "admin-transactions")
+            .flatMap((c) =>
+              (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
+                .map((s: any, sIdx: number) => ({ s, sIdx }))
+                .filter(({ s }: any) => {
+                  if (!s) return false;
+                  if (lembretesScope === "abater" && s.prazo !== "abater") {
+                    return false;
+                  }
+                  if (
+                    s.status === "reprovado" ||
+                    s.status === "cancelado_pelo_cliente" ||
+                    s.status === "pendente" ||
+                    s.clientAccepted === "nao"
+                  ) {
+                    return false;
+                  }
+                  return true;
+                })
+                .flatMap(({ s, sIdx }: any) => {
+                  const simAtiva = isSimulacaoAtiva(s);
+                  return (Array.isArray(s.parcelas) ? s.parcelas : [])
+                    .map((p: any, pIdx: number) => {
+                      const isPago = Boolean(p.paga || p.status === "pago");
+                      // Do not list unpaid installments from archived/renegotiated loans
+                      if (!isPago && !simAtiva) return null;
+
+                      const abatimentosTotal = p.abatimentos
+                        ? p.abatimentos.reduce(
+                            (acc: number, a: any) => acc + (Number(a.valor) || 0),
+                            0,
+                          )
+                        : 0;
+                      const diasAtraso = isPago ? 0 : getParcelaDiasAtraso(p, hoje);
+                      const hasDailyInterest =
+                        s.prazo === "abater"
+                          ? Boolean(s.aplicarJurosDiarios) ||
+                            (s.aplicarJurosDiarios !== false &&
+                              parseFloat(s.taxaAtrasoDia || "0") > 0)
+                          : true;
+                      const taxaDia = hasDailyInterest
+                        ? parseFloat(s.taxaAtrasoDia) ||
+                          parseFloat(adminSettings.taxaAtrasoDia) ||
+                          1
+                        : 0;
+
+                      const valorBase = Number(p.valor || 0);
+                      let valorComJuros = valorBase;
+                      if (!isPago && diasAtraso > 0) {
+                        valorComJuros += valorBase * (taxaDia / 100) * diasAtraso;
+                      }
+                      const valorRestante = isPago
+                        ? Math.max(0, valorBase)
+                        : Math.max(0, valorComJuros - abatimentosTotal);
+
+                      const vencDateStr = (p.dataVencimento || "").split("T")[0];
+                      const vencimento = vencDateStr
+                        ? parseLocalDate(vencDateStr)
+                        : new Date(hoje);
+                      vencimento.setHours(0, 0, 0, 0);
+
+                      const diffParaVencimento =
+                        vencimento.getTime() - hoje.getTime();
+                      const diasParaVencimento = Math.round(
+                        diffParaVencimento / (1000 * 60 * 60 * 24),
+                      );
+
+                      const isCongelado = !isPago && Boolean(p.jurosCongelados);
+                      const isVencendoHoje =
+                        !isPago && !isCongelado && vencimento.getTime() === hoje.getTime();
+                      const isVencido =
+                        !isPago && !isCongelado && !isVencendoHoje && vencimento < hoje;
+                      const isPreVencimento =
+                        !isPago &&
+                        !isCongelado &&
+                        diasParaVencimento >= 1 &&
+                        diasParaVencimento <= maxDiasAntecipado;
+
+                      let statusKey:
+                        | "pago"
+                        | "congelado"
+                        | "hoje"
+                        | "vencido"
+                        | "a_vencer" = "a_vencer";
+                      if (isPago) statusKey = "pago";
+                      else if (isCongelado) statusKey = "congelado";
+                      else if (isVencendoHoje) statusKey = "hoje";
+                      else if (isVencido) statusKey = "vencido";
+
+                      return {
+                        ...p,
+                        uniqueKey: `${c.id}-${sIdx}-${pIdx}`,
+                        clientId: c.id,
+                        clientName: c.nomeCompleto || "Cliente",
+                        clientCpf: c.cpf || "",
+                        clientPhone: c.telefone || "",
+                        simIndex: sIdx,
+                        parcelaIndex: pIdx,
+                        prazo: s.prazo,
+                        modoLembrete: s.modoLembrete,
+                        isRenegociacao: Boolean(s.isRenegociacao),
+                        taxaAtrasoDia: s.taxaAtrasoDia,
+                        aplicarJurosDiarios: s.aplicarJurosDiarios,
+                        dataVencimentoClean: vencDateStr,
+                        abatimentosTotal,
+                        diasAtraso,
+                        diasParaVencimento,
+                        isPreVencimento,
+                        isPago,
+                        isCongelado,
+                        isVencendoHoje,
+                        isVencido,
+                        statusKey,
+                        valorRestante,
+                        valorAtualizado: valorRestante,
+                      };
+                    })
+                    .filter(Boolean);
+                }),
+            )
+            .sort((a: any, b: any) => {
+              const dateCmp = (a.dataVencimentoClean || "").localeCompare(
+                b.dataVencimentoClean || "",
+              );
+              if (dateCmp !== 0) return dateCmp;
+              return (a.clientName || "").localeCompare(b.clientName || "");
+            });
+
+          const clientOptionsMap = new Map<string, { id: string; name: string; cpf: string }>();
+          allReminders.forEach((r: any) => {
+            if (!clientOptionsMap.has(r.clientId)) {
+              clientOptionsMap.set(r.clientId, {
+                id: r.clientId,
+                name: r.clientName,
+                cpf: r.clientCpf,
+              });
+            }
+          });
+          const clientOptions = Array.from(clientOptionsMap.values()).sort((a, b) =>
+            a.name.localeCompare(b.name),
+          );
+
+          const periodAndClientFiltered = allReminders.filter((r: any) => {
+            const dateStr = r.dataVencimentoClean;
+            if (!dateStr) return false;
+
+            if (lembretesDateFilter) {
+              if (dateStr !== lembretesDateFilter) return false;
+            } else {
+              const [y, m] = dateStr.split("-");
+              if (lembretesYear !== "all" && y !== lembretesYear) return false;
+              if (lembretesMonth !== "all" && m !== lembretesMonth) return false;
+            }
+
+            if (
+              lembretesClientIdFilter !== "all" &&
+              r.clientId !== lembretesClientIdFilter
+            ) {
+              return false;
+            }
+
+            if (lembretesClientFilter.trim()) {
+              const q = lembretesClientFilter.trim().toLowerCase();
+              const cleanQ = q.replace(/\D/g, "");
+              const matchName = (r.clientName || "").toLowerCase().includes(q);
+              const matchCpf =
+                (r.clientCpf || "").toLowerCase().includes(q) ||
+                (cleanQ.length > 0 &&
+                  (r.clientCpf || "").replace(/\D/g, "").includes(cleanQ));
+              if (!matchName && !matchCpf) return false;
+            }
+
+            return true;
+          });
+
+          const filtered = periodAndClientFiltered.filter((r: any) => {
+            if (lembretesStatusFilter === "all") return true;
+            if (lembretesStatusFilter === "pendente") return !r.isPago;
+            return r.statusKey === lembretesStatusFilter;
+          });
+
+          const summary = periodAndClientFiltered.reduce(
+            (acc: any, r: any) => {
+              acc.totalCount += 1;
+              acc.totalValor += r.valorRestante;
+              if (r.isPago) {
+                acc.pagosCount += 1;
+                acc.pagosValor += r.valorRestante;
+              } else {
+                acc.pendentesCount += 1;
+                acc.pendentesValor += r.valorRestante;
+                if (r.statusKey === "vencido") {
+                  acc.vencidosCount += 1;
+                  acc.vencidosValor += r.valorRestante;
+                }
+              }
+              return acc;
+            },
+            {
+              totalCount: 0,
+              totalValor: 0,
+              pendentesCount: 0,
+              pendentesValor: 0,
+              vencidosCount: 0,
+              vencidosValor: 0,
+              pagosCount: 0,
+              pagosValor: 0,
+            },
+          );
+
+          return {
+            allCount: allReminders.length,
+            clientOptions,
+            filtered,
+            summary,
+          };
+        })()
+      : {
+          allCount: 0,
+          clientOptions: [],
+          filtered: [],
+          summary: {
+            totalCount: 0,
+            totalValor: 0,
+            pendentesCount: 0,
+            pendentesValor: 0,
+            vencidosCount: 0,
+            vencidosValor: 0,
+            pagosCount: 0,
+            pagosValor: 0,
+          },
+        };
+
+    const handleToggleLembretePago = async (item: any) => {
+      try {
+        const res = await fetch(`/api/clients/${item.clientId}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        if (!res.ok) throw new Error("Falha ao buscar dados atualizados do cliente");
+        const latestClient = await res.json();
+
+        const updatedSimulacoes = [
+          ...(latestClient.simulacoes ||
+            (latestClient.simulacao ? [latestClient.simulacao] : [])),
+        ];
+        const targetSim = updatedSimulacoes[item.simIndex];
+        if (!targetSim || !Array.isArray(targetSim.parcelas)) {
+          throw new Error("Simulação não encontrada");
+        }
+        const novasParcelas = [...targetSim.parcelas];
+        const targetParcela = novasParcelas[item.parcelaIndex];
+        if (!targetParcela) {
+          throw new Error("Lembrete não encontrado");
+        }
+
+        const isNowPaid = !Boolean(targetParcela.paga || targetParcela.status === "pago");
+        let computedDataPagamento: string | null = null;
+        if (isNowPaid) {
+          if (item.isVencido && targetParcela.dataVencimento) {
+            computedDataPagamento = targetParcela.dataVencimento;
+          } else {
+            computedDataPagamento = getLocalISODateTime();
+          }
+        }
+
+        novasParcelas[item.parcelaIndex] = {
+          ...targetParcela,
+          paga: isNowPaid,
+          status: isNowPaid ? "pago" : "pendente",
+          dataPagamento: computedDataPagamento,
+        };
+
+        if (isNowPaid && item.isVencido) {
+          novasParcelas[item.parcelaIndex].valor = item.valorAtualizado;
+        }
+
+        updatedSimulacoes[item.simIndex] = {
+          ...targetSim,
+          parcelas: novasParcelas,
+        };
+
+        const updatedClient = {
+          ...latestClient,
+          simulacoes: updatedSimulacoes,
+        };
+
+        const success = await updateClientWithUndo(
+          updatedClient,
+          `Marcar ${item.prazo === "abater" ? "Lembrete" : "Parcela"} como ${isNowPaid ? "Pago" : "Pendente"}`,
+        );
+
+        if (success) {
+          setClients((prev) =>
+            prev.map((c) => (c.id === latestClient.id ? updatedClient : c)),
+          );
+          if (selectedClient && selectedClient.id === latestClient.id) {
+            setSelectedClient(updatedClient);
+          }
+          toast.success(
+            `${item.prazo === "abater" ? "Lembrete" : "Parcela"} marcado como ${isNowPaid ? "pago" : "pendente"}!`,
+          );
+        } else {
+          throw new Error("Falha ao atualizar");
+        }
+      } catch (error) {
+        console.error("Error toggling reminder payment:", error);
+        toast.error("Erro ao atualizar status de pagamento");
+      }
+    };
+
     const isFluxoTab = adminTab === "fluxo_caixa";
 
     const adminTransactions = isFluxoTab
@@ -7318,14 +7866,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             return null;
           })()}
 
-          <div className="flex gap-4 mb-8 border-b border-slate-200 print:hidden">
+          <div className="flex gap-4 mb-8 border-b border-slate-200 overflow-x-auto print:hidden">
             <button
               onClick={() => {
                 setAdminTab("clientes");
                 setSelectedClient(null);
                 setSearchTerm("");
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "clientes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "clientes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
               Clientes
             </button>
@@ -7334,16 +7882,25 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 setAdminTab("cronograma");
                 setSelectedClient(null);
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "cronograma" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "cronograma" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
               Cronograma de Clientes
+            </button>
+            <button
+              onClick={() => {
+                setAdminTab("lembretes");
+                setSelectedClient(null);
+              }}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "lembretes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              Lembretes Agendados
             </button>
             <button
               onClick={() => {
                 setAdminTab("fluxo_caixa");
                 setSelectedClient(null);
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "fluxo_caixa" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "fluxo_caixa" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
               Fluxo de Caixa
             </button>
@@ -7353,7 +7910,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 setSelectedClient(null);
                 setSearchTerm("");
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors relative ${adminTab === "mensagens" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors relative whitespace-nowrap shrink-0 ${adminTab === "mensagens" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
               Mensagens
               {unreadChatCount > 0 && (
@@ -7367,11 +7924,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 setAdminTab("produtos");
                 setSelectedClient(null);
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors ${adminTab === "produtos" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "produtos" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
               Produtos
             </button>
-            <div className="ml-auto flex items-center mb-3">
+            <div className="ml-auto flex items-center mb-3 shrink-0">
               <button
                 onClick={async () => {
                   if (
@@ -7534,6 +8091,235 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     Salvar Taxas
                   </button>
                 </div>
+              </div>
+
+              <div className="mt-6 pt-6 border-t border-slate-200">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                      <MessageSquare size={18} className="text-emerald-600" />
+                      Personalização de Mensagens do WhatsApp
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Personalize o texto padrão dos lembretes e confirmações enviados pelo WhatsApp usando tags dinâmicas.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                      <label className="text-xs font-medium text-slate-600 whitespace-nowrap">
+                        Pré-notificar com:
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="30"
+                        value={adminSettings.diasLembreteAntecipado || "3"}
+                        onChange={(e) =>
+                          setAdminSettings({
+                            ...adminSettings,
+                            diasLembreteAntecipado: e.target.value,
+                          })
+                        }
+                        className="w-14 px-2 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500 tabular-nums"
+                      />
+                      <span className="text-xs text-slate-500">dia(s)</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminSettings((prev) => ({
+                          ...prev,
+                          [activeWaTemplateKey]:
+                            DEFAULT_WHATSAPP_TEMPLATES[activeWaTemplateKey],
+                        }));
+                        toast.info("Modelo restaurado para o texto padrão.");
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                    >
+                      <RotateCcw size={14} />
+                      Restaurar Padrão
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSavingWaSettings}
+                      onClick={async () => {
+                        setIsSavingWaSettings(true);
+                        try {
+                          const res = await fetch("/api/settings", {
+                            method: "PUT",
+                            headers: {
+                              "Content-Type": "application/json",
+                              Authorization: `Bearer ${adminToken}`,
+                            },
+                            body: JSON.stringify(adminSettings),
+                          });
+                          if (res.ok) {
+                            toast.success(
+                              "Modelos de mensagem salvos com sucesso!",
+                            );
+                          } else {
+                            toast.error("Erro ao salvar modelos de mensagem.");
+                          }
+                        } catch (error) {
+                          toast.error("Erro ao salvar modelos de mensagem.");
+                        } finally {
+                          setIsSavingWaSettings(false);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-lg transition-colors"
+                    >
+                      <Save size={14} />
+                      {isSavingWaSettings ? "Salvando..." : "Salvar Mensagens"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {WA_TEMPLATE_OPTIONS.map((opt) => {
+                    const isActive = activeWaTemplateKey === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setActiveWaTemplateKey(opt.key)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                          isActive
+                            ? "bg-slate-800 text-white border-slate-800"
+                            : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {(() => {
+                  const activeOption =
+                    WA_TEMPLATE_OPTIONS.find(
+                      (o) => o.key === activeWaTemplateKey,
+                    ) || WA_TEMPLATE_OPTIONS[0];
+                  const currentTemplateValue =
+                    adminSettings[activeWaTemplateKey] ?? "";
+                  const insertTagAtCursor = (tag: string) => {
+                    const el = waTemplateRef.current;
+                    if (!el) {
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        [activeWaTemplateKey]:
+                          (prev[activeWaTemplateKey] || "") + tag,
+                      }));
+                      return;
+                    }
+                    const start = el.selectionStart ?? currentTemplateValue.length;
+                    const end = el.selectionEnd ?? currentTemplateValue.length;
+                    const nextVal =
+                      currentTemplateValue.slice(0, start) +
+                      tag +
+                      currentTemplateValue.slice(end);
+                    setAdminSettings((prev) => ({
+                      ...prev,
+                      [activeWaTemplateKey]: nextVal,
+                    }));
+                    setTimeout(() => {
+                      el.focus();
+                      const pos = start + tag.length;
+                      el.setSelectionRange(pos, pos);
+                    }, 0);
+                  };
+
+                  const previewText =
+                    activeWaTemplateKey === "msgLembreteVencido" &&
+                    !currentTemplateValue.trim()
+                      ? "Olá, Maria. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde 12/11/2026.\n\nO valor total da sua dívida (vencida há 5 dias) é de R$ 350,00.\n\nPor favor, regularize o quanto antes para evitar maiores encargos."
+                      : renderWhatsAppTemplate(currentTemplateValue, {
+                          cliente: "Maria Silva",
+                          valor: "R$ 350,00",
+                          data: "(20/11/2026) - Sexta-Feira",
+                          referencia: "seu Lembrete de Pagamento",
+                          dias:
+                            activeWaTemplateKey === "msgLembreteVencido"
+                              ? 5
+                              : adminSettings.diasLembreteAntecipado || "3",
+                        });
+
+                  return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <div className="space-y-2.5">
+                        <p className="text-xs text-slate-600">
+                          {activeOption.hint}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mr-1">
+                            Inserir tag:
+                          </span>
+                          {WA_DYNAMIC_TAGS.map((item) => (
+                            <button
+                              key={item.tag}
+                              type="button"
+                              title={item.desc}
+                              onClick={() => insertTagAtCursor(item.tag)}
+                              className="px-2 py-1 text-xs font-mono font-medium bg-slate-100 hover:bg-yellow-100 text-slate-700 hover:text-yellow-900 border border-slate-200 rounded transition-colors"
+                            >
+                              + {item.tag}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          ref={waTemplateRef}
+                          rows={5}
+                          value={currentTemplateValue}
+                          placeholder={
+                            activeWaTemplateKey === "msgLembreteVencido"
+                              ? "Em branco = usa o detalhamento automático de juros, 40% e abatimentos. Digite aqui caso deseje substituir pelo seu texto personalizado..."
+                              : "Digite o modelo da mensagem usando as tags acima..."
+                          }
+                          onChange={(e) =>
+                            setAdminSettings((prev) => ({
+                              ...prev,
+                              [activeWaTemplateKey]: e.target.value,
+                            }))
+                          }
+                          className="w-full px-3.5 py-2.5 text-sm text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-white"
+                        />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-500 pt-0.5">
+                          {WA_DYNAMIC_TAGS.map((item) => (
+                            <div key={item.tag} className="truncate">
+                              <span className="font-mono font-semibold text-slate-700">
+                                {item.tag}
+                              </span>{" "}
+                              — {item.desc}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between gap-2 pb-2.5 mb-3 border-b border-slate-200">
+                            <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                              <Eye size={14} className="text-slate-500" />
+                              Pré-visualização no WhatsApp
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-medium">
+                              {activeOption.label}
+                            </span>
+                          </div>
+                          <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-line leading-relaxed">
+                            {previewText || (
+                              <span className="text-slate-400 italic">
+                                Nenhuma mensagem digitada.
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-3">
+                          Exemplo exibido com dados fictícios: Maria Silva, R$ 350,00, (20/11/2026) - Sexta-Feira. As alterações passam a valer na Ficha do Cliente, Cronograma e Lembretes Agendados após clicar em &ldquo;Salvar Mensagens&rdquo;.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="mt-4 pt-4 border-t border-slate-200 bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-sm">
@@ -8804,11 +9590,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         diffParaVencimento /
                                           (1000 * 60 * 60 * 24),
                                       );
+                                      const maxDiasAntecipado =
+                                        parseInt(
+                                          adminSettings.diasLembreteAntecipado ||
+                                            "3",
+                                        ) || 3;
                                       const isPreVencimento =
                                         !p.paga &&
                                         p.status !== "pago" &&
                                         diasParaVencimento >= 1 &&
-                                        diasParaVencimento <= 3;
+                                        diasParaVencimento <= maxDiasAntecipado;
 
                                       const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                       let valorAtualizado = Number(p.valor);
@@ -9951,7 +10742,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(generateVencidaMessage(selectedClient.nomeCompleto, p, diasAtraso, valorAtualizado, sim.prazo))}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                  buildWhatsAppPaymentMessage({
+                                                    type: p.jurosCongelados ? "congelado" : "vencido",
+                                                    cliente: selectedClient.nomeCompleto,
+                                                    p,
+                                                    prazo: sim.prazo,
+                                                    valor: valorAtualizado,
+                                                    dias: diasAtraso,
+                                                    dataStr: p.jurosCongelados
+                                                      ? p.dataCongelamento || p.dataVencimento
+                                                      : p.dataVencimento,
+                                                  }),
+                                                )}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -9969,7 +10772,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isVencendoHoje && (
                                             <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(valorAtualizado)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                  buildWhatsAppPaymentMessage({
+                                                    type: "vence_hoje",
+                                                    cliente: selectedClient.nomeCompleto,
+                                                    p,
+                                                    prazo: sim.prazo,
+                                                    valor: valorAtualizado,
+                                                    dataStr: p.dataVencimento,
+                                                  }),
+                                                )}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -9985,7 +10797,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {isPreVencimento && (
                                             <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo informa que ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(valorAtualizado)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                  buildWhatsAppPaymentMessage({
+                                                    type: "pre_vencimento",
+                                                    cliente: selectedClient.nomeCompleto,
+                                                    p,
+                                                    prazo: sim.prazo,
+                                                    valor: valorAtualizado,
+                                                    dias: diasParaVencimento,
+                                                    dataStr: p.dataVencimento,
+                                                  }),
+                                                )}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -10001,7 +10823,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {p.paga && !isEditing && (
                                             <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
                                               <a
-                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(`Olá ${(selectedClient.nomeCompleto || "").split(" ")[0]}, a GM-Empréstimo confirma o recebimento do pagamento de ${sim.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`} no valor de ${formatCurrency(p.valor)}, pago na data de ${formatDate(p.dataPagamento || p.dataVencimento)}. Até a próxima.`)}`}
+                                                href={`https://wa.me/55${(selectedClient.telefone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
+                                                  buildWhatsAppPaymentMessage({
+                                                    type: "confirmacao",
+                                                    cliente: selectedClient.nomeCompleto,
+                                                    p,
+                                                    prazo: sim.prazo,
+                                                    valor: Number(p.valor || 0),
+                                                    dataStr: p.dataPagamento || p.dataVencimento,
+                                                  }),
+                                                )}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
@@ -10916,13 +11747,34 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         <a
                                           href={`https://wa.me/55${(p.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(
                                             (() => {
-                                              const itemDesc = p.prazo === "abater" ? "seu Lembrete de Pagamento" : `sua Parcela ${p.numero}`;
                                               if (p.jurosCongelados) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} está com juros congelados${p.dataCongelamento ? ` para pagamento até ${formatDate(p.dataCongelamento)}` : ""} no valor de ${formatCurrency(p.valorRestante)}. Nossa chave Pix para quitação: 31972323040 (Silmara).`;
+                                                return buildWhatsAppPaymentMessage({
+                                                  type: "congelado",
+                                                  cliente: p.clientName,
+                                                  p,
+                                                  prazo: p.prazo,
+                                                  valor: p.valorRestante,
+                                                  dataStr: p.dataCongelamento || p.dataVencimento,
+                                                });
                                               } else if (isVencendoHoje) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence hoje, ${formatDate(p.dataVencimento)}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).`;
+                                                return buildWhatsAppPaymentMessage({
+                                                  type: "vence_hoje",
+                                                  cliente: p.clientName,
+                                                  p,
+                                                  prazo: p.prazo,
+                                                  valor: p.valorRestante,
+                                                  dataStr: p.dataVencimento,
+                                                });
                                               } else if (isPreVencimento) {
-                                                return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo informa que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vence em ${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""}, no dia ${formatDate(p.dataVencimento)}.`;
+                                                return buildWhatsAppPaymentMessage({
+                                                  type: "pre_vencimento",
+                                                  cliente: p.clientName,
+                                                  p,
+                                                  prazo: p.prazo,
+                                                  valor: p.valorRestante,
+                                                  dias: diasParaVencimento,
+                                                  dataStr: p.dataVencimento,
+                                                });
                                               } else if (isVencida) {
                                                 const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                                 const hasDailyInterest =
@@ -10958,15 +11810,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valorAtualizado -
                                                     abatimentosTotal,
                                                 );
-                                                return generateVencidaMessage(
-                                                  p.clientName,
+                                                return buildWhatsAppPaymentMessage({
+                                                  type: "vencido",
+                                                  cliente: p.clientName,
                                                   p,
-                                                  diasAtraso,
-                                                  valorAtualizado,
-                                                  p.prazo,
-                                                );
+                                                  prazo: p.prazo,
+                                                  valor: valorAtualizado,
+                                                  dias: diasAtraso,
+                                                  dataStr: p.dataVencimento,
+                                                });
                                               }
-                                              return `Olá ${(p.clientName || "").split(" ")[0]}, a GM-Empréstimo lembra que ${itemDesc} no valor de ${formatCurrency(p.valorRestante)} vencerá em ${formatDate(p.dataVencimento)}.`;
+                                              return buildWhatsAppPaymentMessage({
+                                                type: "a_vencer",
+                                                cliente: p.clientName,
+                                                p,
+                                                prazo: p.prazo,
+                                                valor: p.valorRestante,
+                                                dataStr: p.dataVencimento,
+                                              });
                                             })(),
                                           )}`}
                                           target="_blank"
@@ -11029,6 +11890,609 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   <p className="text-slate-500">
                     Não há vencimentos para os filtros selecionados.
                   </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!selectedClient && adminTab === "lembretes" && (
+            <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <BellRing size={22} className="text-yellow-500" />
+                    Lembretes Agendados
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-0.5">
+                    Visão consolidada de vencimentos, status de pagamento e cobranças por cliente
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 print:hidden">
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLembretesScope("abater");
+                        try {
+                          localStorage.setItem("gm_lembretes_scope", "abater");
+                        } catch (err) {}
+                      }}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                        lembretesScope === "abater"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      Lembretes (Abater)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLembretesScope("todos");
+                        try {
+                          localStorage.setItem("gm_lembretes_scope", "todos");
+                        } catch (err) {}
+                      }}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                        lembretesScope === "todos"
+                          ? "bg-white text-slate-900 shadow-sm"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      Todos (Lembretes e Parcelas)
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="bg-yellow-100 text-yellow-700 p-2 rounded-lg hover:bg-yellow-200 transition-colors flex items-center justify-center shrink-0"
+                    title="Salvar PDF/Imprimir"
+                  >
+                    <Printer size={20} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Resumo Financeiro Consolidado */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLembretesStatusFilter("all");
+                    try {
+                      localStorage.setItem("gm_lembretes_status_filter", "all");
+                    } catch (err) {}
+                  }}
+                  className={`text-left p-4 rounded-xl border transition-colors ${
+                    lembretesStatusFilter === "all"
+                      ? "bg-slate-50 border-slate-400"
+                      : "bg-white border-slate-200 hover:border-slate-300"
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-slate-500">
+                    Total no Período
+                  </p>
+                  <p className="text-xl font-bold text-slate-900 tabular-nums mt-1">
+                    {formatCurrency(lembretesData.summary.totalValor)}
+                  </p>
+                  <p className="text-xs text-slate-500 tabular-nums mt-0.5">
+                    {lembretesData.summary.totalCount}{" "}
+                    {lembretesData.summary.totalCount === 1 ? "item" : "itens"}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLembretesStatusFilter("pendente");
+                    try {
+                      localStorage.setItem("gm_lembretes_status_filter", "pendente");
+                    } catch (err) {}
+                  }}
+                  className={`text-left p-4 rounded-xl border transition-colors ${
+                    lembretesStatusFilter === "pendente"
+                      ? "bg-amber-50 border-amber-400"
+                      : "bg-white border-slate-200 hover:border-amber-300"
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-amber-700">
+                    Pendentes (A Receber)
+                  </p>
+                  <p className="text-xl font-bold text-amber-900 tabular-nums mt-1">
+                    {formatCurrency(lembretesData.summary.pendentesValor)}
+                  </p>
+                  <p className="text-xs text-amber-700 tabular-nums mt-0.5">
+                    {lembretesData.summary.pendentesCount}{" "}
+                    {lembretesData.summary.pendentesCount === 1 ? "pendente" : "pendentes"}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLembretesStatusFilter("vencido");
+                    try {
+                      localStorage.setItem("gm_lembretes_status_filter", "vencido");
+                    } catch (err) {}
+                  }}
+                  className={`text-left p-4 rounded-xl border transition-colors ${
+                    lembretesStatusFilter === "vencido"
+                      ? "bg-red-50 border-red-400"
+                      : "bg-white border-slate-200 hover:border-red-300"
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-red-600">
+                    Vencidos (Em Atraso)
+                  </p>
+                  <p className="text-xl font-bold text-red-700 tabular-nums mt-1">
+                    {formatCurrency(lembretesData.summary.vencidosValor)}
+                  </p>
+                  <p className="text-xs text-red-600 tabular-nums mt-0.5">
+                    {lembretesData.summary.vencidosCount}{" "}
+                    {lembretesData.summary.vencidosCount === 1 ? "vencido" : "vencidos"}
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLembretesStatusFilter("pago");
+                    try {
+                      localStorage.setItem("gm_lembretes_status_filter", "pago");
+                    } catch (err) {}
+                  }}
+                  className={`text-left p-4 rounded-xl border transition-colors ${
+                    lembretesStatusFilter === "pago"
+                      ? "bg-emerald-50 border-emerald-400"
+                      : "bg-white border-slate-200 hover:border-emerald-300"
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-emerald-700">
+                    Pagos
+                  </p>
+                  <p className="text-xl font-bold text-emerald-800 tabular-nums mt-1">
+                    {formatCurrency(lembretesData.summary.pagosValor)}
+                  </p>
+                  <p className="text-xs text-emerald-700 tabular-nums mt-0.5">
+                    {lembretesData.summary.pagosCount}{" "}
+                    {lembretesData.summary.pagosCount === 1 ? "pago" : "pagos"}
+                  </p>
+                </button>
+              </div>
+
+              {/* Barra de Filtros: Cliente, Status de Pagamento e Data */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-6 pb-6 border-b border-slate-200 print:hidden">
+                <div className="relative lg:col-span-2">
+                  <Search
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    size={16}
+                  />
+                  <input
+                    type="text"
+                    value={lembretesClientFilter}
+                    onChange={(e) => {
+                      setLembretesClientFilter(e.target.value);
+                      try {
+                        localStorage.setItem("gm_lembretes_client_filter", e.target.value);
+                      } catch (err) {}
+                    }}
+                    placeholder="Buscar cliente por nome ou CPF..."
+                    className="w-full pl-9 pr-8 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
+                  />
+                  {lembretesClientFilter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLembretesClientFilter("");
+                        try {
+                          localStorage.setItem("gm_lembretes_client_filter", "");
+                        } catch (err) {}
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      title="Limpar busca"
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <select
+                    value={lembretesClientIdFilter}
+                    onChange={(e) => {
+                      setLembretesClientIdFilter(e.target.value);
+                      try {
+                        localStorage.setItem("gm_lembretes_client_id_filter", e.target.value);
+                      } catch (err) {}
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
+                    aria-label="Filtrar por cliente"
+                  >
+                    <option value="all">Todos os Clientes</option>
+                    {lembretesData.clientOptions.map((cl: any) => (
+                      <option key={cl.id} value={cl.id}>
+                        {cl.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <select
+                    value={lembretesStatusFilter}
+                    onChange={(e) => {
+                      setLembretesStatusFilter(e.target.value);
+                      try {
+                        localStorage.setItem("gm_lembretes_status_filter", e.target.value);
+                      } catch (err) {}
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
+                    aria-label="Filtrar por status de pagamento"
+                  >
+                    <option value="all">Todos os Status</option>
+                    <option value="pendente">Pendentes (Todos)</option>
+                    <option value="pago">Pagos</option>
+                    <option value="vencido">Vencidos</option>
+                    <option value="hoje">Vencendo Hoje</option>
+                    <option value="a_vencer">A Vencer</option>
+                    <option value="congelado">Congelados</option>
+                  </select>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={lembretesDateFilter}
+                    onChange={(e) => {
+                      setLembretesDateFilter(e.target.value);
+                      try {
+                        localStorage.setItem("gm_lembretes_date_filter", e.target.value);
+                      } catch (err) {}
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white"
+                    title="Filtrar por data específica"
+                    aria-label="Filtrar por data específica"
+                  />
+                  {lembretesDateFilter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLembretesDateFilter("");
+                        try {
+                          localStorage.setItem("gm_lembretes_date_filter", "");
+                        } catch (err) {}
+                      }}
+                      className="mt-1 text-xs text-indigo-600 hover:underline font-medium"
+                    >
+                      Limpar data exata
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <select
+                    value={lembretesMonth}
+                    onChange={(e) => {
+                      setLembretesMonth(e.target.value);
+                      if (lembretesDateFilter) {
+                        setLembretesDateFilter("");
+                        try {
+                          localStorage.setItem("gm_lembretes_date_filter", "");
+                        } catch (err) {}
+                      }
+                      try {
+                        localStorage.setItem("gm_lembretes_month", e.target.value);
+                      } catch (err) {}
+                    }}
+                    className={`flex-1 px-2.5 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white ${
+                      lembretesDateFilter ? "opacity-50" : ""
+                    }`}
+                    aria-label="Filtrar por mês"
+                  >
+                    <option value="all">Ano Todo</option>
+                    <option value="01">Jan</option>
+                    <option value="02">Fev</option>
+                    <option value="03">Mar</option>
+                    <option value="04">Abr</option>
+                    <option value="05">Mai</option>
+                    <option value="06">Jun</option>
+                    <option value="07">Jul</option>
+                    <option value="08">Ago</option>
+                    <option value="09">Set</option>
+                    <option value="10">Out</option>
+                    <option value="11">Nov</option>
+                    <option value="12">Dez</option>
+                  </select>
+                  <select
+                    value={lembretesYear}
+                    onChange={(e) => {
+                      setLembretesYear(e.target.value);
+                      if (lembretesDateFilter) {
+                        setLembretesDateFilter("");
+                        try {
+                          localStorage.setItem("gm_lembretes_date_filter", "");
+                        } catch (err) {}
+                      }
+                      try {
+                        localStorage.setItem("gm_lembretes_year", e.target.value);
+                      } catch (err) {}
+                    }}
+                    className={`w-24 px-2 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white ${
+                      lembretesDateFilter ? "opacity-50" : ""
+                    }`}
+                    aria-label="Filtrar por ano"
+                  >
+                    <option value="all">Todos</option>
+                    <option value="2024">2024</option>
+                    <option value="2025">2025</option>
+                    <option value="2026">2026</option>
+                    <option value="2027">2027</option>
+                    <option value="2028">2028</option>
+                    <option value="2029">2029</option>
+                    <option value="2030">2030</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Tabela Consolidada de Lembretes */}
+              {lembretesData.filtered.length > 0 ? (
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-600">
+                        <th className="py-3 px-4 font-semibold">Vencimento</th>
+                        <th className="py-3 px-4 font-semibold">Cliente</th>
+                        <th className="py-3 px-4 font-semibold">Referência</th>
+                        <th className="py-3 px-4 font-semibold">Status</th>
+                        <th className="py-3 px-4 font-semibold text-right">Valor</th>
+                        <th className="py-3 px-4 font-semibold text-right print:hidden">
+                          Ações
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {lembretesData.filtered.map((item: any) => {
+                        const waMessage = item.isPago
+                          ? buildWhatsAppPaymentMessage({
+                              type: "confirmacao",
+                              cliente: item.clientName,
+                              p: item,
+                              prazo: item.prazo,
+                              valor: Number(item.valor || 0),
+                              dataStr: item.dataPagamento || item.dataVencimento,
+                            })
+                          : item.isCongelado
+                            ? buildWhatsAppPaymentMessage({
+                                type: "congelado",
+                                cliente: item.clientName,
+                                p: item,
+                                prazo: item.prazo,
+                                valor: item.valorRestante,
+                                dataStr: item.dataCongelamento || item.dataVencimento,
+                              })
+                            : item.isVencendoHoje
+                              ? buildWhatsAppPaymentMessage({
+                                  type: "vence_hoje",
+                                  cliente: item.clientName,
+                                  p: item,
+                                  prazo: item.prazo,
+                                  valor: item.valorRestante,
+                                  dataStr: item.dataVencimento,
+                                })
+                              : item.isPreVencimento
+                                ? buildWhatsAppPaymentMessage({
+                                    type: "pre_vencimento",
+                                    cliente: item.clientName,
+                                    p: item,
+                                    prazo: item.prazo,
+                                    valor: item.valorRestante,
+                                    dias: item.diasParaVencimento,
+                                    dataStr: item.dataVencimento,
+                                  })
+                                : item.isVencido
+                                  ? buildWhatsAppPaymentMessage({
+                                      type: "vencido",
+                                      cliente: item.clientName,
+                                      p: item,
+                                      prazo: item.prazo,
+                                      valor: item.valorAtualizado,
+                                      dias: item.diasAtraso,
+                                      dataStr: item.dataVencimento,
+                                    })
+                                  : buildWhatsAppPaymentMessage({
+                                      type: "a_vencer",
+                                      cliente: item.clientName,
+                                      p: item,
+                                      prazo: item.prazo,
+                                      valor: item.valorRestante,
+                                      dataStr: item.dataVencimento,
+                                    });
+
+                        return (
+                          <tr
+                            key={item.uniqueKey}
+                            className="hover:bg-slate-50 transition-colors"
+                          >
+                            <td className="py-3 px-4 align-top">
+                              <div className="font-medium text-slate-800 tabular-nums">
+                                {formatDate(item.dataVencimentoClean)}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-0.5">
+                                {item.isPago && item.dataPagamento
+                                  ? `Pago em ${formatDate(item.dataPagamento)}`
+                                  : item.modoLembrete === "quinto_dia_util" ||
+                                      item.prazo === "quinto_dia_util"
+                                    ? "5º Dia Útil"
+                                    : "Vencimento agendado"}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 align-top">
+                              <div className="font-semibold text-slate-800">
+                                {item.clientName}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                                {item.clientCpf}
+                                {item.clientPhone ? ` · ${item.clientPhone}` : ""}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 align-top">
+                              <div className="font-medium text-slate-700">
+                                {item.prazo === "abater"
+                                  ? `Lembrete #${item.numero}`
+                                  : `Parcela #${item.numero}`}
+                              </div>
+                              <div className="text-xs text-slate-500 mt-0.5">
+                                {getPrazoLabel(item.prazo)}
+                                {item.isRenegociacao ? " · Renegociação" : ""}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 align-top">
+                              {item.statusKey === "pago" ? (
+                                <span className="text-xs font-semibold text-emerald-700">
+                                  Pago
+                                </span>
+                              ) : item.statusKey === "congelado" ? (
+                                <div>
+                                  <span className="text-xs font-semibold text-blue-700">
+                                    Congelado
+                                  </span>
+                                  {item.dataCongelamento && (
+                                    <div className="text-xs text-slate-500 tabular-nums">
+                                      até {formatDate(item.dataCongelamento)}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : item.statusKey === "hoje" ? (
+                                <span className="text-xs font-semibold text-amber-700">
+                                  Vence Hoje
+                                </span>
+                              ) : item.statusKey === "vencido" ? (
+                                <span className="text-xs font-semibold text-red-700 tabular-nums">
+                                  Vencido ({item.diasAtraso}{" "}
+                                  {item.diasAtraso === 1 ? "dia" : "dias"})
+                                </span>
+                              ) : item.isPreVencimento ? (
+                                <span className="text-xs font-semibold text-blue-700 tabular-nums">
+                                  Vence em {item.diasParaVencimento}{" "}
+                                  {item.diasParaVencimento === 1 ? "dia" : "dias"}
+                                </span>
+                              ) : (
+                                <span className="text-xs font-semibold text-slate-700">
+                                  A Vencer
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 align-top text-right tabular-nums">
+                              <div className="font-bold text-slate-900">
+                                {formatCurrency(item.valorRestante)}
+                              </div>
+                              {!item.isPago && item.abatimentosTotal > 0 && (
+                                <div className="text-xs text-emerald-600 mt-0.5">
+                                  Abatido: {formatCurrency(item.abatimentosTotal)}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 align-top text-right print:hidden">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleLembretePago(item)}
+                                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                                    item.isPago
+                                      ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                                      : "bg-slate-100 text-slate-700 hover:bg-emerald-600 hover:text-white border border-slate-200"
+                                  }`}
+                                  title={
+                                    item.isPago
+                                      ? "Marcar como pendente"
+                                      : "Marcar como pago"
+                                  }
+                                >
+                                  <Check size={14} />
+                                  {item.isPago ? "Pago" : "Marcar Pago"}
+                                </button>
+                                <a
+                                  href={`https://wa.me/55${(item.clientPhone || "").replace(/\D/g, "")}?text=${encodeURIComponent(waMessage)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
+                                  title="Enviar via WhatsApp"
+                                >
+                                  <Phone size={16} />
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const client = clients.find(
+                                      (c) => c.id === item.clientId,
+                                    );
+                                    if (client) {
+                                      handleSelectClient(client);
+                                      setAdminTab("clientes");
+                                    }
+                                  }}
+                                  className="text-indigo-600 hover:text-indigo-900 font-medium text-xs px-2 py-1.5 rounded-lg hover:bg-indigo-50 transition-colors whitespace-nowrap shrink-0"
+                                >
+                                  Ver Ficha
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="p-12 text-center border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center">
+                  <Bell size={48} className="text-slate-300 mb-3" />
+                  <h3 className="text-lg font-semibold text-slate-700 mb-1">
+                    Nenhum lembrete encontrado
+                  </h3>
+                  <p className="text-sm text-slate-500 max-w-md mb-4">
+                    {lembretesScope === "abater"
+                      ? "Não há lembretes de pagamento (Abater) para os filtros selecionados."
+                      : "Não há lembretes ou parcelas para os filtros selecionados."}
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLembretesStatusFilter("all");
+                        setLembretesDateFilter("");
+                        setLembretesMonth("all");
+                        setLembretesYear("all");
+                        setLembretesClientFilter("");
+                        setLembretesClientIdFilter("all");
+                        try {
+                          localStorage.setItem("gm_lembretes_status_filter", "all");
+                          localStorage.setItem("gm_lembretes_date_filter", "");
+                          localStorage.setItem("gm_lembretes_month", "all");
+                          localStorage.setItem("gm_lembretes_year", "all");
+                          localStorage.setItem("gm_lembretes_client_filter", "");
+                          localStorage.setItem("gm_lembretes_client_id_filter", "all");
+                        } catch (err) {}
+                      }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded-lg transition-colors"
+                    >
+                      Limpar Filtros
+                    </button>
+                    {lembretesScope === "abater" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLembretesScope("todos");
+                          try {
+                            localStorage.setItem("gm_lembretes_scope", "todos");
+                          } catch (err) {}
+                        }}
+                        className="px-4 py-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 text-sm font-medium rounded-lg transition-colors"
+                      >
+                        Incluir Parcelas Regulares
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

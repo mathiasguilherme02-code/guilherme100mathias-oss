@@ -345,17 +345,29 @@ app.post("/api/clients/login", async (req, res) => {
 
 // Get Admin Settings (Public, needed for simulation)
 app.get("/api/settings", async (req, res) => {
+  const defaultSettings = {
+    taxaJuros: '40',
+    taxaAtrasoDia: '8',
+    tipoTaxa: 'mensal',
+    diasLembreteAntecipado: '3',
+    msgLembreteAVencer: 'Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.',
+    msgLembretePreVencimento: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence em {dias} dia(s), no dia {data}.',
+    msgLembreteVenceHoje: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).',
+    msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
+    msgLembreteConfirmacao: 'Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.',
+    msgLembreteVencido: '',
+  };
   try {
     if (!db) {
-      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal', diasLembreteAntecipado: '3' });
+      return res.json(defaultSettings);
     }
     const docRef = doc(db, "admin_settings", "1");
     const docSnap = await getDoc(docRef);
       
     if (!docSnap.exists()) {
-      return res.json({ taxaJuros: '40', taxaAtrasoDia: '8', tipoTaxa: 'mensal', diasLembreteAntecipado: '3' });
+      return res.json(defaultSettings);
     }
-    const data = docSnap.data();
+    const data = { ...defaultSettings, ...docSnap.data() };
     if (!data.diasLembreteAntecipado) {
       data.diasLembreteAntecipado = '3';
     }
@@ -372,12 +384,29 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
     if (!db) {
       return res.json({ success: true });
     }
-    const { taxaJuros, taxaAtrasoDia, tipoTaxa, diasLembreteAntecipado } = req.body;
+    const {
+      taxaJuros,
+      taxaAtrasoDia,
+      tipoTaxa,
+      diasLembreteAntecipado,
+      msgLembreteAVencer,
+      msgLembretePreVencimento,
+      msgLembreteVenceHoje,
+      msgLembreteCongelado,
+      msgLembreteConfirmacao,
+      msgLembreteVencido,
+    } = req.body;
     await setDoc(doc(db, "admin_settings", "1"), {
       taxaJuros,
       taxaAtrasoDia,
       tipoTaxa,
-      diasLembreteAntecipado: diasLembreteAntecipado || '3'
+      diasLembreteAntecipado: diasLembreteAntecipado || '3',
+      ...(msgLembreteAVencer !== undefined ? { msgLembreteAVencer } : {}),
+      ...(msgLembretePreVencimento !== undefined ? { msgLembretePreVencimento } : {}),
+      ...(msgLembreteVenceHoje !== undefined ? { msgLembreteVenceHoje } : {}),
+      ...(msgLembreteCongelado !== undefined ? { msgLembreteCongelado } : {}),
+      ...(msgLembreteConfirmacao !== undefined ? { msgLembreteConfirmacao } : {}),
+      ...(msgLembreteVencido !== undefined ? { msgLembreteVencido } : {}),
     }, { merge: true });
       
     broadcastUpdate('UPDATE_SETTINGS');
