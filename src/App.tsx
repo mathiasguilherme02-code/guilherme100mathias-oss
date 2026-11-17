@@ -5942,8 +5942,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           .filter(
             ({ s }: any) =>
               ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                (s.status === "renegociado" && s.clientAccepted !== "nao") ||
                 (!s.status && s.clientAccepted !== "nao")) &&
-              !s.isRenegociacao,
+              !s.isRenegociacao &&
+              s.prazo !== "abater",
           )
           .map(({ s, originalIndex }: any) => ({
             id: `s-${c.id}-${originalIndex}`,
@@ -5951,6 +5953,30 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             tipo: "saida",
             descricao: `Empréstimo: ${c.nomeCompleto}`,
             detalhes: `Liberação de Crédito - CPF: ${c.cpf}`,
+            valor: parseFloat(s.valorSolicitado || 0),
+            clienteId: c.id,
+          })),
+      ),
+      ...clients.flatMap((c) =>
+        (c.simulacoes || (c.simulacao ? [c.simulacao] : []))
+          .map((s: any, originalIndex: number) => ({ s, originalIndex }))
+          .filter(
+            ({ s }: any) =>
+              ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                (s.status === "renegociado" && s.clientAccepted !== "nao") ||
+                (!s.status && s.clientAccepted !== "nao")) &&
+              (s.isRenegociacao || s.prazo === "abater"),
+          )
+          .map(({ s, originalIndex }: any) => ({
+            id: `r-${c.id}-${originalIndex}`,
+            data: s.dataCriacao || c.dataCadastro || getLocalISODate(),
+            tipo: "renegociado",
+            descricao: s.isRenegociacao
+              ? `Renegociação: ${c.nomeCompleto}`
+              : `Abater (Renegociado): ${c.nomeCompleto}`,
+            detalhes: s.isRenegociacao
+              ? `Renegociação de Dívida (Sem saída de caixa) - CPF: ${c.cpf}`
+              : `Acordo / Abater (Sem saída de caixa) - CPF: ${c.cpf}`,
             valor: parseFloat(s.valorSolicitado || 0),
             clienteId: c.id,
           })),
@@ -6105,8 +6131,30 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   date &&
                   date.startsWith(fluxoFilter) &&
                   ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                    (s.status === "renegociado" && s.clientAccepted !== "nao") ||
                     (!s.status && s.clientAccepted !== "nao")) &&
-                  !s.isRenegociacao
+                  !s.isRenegociacao &&
+                  s.prazo !== "abater"
+                );
+              },
+            ),
+          )
+          .reduce((acc, s) => acc + parseFloat(s.valorSolicitado || 0), 0)
+      : 0;
+
+    const monthRenegociados = isFluxoTab
+      ? clients
+          .flatMap((c) =>
+            (c.simulacoes || (c.simulacao ? [c.simulacao] : [])).filter(
+              (s: any) => {
+                const date = s.dataCriacao || c.dataCadastro;
+                return (
+                  date &&
+                  date.startsWith(fluxoFilter) &&
+                  ((s.status === "aprovado" && s.clientAccepted === "sim") ||
+                    (s.status === "renegociado" && s.clientAccepted !== "nao") ||
+                    (!s.status && s.clientAccepted !== "nao")) &&
+                  (s.isRenegociacao || s.prazo === "abater")
                 );
               },
             ),
@@ -6280,7 +6328,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             sIdx = parseInt(parts[parts.length - 2]);
             cId = parts.slice(1, -2).join("-");
           }
-        } else if (tipo === "saida") {
+        } else if (tipo === "saida" || tipo === "renegociado") {
           sIdx = parseInt(parts[parts.length - 1]);
           cId = parts.slice(1, -1).join("-");
         }
@@ -6366,7 +6414,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           } else {
             updatedClient = client;
           }
-        } else if (tipo === "saida") {
+        } else if (tipo === "saida" || tipo === "renegociado") {
           const clientSimulacoes =
             client.simulacoes || (client.simulacao ? [client.simulacao] : []);
           const updatedSimulacoes = [...clientSimulacoes];
@@ -6424,7 +6472,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               sIdx = parseInt(parts[parts.length - 2]);
               cId = parts.slice(1, -2).join("-");
             }
-          } else if (tipo === "saida") {
+          } else if (tipo === "saida" || tipo === "renegociado") {
             sIdx = parseInt(parts[parts.length - 1]);
             cId = parts.slice(1, -1).join("-");
           }
@@ -6493,7 +6541,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             } else {
               updatedClient = client;
             }
-          } else if (tipo === "saida") {
+          } else if (tipo === "saida" || tipo === "renegociado") {
             const clientSimulacoes =
               client.simulacoes || (client.simulacao ? [client.simulacao] : []);
             const updatedSimulacoes = [...clientSimulacoes];
@@ -6514,10 +6562,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         }
       };
 
-      if (tipo === "saida") {
+      if (tipo === "saida" || tipo === "renegociado") {
         setConfirmModal({
           isOpen: true,
-          title: "Excluir Lançamento de Saída",
+          title:
+            tipo === "renegociado"
+              ? "Excluir Lançamento Renegociado"
+              : "Excluir Lançamento de Saída",
           message: "Deseja fazer isso mesmo?",
           confirmText: "Sim",
           cancelText: "Não",
@@ -11015,6 +11066,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         Entradas Pendentes
                       </option>
                       <option value="saida">Saídas (Empréstimos)</option>
+                      <option value="renegociado">Renegociados</option>
                       <option value="retirada">Despesas Efetivadas</option>
                       <option value="despesa_prevista">
                         Despesas Previstas
@@ -11170,6 +11222,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     </div>
                     <p className="text-2xl font-black text-slate-700">
                       {formatCurrency(monthDespesasPrevistas)}
+                    </p>
+                  </div>
+
+                  <div className="md:col-span-3 bg-indigo-50 border border-indigo-200 p-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw size={20} className="text-indigo-600" />
+                      <div>
+                        <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider">
+                          Renegociados / Abater
+                        </p>
+                        <p className="text-xs text-indigo-600">
+                          Dívidas renegociadas ou para abater no período (não computadas como saída de caixa)
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-2xl font-black text-indigo-700">
+                      {formatCurrency(monthRenegociados)}
                     </p>
                   </div>
                 </div>
@@ -11359,9 +11428,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 ? "bg-yellow-100 text-yellow-700"
                                                 : t.tipo === "saida"
                                                   ? "bg-red-100 text-red-700"
-                                                  : t.tipo === "despesa_fixa"
-                                                    ? "bg-purple-100 text-purple-700"
-                                                    : "bg-orange-100 text-orange-700"
+                                                  : t.tipo === "renegociado"
+                                                    ? "bg-indigo-100 text-indigo-700"
+                                                    : t.tipo === "despesa_fixa"
+                                                      ? "bg-purple-100 text-purple-700"
+                                                      : "bg-orange-100 text-orange-700"
                                         }`}
                                       >
                                         {t.tipo === "aporte"
@@ -11372,9 +11443,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               ? "Previsto"
                                               : t.tipo === "saida"
                                                 ? "Saída"
-                                                : t.tipo === "despesa_fixa"
-                                                  ? "Despesa Fixa"
-                                                  : "Retirada"}
+                                                : t.tipo === "renegociado"
+                                                  ? "Renegociado"
+                                                  : t.tipo === "despesa_fixa"
+                                                    ? "Despesa Fixa"
+                                                    : "Retirada"}
                                       </span>
                                     </td>
                                     <td className="py-3 px-4">
@@ -11386,19 +11459,22 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       </div>
                                     </td>
                                     <td
-                                      className={`py-3 px-4 text-right font-bold ${["aporte", "entrada", "entrada_prevista"].includes(t.tipo) ? "text-emerald-600" : "text-rose-600"}`}
+                                      className={`py-3 px-4 text-right font-bold ${["aporte", "entrada", "entrada_prevista"].includes(t.tipo) ? "text-emerald-600" : t.tipo === "renegociado" ? "text-indigo-600" : "text-rose-600"}`}
                                     >
                                       {[
                                         "aporte",
                                         "entrada",
                                         "entrada_prevista",
                                       ].includes(t.tipo)
-                                        ? "+"
-                                        : "-"}{" "}
+                                        ? "+ "
+                                        : t.tipo === "renegociado"
+                                          ? ""
+                                          : "- "}
                                       {formatCurrency(t.valor)}
                                     </td>
                                     <td className="py-3 px-4 text-right font-medium text-slate-600 bg-slate-50/50">
-                                      {t.tipo === "entrada_prevista"
+                                      {t.tipo === "entrada_prevista" ||
+                                      t.tipo === "renegociado"
                                         ? "-"
                                         : formatCurrency(t.saldoApos)}
                                     </td>
