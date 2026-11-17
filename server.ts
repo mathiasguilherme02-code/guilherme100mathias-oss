@@ -356,6 +356,7 @@ app.get("/api/settings", async (req, res) => {
     msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
     msgLembreteConfirmacao: 'Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.',
     msgLembreteVencido: '',
+    customWhatsAppTemplates: [] as any[],
   };
   try {
     if (!db) {
@@ -370,6 +371,9 @@ app.get("/api/settings", async (req, res) => {
     const data = { ...defaultSettings, ...docSnap.data() };
     if (!data.diasLembreteAntecipado) {
       data.diasLembreteAntecipado = '3';
+    }
+    if (!Array.isArray(data.customWhatsAppTemplates)) {
+      data.customWhatsAppTemplates = [];
     }
     res.json(data);
   } catch (error) {
@@ -395,6 +399,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       msgLembreteCongelado,
       msgLembreteConfirmacao,
       msgLembreteVencido,
+      customWhatsAppTemplates,
     } = req.body;
     await setDoc(doc(db, "admin_settings", "1"), {
       taxaJuros,
@@ -407,6 +412,16 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       ...(msgLembreteCongelado !== undefined ? { msgLembreteCongelado } : {}),
       ...(msgLembreteConfirmacao !== undefined ? { msgLembreteConfirmacao } : {}),
       ...(msgLembreteVencido !== undefined ? { msgLembreteVencido } : {}),
+      ...(Array.isArray(customWhatsAppTemplates)
+        ? {
+            customWhatsAppTemplates: customWhatsAppTemplates.map((t: any) => ({
+              id: String(t?.id || ""),
+              label: String(t?.label || "Modelo Personalizado"),
+              situacao: String(t?.situacao || "personalizado"),
+              text: String(t?.text || ""),
+            })),
+          }
+        : {}),
     }, { merge: true });
       
     broadcastUpdate('UPDATE_SETTINGS');
