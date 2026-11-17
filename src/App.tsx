@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Toaster, toast } from "sonner";
+import { exportFluxoCaixaPDF, exportLembretesPDF } from "./utils/pdfExport";
 import {
   User,
   MapPin,
@@ -7551,6 +7552,150 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       }
     };
 
+    const handleExportLembretesPDF = () => {
+      try {
+        const monthNames: Record<string, string> = {
+          all: "Ano Todo",
+          "01": "Janeiro",
+          "02": "Fevereiro",
+          "03": "Março",
+          "04": "Abril",
+          "05": "Maio",
+          "06": "Junho",
+          "07": "Julho",
+          "08": "Agosto",
+          "09": "Setembro",
+          "10": "Outubro",
+          "11": "Novembro",
+          "12": "Dezembro",
+        };
+        const statusNames: Record<string, string> = {
+          all: "Todos os Status",
+          pendente: "Pendentes (A Receber)",
+          vencido: "Vencidos (Em Atraso)",
+          hoje: "Vence Hoje",
+          a_vencer: "A Vencer",
+          congelado: "Congelados",
+          pago: "Pagos",
+        };
+
+        const scopeLabel =
+          lembretesScope === "abater"
+            ? "Lembretes (Abater)"
+            : "Todos (Lembretes e Parcelas)";
+
+        const periodLabel = lembretesDateFilter
+          ? `Data específica: ${formatDate(lembretesDateFilter)}`
+          : `${monthNames[lembretesMonth] || lembretesMonth} / ${lembretesYear === "all" ? "Todos os anos" : lembretesYear}`;
+
+        const statusLabel =
+          statusNames[lembretesStatusFilter] || lembretesStatusFilter;
+
+        const selectedOpt =
+          lembretesClientIdFilter !== "all"
+            ? lembretesData.clientOptions.find(
+                (c: any) => c.id === lembretesClientIdFilter,
+              )
+            : null;
+        const clientParts: string[] = [];
+        if (selectedOpt) clientParts.push(selectedOpt.name);
+        if (lembretesClientFilter.trim()) {
+          clientParts.push(`Busca: "${lembretesClientFilter.trim()}"`);
+        }
+        const clientFilterLabel =
+          clientParts.length > 0 ? clientParts.join(" · ") : "Todos os Clientes";
+
+        exportLembretesPDF({
+          scopeLabel,
+          periodLabel,
+          statusLabel,
+          clientFilterLabel,
+          summary: lembretesData.summary,
+          items: lembretesData.filtered,
+          formatCurrency,
+          formatDate,
+          getPrazoLabel,
+        });
+        toast.success("PDF dos lembretes filtrados exportado com sucesso!");
+      } catch (error) {
+        console.error("Erro ao exportar PDF de lembretes:", error);
+        toast.error("Erro ao gerar PDF dos lembretes.");
+      }
+    };
+
+    const handleExportFluxoPDF = () => {
+      try {
+        const monthNames: Record<string, string> = {
+          all: "Ano Todo",
+          "01": "Janeiro",
+          "02": "Fevereiro",
+          "03": "Março",
+          "04": "Abril",
+          "05": "Maio",
+          "06": "Junho",
+          "07": "Julho",
+          "08": "Agosto",
+          "09": "Setembro",
+          "10": "Outubro",
+          "11": "Novembro",
+          "12": "Dezembro",
+        };
+        const typeNames: Record<string, string> = {
+          all: "Todos os Tipos",
+          entrada: "Entradas Efetivadas",
+          entrada_prevista: "Entradas Pendentes",
+          saida: "Saídas (Empréstimos)",
+          renegociado: "Renegociados",
+          retirada: "Despesas Efetivadas",
+          despesa_prevista: "Despesas Previstas",
+          aporte: "Aportes",
+        };
+
+        const periodLabel = `${monthNames[fluxoMonth] || fluxoMonth} / ${fluxoYear}`;
+        const filePeriod =
+          fluxoMonth === "all" ? fluxoYear : `${fluxoYear}-${fluxoMonth}`;
+        const typeFilterLabel = typeNames[fluxoTypeFilter] || fluxoTypeFilter;
+
+        const filteredTxs = [...transactionsWithBalance]
+          .filter(
+            (t: any) =>
+              (t.data || "").startsWith(fluxoFilter) &&
+              (fluxoTypeFilter === "all" || t.tipo === fluxoTypeFilter),
+          )
+          .sort((a: any, b: any) => {
+            const dateA = new Date(a.data).getTime();
+            const dateB = new Date(b.data).getTime();
+            if (dateA !== dateB) return dateA - dateB;
+            return (a.descricao || "").localeCompare(b.descricao || "");
+          });
+
+        exportFluxoCaixaPDF({
+          periodLabel,
+          filePeriod,
+          typeFilterLabel,
+          summary: {
+            saldo,
+            fundoDeCaixa,
+            monthEntradas,
+            monthPendentes,
+            monthInadimplencia,
+            monthSaidas,
+            monthRetiradas,
+            monthDespesasPrevistas,
+            monthAportes,
+            monthRenegociados,
+          },
+          transactions: filteredTxs,
+          formatCurrency,
+          formatDate,
+        });
+        toast.success("PDF do resumo do Fluxo de Caixa exportado com sucesso!");
+      } catch (error) {
+        console.error("Erro ao exportar PDF do Fluxo de Caixa:", error);
+        toast.error("Erro ao gerar PDF do Fluxo de Caixa.");
+      }
+    };
+
     return (
       <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
         <div className="absolute top-4 left-4 flex gap-3 print:hidden">
@@ -11945,9 +12090,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </div>
                   <button
                     type="button"
+                    onClick={handleExportLembretesPDF}
+                    className="bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-semibold shrink-0"
+                    title="Exportar lista de lembretes filtrados para PDF"
+                  >
+                    <Download size={16} />
+                    Exportar PDF
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => window.print()}
                     className="bg-yellow-100 text-yellow-700 p-2 rounded-lg hover:bg-yellow-200 transition-colors flex items-center justify-center shrink-0"
-                    title="Salvar PDF/Imprimir"
+                    title="Imprimir"
                   >
                     <Printer size={20} />
                   </button>
@@ -12506,11 +12660,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     <TrendingUp size={24} className="text-yellow-500" />
                     Fluxo de Caixa
                   </h2>
-                  <div className="flex gap-2 print:hidden">
+                  <div className="flex flex-wrap gap-2 print:hidden">
                     <button
+                      type="button"
+                      onClick={handleExportFluxoPDF}
+                      className="bg-slate-800 hover:bg-slate-700 text-white px-3.5 py-2 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-semibold whitespace-nowrap shrink-0"
+                      title="Exportar resumo financeiro mensal para PDF"
+                    >
+                      <Download size={16} />
+                      Exportar PDF
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => window.print()}
-                      className="bg-yellow-100 text-yellow-700 p-2 rounded-lg hover:bg-yellow-200 transition-colors flex items-center justify-center"
-                      title="Salvar PDF/Imprimir"
+                      className="bg-yellow-100 text-yellow-700 p-2 rounded-lg hover:bg-yellow-200 transition-colors flex items-center justify-center shrink-0"
+                      title="Imprimir"
                     >
                       <Printer size={20} />
                     </button>
