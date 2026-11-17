@@ -1052,6 +1052,7 @@ export default function App() {
     taxaAtrasoDia: "8",
     tipoTaxa: "mensal",
     diasLembreteAntecipado: "3",
+    whatsappAppMode: "business" as "business" | "padrao",
     ...DEFAULT_WHATSAPP_TEMPLATES,
     msgTelefones: {} as Partial<Record<WaTemplateKey, string>>,
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
@@ -1060,6 +1061,15 @@ export default function App() {
     "msgLembreteAVencer",
   );
   const waTemplateRef = useRef<HTMLTextAreaElement>(null);
+  const waBusinessLauncherRef = useRef<HTMLAnchorElement>(null);
+  const lastAutoOpenedWaPhoneRef = useRef<string>("");
+  const [autoOpenWaOnPhone, setAutoOpenWaOnPhone] = useState(true);
+  const [waPhonePrompt, setWaPhonePrompt] = useState<{
+    isOpen: boolean;
+    clientName: string;
+    message: string;
+    phone: string;
+  } | null>(null);
   const [isSavingWaSettings, setIsSavingWaSettings] = useState(false);
   const [openCustomWaMenuKey, setOpenCustomWaMenuKey] = useState<string | null>(
     null,
@@ -1276,6 +1286,8 @@ export default function App() {
             ...DEFAULT_WHATSAPP_TEMPLATES,
             diasLembreteAntecipado: settings.diasLembreteAntecipado || "3",
             ...settings,
+            whatsappAppMode:
+              settings.whatsappAppMode === "padrao" ? "padrao" : "business",
             msgTelefones:
               settings.msgTelefones &&
               typeof settings.msgTelefones === "object" &&
@@ -2054,11 +2066,89 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     }));
   };
 
-  const formatWhatsAppHref = (phone: string | undefined, message: string) => {
+  const normalizeWhatsAppDigits = (phone: string | undefined) => {
     const digits = String(phone || "").replace(/\D/g, "");
-    const target =
-      digits.length > 11 && digits.startsWith("55") ? digits : `55${digits}`;
-    return `https://wa.me/${target}?text=${encodeURIComponent(message)}`;
+    if (!digits) return "";
+    return digits.length > 11 && digits.startsWith("55")
+      ? digits
+      : `55${digits}`;
+  };
+
+  const formatWhatsAppHref = (
+    phone: string | undefined,
+    message: string,
+    overrideMode?: "business" | "padrao",
+  ) => {
+    const target = normalizeWhatsAppDigits(phone);
+    const encoded = encodeURIComponent(message || "");
+    const webUrl = `https://api.whatsapp.com/send?phone=${target}&text=${encoded}`;
+    const mode = overrideMode || adminSettings.whatsappAppMode || "business";
+
+    if (mode === "business" && typeof navigator !== "undefined") {
+      const ua = navigator.userAgent || "";
+      if (/Android/i.test(ua)) {
+        return `intent://send?phone=${target}&text=${encoded}#Intent;scheme=whatsapp;package=com.whatsapp.w4b;S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
+      }
+      if (/iPhone|iPad|iPod/i.test(ua)) {
+        return `whatsapp-smb://send?phone=${target}&text=${encoded}`;
+      }
+      return webUrl;
+    }
+
+    return `https://wa.me/${target}?text=${encoded}`;
+  };
+
+  const launchWhatsAppBusiness = (phone: string, message: string) => {
+    const digits = String(phone || "").replace(/\D/g, "");
+    if (digits.length < 10) return false;
+    const href = formatWhatsAppHref(phone, message);
+    if (waBusinessLauncherRef.current) {
+      waBusinessLauncherRef.current.href = href;
+      waBusinessLauncherRef.current.click();
+      return true;
+    }
+    return false;
+  };
+
+  const shouldAutoOpenOnPhoneEntry = (
+    prevRaw: string,
+    nextRaw: string,
+    isPaste = false,
+  ) => {
+    const prevDigits = String(prevRaw || "").replace(/\D/g, "");
+    const nextDigits = String(nextRaw || "").replace(/\D/g, "");
+    if (nextDigits.length < 10 || nextDigits.length <= prevDigits.length) {
+      return false;
+    }
+    if (isPaste) {
+      return nextDigits.length >= 10;
+    }
+    if (!nextDigits.startsWith("55") && nextDigits.length === 11 && prevDigits.length < 11) {
+      return true;
+    }
+    if (nextDigits.startsWith("55") && nextDigits.length === 13 && prevDigits.length < 13) {
+      return true;
+    }
+    return false;
+  };
+
+  const handleWhatsAppLinkClick = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    targetPhone: string | undefined,
+    clientName: string,
+    message: string,
+  ) => {
+    const digits = String(targetPhone || "").replace(/\D/g, "");
+    if (digits.length < 10) {
+      e.preventDefault();
+      lastAutoOpenedWaPhoneRef.current = "";
+      setWaPhonePrompt({
+        isOpen: true,
+        clientName,
+        message,
+        phone: targetPhone || "",
+      });
+    }
   };
 
   const resolveWhatsAppTargetPhone = (
@@ -3173,6 +3263,136 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
   const renderModals = () => (
     <>
+      <a
+        ref={waBusinessLauncherRef}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="hidden"
+        aria-hidden="true"
+      />
+      {waPhonePrompt?.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setWaPhonePrompt(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
+            >
+              <X size={22} />
+            </button>
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-10 h-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center shrink-0">
+                <Phone size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">
+                  Enviar no WhatsApp Business
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {waPhonePrompt.clientName
+                    ? `Cliente: ${waPhonePrompt.clientName}`
+                    : "Informe o celular para abrir a conversa"}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Número de Celular (com DDD)
+                </label>
+                <input
+                  type="tel"
+                  autoFocus
+                  value={waPhonePrompt.phone}
+                  onChange={(e) => {
+                    const nextPhone = e.target.value;
+                    const prevPhone = waPhonePrompt.phone;
+                    setWaPhonePrompt((prev) =>
+                      prev ? { ...prev, phone: nextPhone } : prev,
+                    );
+                    const nextDigits = nextPhone.replace(/\D/g, "");
+                    if (
+                      shouldAutoOpenOnPhoneEntry(prevPhone, nextPhone) &&
+                      lastAutoOpenedWaPhoneRef.current !==
+                        `prompt:${nextDigits}`
+                    ) {
+                      lastAutoOpenedWaPhoneRef.current = `prompt:${nextDigits}`;
+                      launchWhatsAppBusiness(nextPhone, waPhonePrompt.message);
+                    }
+                  }}
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData.getData("text");
+                    const digits = pasted.replace(/\D/g, "");
+                    if (
+                      digits.length >= 10 &&
+                      lastAutoOpenedWaPhoneRef.current !== `prompt:${digits}`
+                    ) {
+                      lastAutoOpenedWaPhoneRef.current = `prompt:${digits}`;
+                      setTimeout(() => {
+                        launchWhatsAppBusiness(pasted, waPhonePrompt.message);
+                      }, 0);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (
+                        waPhonePrompt.phone.replace(/\D/g, "").length >= 10
+                      ) {
+                        launchWhatsAppBusiness(
+                          waPhonePrompt.phone,
+                          waPhonePrompt.message,
+                        );
+                      }
+                    }
+                  }}
+                  placeholder="(31) 99999-9999"
+                  className="w-full px-3.5 py-2.5 text-sm font-medium text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Ao completar os 11 dígitos do celular (ou pressionar Enter), o WhatsApp Business abrirá automaticamente.
+                </p>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-slate-700 whitespace-pre-line max-h-36 overflow-y-auto">
+                {waPhonePrompt.message}
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setWaPhonePrompt(null)}
+                  className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                {waPhonePrompt.phone.replace(/\D/g, "").length >= 10 ? (
+                  <a
+                    href={formatWhatsAppHref(
+                      waPhonePrompt.phone,
+                      waPhonePrompt.message,
+                    )}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setWaPhonePrompt(null)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors"
+                  >
+                    <Phone size={14} />
+                    Abrir WhatsApp Business
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed"
+                  >
+                    <Phone size={14} />
+                    Abrir WhatsApp Business
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Modals */}
       {showReprovadoAlert && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -8509,6 +8729,27 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         <div className="flex flex-wrap items-center gap-2.5">
                           <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
                             <label className="text-xs font-medium text-slate-600 whitespace-nowrap">
+                              App de envio:
+                            </label>
+                            <select
+                              value={adminSettings.whatsappAppMode || "business"}
+                              onChange={(e) =>
+                                setAdminSettings({
+                                  ...adminSettings,
+                                  whatsappAppMode:
+                                    e.target.value === "padrao"
+                                      ? "padrao"
+                                      : "business",
+                                })
+                              }
+                              className="px-2 py-0.5 text-xs font-semibold text-emerald-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500"
+                            >
+                              <option value="business">WhatsApp Business</option>
+                              <option value="padrao">WhatsApp Padrão / Web</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                            <label className="text-xs font-medium text-slate-600 whitespace-nowrap">
                               Pré-notificar com:
                             </label>
                             <input
@@ -8715,76 +8956,143 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             </div>
                           )}
 
-                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                            <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1.5">
-                              <Phone size={12} className="text-emerald-600" />
-                              Celular de Destino para esta Mensagem (Opcional)
-                            </label>
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                              <input
-                                type="tel"
-                                value={
-                                  activeCustomTemplate
-                                    ? activeCustomTemplate.telefone || ""
-                                    : adminSettings.msgTelefones?.[
-                                        resolvedBuiltIn!.key
-                                      ] || ""
-                                }
-                                onChange={(e) => {
-                                  const rawVal = e.target.value;
-                                  if (activeCustomTemplate) {
-                                    handleUpdateCustomTemplate(
-                                      activeCustomTemplate.id,
-                                      { telefone: rawVal },
-                                    );
-                                  } else if (resolvedBuiltIn) {
-                                    setAdminSettings((prev) => ({
-                                      ...prev,
-                                      msgTelefones: {
-                                        ...(prev.msgTelefones || {}),
-                                        [resolvedBuiltIn.key]: rawVal,
-                                      },
-                                    }));
-                                  }
-                                }}
-                                placeholder="(31) 99999-9999 — deixe em branco para usar o celular do cliente"
-                                className="flex-1 px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none tabular-nums"
-                              />
-                              {((activeCustomTemplate &&
-                                activeCustomTemplate.telefone) ||
-                                (!activeCustomTemplate &&
-                                  resolvedBuiltIn &&
-                                  adminSettings.msgTelefones?.[
-                                    resolvedBuiltIn.key
-                                  ])) && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (activeCustomTemplate) {
-                                      handleUpdateCustomTemplate(
-                                        activeCustomTemplate.id,
-                                        { telefone: "" },
+                          {(() => {
+                            const currentPhoneVal = activeCustomTemplate
+                              ? activeCustomTemplate.telefone || ""
+                              : adminSettings.msgTelefones?.[
+                                  resolvedBuiltIn!.key
+                                ] || "";
+                            const currentPhoneDigits = currentPhoneVal.replace(
+                              /\D/g,
+                              "",
+                            );
+                            const updateTemplatePhone = (rawVal: string) => {
+                              if (activeCustomTemplate) {
+                                handleUpdateCustomTemplate(
+                                  activeCustomTemplate.id,
+                                  { telefone: rawVal },
+                                );
+                              } else if (resolvedBuiltIn) {
+                                setAdminSettings((prev) => ({
+                                  ...prev,
+                                  msgTelefones: {
+                                    ...(prev.msgTelefones || {}),
+                                    [resolvedBuiltIn.key]: rawVal,
+                                  },
+                                }));
+                              }
+                            };
+                            return (
+                              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                                <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1.5">
+                                  <Phone size={12} className="text-emerald-600" />
+                                  Celular de Destino para esta Mensagem (Opcional)
+                                </label>
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                  <input
+                                    type="tel"
+                                    value={currentPhoneVal}
+                                    onChange={(e) => {
+                                      const rawVal = e.target.value;
+                                      const prevVal = currentPhoneVal;
+                                      updateTemplatePhone(rawVal);
+                                      const nextDigits = rawVal.replace(
+                                        /\D/g,
+                                        "",
                                       );
-                                    } else if (resolvedBuiltIn) {
-                                      setAdminSettings((prev) => ({
-                                        ...prev,
-                                        msgTelefones: {
-                                          ...(prev.msgTelefones || {}),
-                                          [resolvedBuiltIn.key]: "",
-                                        },
-                                      }));
-                                    }
-                                  }}
-                                  className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition-colors shrink-0"
-                                >
-                                  Usar celular do cliente
-                                </button>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-slate-500 mt-1">
-                              Se preenchido, o botão de WhatsApp enviará esta mensagem diretamente para este número em vez do celular cadastrado na ficha.
-                            </p>
-                          </div>
+                                      if (
+                                        autoOpenWaOnPhone &&
+                                        shouldAutoOpenOnPhoneEntry(
+                                          prevVal,
+                                          rawVal,
+                                        ) &&
+                                        lastAutoOpenedWaPhoneRef.current !==
+                                          `${effectiveKey}:${nextDigits}`
+                                      ) {
+                                        lastAutoOpenedWaPhoneRef.current = `${effectiveKey}:${nextDigits}`;
+                                        launchWhatsAppBusiness(
+                                          rawVal,
+                                          previewText || "",
+                                        );
+                                      }
+                                    }}
+                                    onPaste={(e) => {
+                                      if (!autoOpenWaOnPhone) return;
+                                      const pasted =
+                                        e.clipboardData.getData("text");
+                                      const digits = pasted.replace(/\D/g, "");
+                                      if (
+                                        digits.length >= 10 &&
+                                        lastAutoOpenedWaPhoneRef.current !==
+                                          `${effectiveKey}:${digits}`
+                                      ) {
+                                        lastAutoOpenedWaPhoneRef.current = `${effectiveKey}:${digits}`;
+                                        setTimeout(() => {
+                                          launchWhatsAppBusiness(
+                                            pasted,
+                                            previewText || "",
+                                          );
+                                        }, 0);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (
+                                        e.key === "Enter" &&
+                                        currentPhoneDigits.length >= 10
+                                      ) {
+                                        e.preventDefault();
+                                        launchWhatsAppBusiness(
+                                          currentPhoneVal,
+                                          previewText || "",
+                                        );
+                                      }
+                                    }}
+                                    placeholder="(31) 99999-9999 — deixe em branco para usar o celular do cliente"
+                                    className="flex-1 px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none tabular-nums"
+                                  />
+                                  {currentPhoneDigits.length >= 10 && (
+                                    <a
+                                      href={formatWhatsAppHref(
+                                        currentPhoneVal,
+                                        previewText || "",
+                                      )}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shrink-0"
+                                    >
+                                      <Phone size={13} />
+                                      Abrir WhatsApp Business
+                                    </a>
+                                  )}
+                                  {currentPhoneVal && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateTemplatePhone("")}
+                                      className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition-colors shrink-0"
+                                    >
+                                      Usar celular do cliente
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+                                    <input
+                                      type="checkbox"
+                                      checked={autoOpenWaOnPhone}
+                                      onChange={(e) =>
+                                        setAutoOpenWaOnPhone(e.target.checked)
+                                      }
+                                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    Abrir o WhatsApp Business automaticamente após digitar o celular (ou Enter)
+                                  </label>
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-1">
+                                  Se preenchido, envia esta mensagem diretamente para este número no WhatsApp Business em vez do celular cadastrado na ficha.
+                                </p>
+                              </div>
+                            );
+                          })()}
 
                           <p className="text-xs text-slate-600">{activeHint}</p>
                           <div className="flex flex-wrap items-center gap-1.5">
@@ -8879,21 +9187,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       </span>
                                     )}
                                   </div>
-                                  {cleanTargetDigits.length >= 10 &&
-                                    previewText && (
-                                      <a
-                                        href={formatWhatsAppHref(
-                                          configuredTargetPhone,
-                                          previewText,
-                                        )}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="mt-3 inline-flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors"
-                                      >
-                                        <Phone size={14} />
-                                        Testar / Enviar para {configuredTargetPhone}
-                                      </a>
-                                    )}
+                                  {cleanTargetDigits.length >= 10 && (
+                                    <a
+                                      href={formatWhatsAppHref(
+                                        configuredTargetPhone,
+                                        previewText || "",
+                                      )}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="mt-3 inline-flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors"
+                                    >
+                                      <Phone size={14} />
+                                      Abrir WhatsApp Business ({configuredTargetPhone})
+                                    </a>
+                                  )}
                                 </>
                               );
                             })()}
@@ -11325,125 +11632,122 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             </div>
                                           )}
 
-                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
-                                            <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
-                                              <a
-                                                href={formatWhatsAppHref(
-                                                  resolveWhatsAppTargetPhone(
-                                                    selectedClient.telefone,
-                                                    p.jurosCongelados ? "congelado" : "vencido",
-                                                  ),
-                                                  buildWhatsAppPaymentMessage({
-                                                    type: p.jurosCongelados ? "congelado" : "vencido",
-                                                    cliente: selectedClient.nomeCompleto,
-                                                    p,
-                                                    prazo: sim.prazo,
-                                                    valor: valorAtualizado,
-                                                    dias: diasAtraso,
-                                                    dataStr: p.jurosCongelados
-                                                      ? p.dataCongelamento || p.dataVencimento
-                                                      : p.dataVencimento,
-                                                  }),
-                                                )}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                              >
-                                                <Phone size={16} />
-                                                {p.jurosCongelados
-                                                  ? "Enviar Acordo de Congelamento via WhatsApp"
-                                                  : sim.prazo === "abater"
-                                                    ? "Notificar Lembrete Vencido via WhatsApp"
-                                                    : "Notificar Parcela Vencida via WhatsApp"}
-                                              </a>
-                                            </div>
-                                          )}
+                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (() => {
+                                            const waType = p.jurosCongelados ? "congelado" : "vencido";
+                                            const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, waType);
+                                            const msg = buildWhatsAppPaymentMessage({
+                                              type: waType,
+                                              cliente: selectedClient.nomeCompleto,
+                                              p,
+                                              prazo: sim.prazo,
+                                              valor: valorAtualizado,
+                                              dias: diasAtraso,
+                                              dataStr: p.jurosCongelados
+                                                ? p.dataCongelamento || p.dataVencimento
+                                                : p.dataVencimento,
+                                            });
+                                            return (
+                                              <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
+                                                <a
+                                                  href={formatWhatsAppHref(targetPhone, msg)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
+                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                >
+                                                  <Phone size={16} />
+                                                  {p.jurosCongelados
+                                                    ? "Enviar Acordo de Congelamento via WhatsApp"
+                                                    : sim.prazo === "abater"
+                                                      ? "Notificar Lembrete Vencido via WhatsApp"
+                                                      : "Notificar Parcela Vencida via WhatsApp"}
+                                                </a>
+                                              </div>
+                                            );
+                                          })()}
 
-                                          {isVencendoHoje && (
-                                            <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
-                                              <a
-                                                href={formatWhatsAppHref(
-                                                  resolveWhatsAppTargetPhone(
-                                                    selectedClient.telefone,
-                                                    "vence_hoje",
-                                                  ),
-                                                  buildWhatsAppPaymentMessage({
-                                                    type: "vence_hoje",
-                                                    cliente: selectedClient.nomeCompleto,
-                                                    p,
-                                                    prazo: sim.prazo,
-                                                    valor: valorAtualizado,
-                                                    dataStr: p.dataVencimento,
-                                                  }),
-                                                )}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                              >
-                                                <Phone size={16} />
-                                                {sim.prazo === "abater"
-                                                  ? "Notificar Lembrete de Vencimento Hoje via WhatsApp"
-                                                  : "Notificar Vencimento Hoje via WhatsApp"}
-                                              </a>
-                                            </div>
-                                          )}
+                                          {isVencendoHoje && (() => {
+                                            const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "vence_hoje");
+                                            const msg = buildWhatsAppPaymentMessage({
+                                              type: "vence_hoje",
+                                              cliente: selectedClient.nomeCompleto,
+                                              p,
+                                              prazo: sim.prazo,
+                                              valor: valorAtualizado,
+                                              dataStr: p.dataVencimento,
+                                            });
+                                            return (
+                                              <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
+                                                <a
+                                                  href={formatWhatsAppHref(targetPhone, msg)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
+                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                >
+                                                  <Phone size={16} />
+                                                  {sim.prazo === "abater"
+                                                    ? "Notificar Lembrete de Vencimento Hoje via WhatsApp"
+                                                    : "Notificar Vencimento Hoje via WhatsApp"}
+                                                </a>
+                                              </div>
+                                            );
+                                          })()}
 
-                                          {isPreVencimento && (
-                                            <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
-                                              <a
-                                                href={formatWhatsAppHref(
-                                                  resolveWhatsAppTargetPhone(
-                                                    selectedClient.telefone,
-                                                    "pre_vencimento",
-                                                  ),
-                                                  buildWhatsAppPaymentMessage({
-                                                    type: "pre_vencimento",
-                                                    cliente: selectedClient.nomeCompleto,
-                                                    p,
-                                                    prazo: sim.prazo,
-                                                    valor: valorAtualizado,
-                                                    dias: diasParaVencimento,
-                                                    dataStr: p.dataVencimento,
-                                                  }),
-                                                )}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                              >
-                                                <Phone size={16} />
-                                                {sim.prazo === "abater"
-                                                  ? `Pré-notificar Lembrete (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`
-                                                  : `Pré-notificar Vencimento (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`}
-                                              </a>
-                                            </div>
-                                          )}
+                                          {isPreVencimento && (() => {
+                                            const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "pre_vencimento");
+                                            const msg = buildWhatsAppPaymentMessage({
+                                              type: "pre_vencimento",
+                                              cliente: selectedClient.nomeCompleto,
+                                              p,
+                                              prazo: sim.prazo,
+                                              valor: valorAtualizado,
+                                              dias: diasParaVencimento,
+                                              dataStr: p.dataVencimento,
+                                            });
+                                            return (
+                                              <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
+                                                <a
+                                                  href={formatWhatsAppHref(targetPhone, msg)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
+                                                  className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                >
+                                                  <Phone size={16} />
+                                                  {sim.prazo === "abater"
+                                                    ? `Pré-notificar Lembrete (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`
+                                                    : `Pré-notificar Vencimento (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`}
+                                                </a>
+                                              </div>
+                                            );
+                                          })()}
 
-                                          {p.paga && !isEditing && (
-                                            <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
-                                              <a
-                                                href={formatWhatsAppHref(
-                                                  resolveWhatsAppTargetPhone(
-                                                    selectedClient.telefone,
-                                                    "confirmacao",
-                                                  ),
-                                                  buildWhatsAppPaymentMessage({
-                                                    type: "confirmacao",
-                                                    cliente: selectedClient.nomeCompleto,
-                                                    p,
-                                                    prazo: sim.prazo,
-                                                    valor: Number(p.valor || 0),
-                                                    dataStr: p.dataPagamento || p.dataVencimento,
-                                                  }),
-                                                )}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                              >
-                                                <Phone size={16} />
-                                                Confirmar Pagamento via WhatsApp
-                                              </a>
-                                            </div>
-                                          )}
+                                          {p.paga && !isEditing && (() => {
+                                            const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "confirmacao");
+                                            const msg = buildWhatsAppPaymentMessage({
+                                              type: "confirmacao",
+                                              cliente: selectedClient.nomeCompleto,
+                                              p,
+                                              prazo: sim.prazo,
+                                              valor: Number(p.valor || 0),
+                                              dataStr: p.dataPagamento || p.dataVencimento,
+                                            });
+                                            return (
+                                              <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
+                                                <a
+                                                  href={formatWhatsAppHref(targetPhone, msg)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
+                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                >
+                                                  <Phone size={16} />
+                                                  Confirmar Pagamento via WhatsApp
+                                                </a>
+                                              </div>
+                                            );
+                                          })()}
 
                                           {!isEditing &&
                                             (() => {
@@ -11503,11 +11807,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           )}
                                                           target="_blank"
                                                           rel="noopener noreferrer"
-                                                          onClick={() =>
+                                                          onClick={(e) => {
                                                             setOpenCustomWaMenuKey(
                                                               null,
-                                                            )
-                                                          }
+                                                            );
+                                                            handleWhatsAppLinkClick(
+                                                              e,
+                                                              cm.phone,
+                                                              selectedClient.nomeCompleto,
+                                                              cm.message,
+                                                            );
+                                                          }}
                                                           className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                                         >
                                                           <div className="min-w-0">
@@ -12433,15 +12743,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     </td>
                                     <td className="py-3 px-6 text-right print:hidden">
                                       <div className="flex items-center justify-end gap-2">
-                                        <a
-                                          href={(() => {
+                                        {(() => {
+                                          const cronoWa = (() => {
                                             if (p.jurosCongelados) {
-                                              return formatWhatsAppHref(
-                                                resolveWhatsAppTargetPhone(
-                                                  p.clientPhone,
-                                                  "congelado",
-                                                ),
-                                                buildWhatsAppPaymentMessage({
+                                              return {
+                                                phone: resolveWhatsAppTargetPhone(p.clientPhone, "congelado"),
+                                                msg: buildWhatsAppPaymentMessage({
                                                   type: "congelado",
                                                   cliente: p.clientName,
                                                   p,
@@ -12449,14 +12756,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataCongelamento || p.dataVencimento,
                                                 }),
-                                              );
-                                            } else if (isVencendoHoje) {
-                                              return formatWhatsAppHref(
-                                                resolveWhatsAppTargetPhone(
-                                                  p.clientPhone,
-                                                  "vence_hoje",
-                                                ),
-                                                buildWhatsAppPaymentMessage({
+                                              };
+                                            }
+                                            if (isVencendoHoje) {
+                                              return {
+                                                phone: resolveWhatsAppTargetPhone(p.clientPhone, "vence_hoje"),
+                                                msg: buildWhatsAppPaymentMessage({
                                                   type: "vence_hoje",
                                                   cliente: p.clientName,
                                                   p,
@@ -12464,14 +12769,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataVencimento,
                                                 }),
-                                              );
-                                            } else if (isPreVencimento) {
-                                              return formatWhatsAppHref(
-                                                resolveWhatsAppTargetPhone(
-                                                  p.clientPhone,
-                                                  "pre_vencimento",
-                                                ),
-                                                buildWhatsAppPaymentMessage({
+                                              };
+                                            }
+                                            if (isPreVencimento) {
+                                              return {
+                                                phone: resolveWhatsAppTargetPhone(p.clientPhone, "pre_vencimento"),
+                                                msg: buildWhatsAppPaymentMessage({
                                                   type: "pre_vencimento",
                                                   cliente: p.clientName,
                                                   p,
@@ -12480,8 +12783,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   dias: diasParaVencimento,
                                                   dataStr: p.dataVencimento,
                                                 }),
-                                              );
-                                            } else if (isVencida) {
+                                              };
+                                            }
+                                            if (isVencida) {
                                               const diasAtraso = getParcelaDiasAtraso(p, hoje);
                                               const hasDailyInterest =
                                                 p.prazo === "abater"
@@ -12490,38 +12794,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       parseFloat(p.taxaAtrasoDia || "0") > 0)
                                                   : true;
                                               const taxaDia = hasDailyInterest
-                                                ? parseFloat(
-                                                    p.taxaAtrasoDia,
-                                                  ) ||
-                                                  parseFloat(
-                                                    adminSettings.taxaAtrasoDia,
-                                                  ) ||
+                                                ? parseFloat(p.taxaAtrasoDia) ||
+                                                  parseFloat(adminSettings.taxaAtrasoDia) ||
                                                   1
                                                 : 0;
-                                              const abatimentosTotal =
-                                                p.abatimentos
-                                                  ? p.abatimentos.reduce(
-                                                      (acc: number, a: any) =>
-                                                        acc + a.valor,
-                                                      0,
-                                                    )
-                                                  : 0;
+                                              const abatimentosTotal = p.abatimentos
+                                                ? p.abatimentos.reduce((acc: number, a: any) => acc + a.valor, 0)
+                                                : 0;
                                               let valorAtualizado =
                                                 Number(p.valor) +
-                                                Number(p.valor) *
-                                                  (taxaDia / 100) *
-                                                  diasAtraso;
-                                              valorAtualizado = Math.max(
-                                                0,
-                                                valorAtualizado -
-                                                  abatimentosTotal,
-                                              );
-                                              return formatWhatsAppHref(
-                                                resolveWhatsAppTargetPhone(
-                                                  p.clientPhone,
-                                                  "vencido",
-                                                ),
-                                                buildWhatsAppPaymentMessage({
+                                                Number(p.valor) * (taxaDia / 100) * diasAtraso;
+                                              valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
+                                              return {
+                                                phone: resolveWhatsAppTargetPhone(p.clientPhone, "vencido"),
+                                                msg: buildWhatsAppPaymentMessage({
                                                   type: "vencido",
                                                   cliente: p.clientName,
                                                   p,
@@ -12530,14 +12816,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   dias: diasAtraso,
                                                   dataStr: p.dataVencimento,
                                                 }),
-                                              );
+                                              };
                                             }
-                                            return formatWhatsAppHref(
-                                              resolveWhatsAppTargetPhone(
-                                                p.clientPhone,
-                                                "a_vencer",
-                                              ),
-                                              buildWhatsAppPaymentMessage({
+                                            return {
+                                              phone: resolveWhatsAppTargetPhone(p.clientPhone, "a_vencer"),
+                                              msg: buildWhatsAppPaymentMessage({
                                                 type: "a_vencer",
                                                 cliente: p.clientName,
                                                 p,
@@ -12545,15 +12828,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 valor: p.valorRestante,
                                                 dataStr: p.dataVencimento,
                                               }),
-                                            );
-                                          })()}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="text-green-600 hover:text-green-800 p-1 rounded-full hover:bg-green-50 transition-colors"
-                                          title="Notificar via WhatsApp"
-                                        >
-                                          <Phone size={18} />
-                                        </a>
+                                            };
+                                          })();
+                                          return (
+                                            <a
+                                              href={formatWhatsAppHref(cronoWa.phone, cronoWa.msg)}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) =>
+                                                handleWhatsAppLinkClick(
+                                                  e,
+                                                  cronoWa.phone,
+                                                  p.clientName,
+                                                  cronoWa.msg,
+                                                )
+                                              }
+                                              className="text-green-600 hover:text-green-800 p-1 rounded-full hover:bg-green-50 transition-colors"
+                                              title="Notificar via WhatsApp Business"
+                                            >
+                                              <Phone size={18} />
+                                            </a>
+                                          );
+                                        })()}
                                         {(() => {
                                           const customMsgs =
                                             getCustomWhatsAppMessages({
@@ -12607,11 +12903,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                       )}
                                                       target="_blank"
                                                       rel="noopener noreferrer"
-                                                      onClick={() =>
+                                                      onClick={(e) => {
                                                         setOpenCustomWaMenuKey(
                                                           null,
-                                                        )
-                                                      }
+                                                        );
+                                                        handleWhatsAppLinkClick(
+                                                          e,
+                                                          cm.phone,
+                                                          p.clientName,
+                                                          cm.message,
+                                                        );
+                                                      }}
                                                       className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                                     >
                                                       <div className="min-w-0">
@@ -13219,31 +13521,44 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   <Check size={14} />
                                   {item.isPago ? "Pago" : "Marcar Pago"}
                                 </button>
-                                <a
-                                  href={formatWhatsAppHref(
-                                    resolveWhatsAppTargetPhone(
-                                      item.clientPhone,
-                                      item.isPago
-                                        ? "confirmacao"
-                                        : item.isCongelado
-                                          ? "congelado"
-                                          : item.isVencendoHoje
-                                            ? "vence_hoje"
-                                            : item.isPreVencimento
-                                              ? "pre_vencimento"
-                                              : item.isVencido
-                                                ? "vencido"
-                                                : "a_vencer",
-                                    ),
-                                    waMessage,
-                                  )}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
-                                  title="Enviar via WhatsApp"
-                                >
-                                  <Phone size={16} />
-                                </a>
+                                {(() => {
+                                  const lembreteTargetPhone = resolveWhatsAppTargetPhone(
+                                    item.clientPhone,
+                                    item.isPago
+                                      ? "confirmacao"
+                                      : item.isCongelado
+                                        ? "congelado"
+                                        : item.isVencendoHoje
+                                          ? "vence_hoje"
+                                          : item.isPreVencimento
+                                            ? "pre_vencimento"
+                                            : item.isVencido
+                                              ? "vencido"
+                                              : "a_vencer",
+                                  );
+                                  return (
+                                    <a
+                                      href={formatWhatsAppHref(
+                                        lembreteTargetPhone,
+                                        waMessage,
+                                      )}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) =>
+                                        handleWhatsAppLinkClick(
+                                          e,
+                                          lembreteTargetPhone,
+                                          item.clientName,
+                                          waMessage,
+                                        )
+                                      }
+                                      className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
+                                      title="Enviar via WhatsApp Business"
+                                    >
+                                      <Phone size={16} />
+                                    </a>
+                                  );
+                                })()}
                                 {(() => {
                                   const customMsgs =
                                     getCustomWhatsAppMessages({
@@ -13302,9 +13617,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               )}
                                               target="_blank"
                                               rel="noopener noreferrer"
-                                              onClick={() =>
-                                                setOpenCustomWaMenuKey(null)
-                                              }
+                                              onClick={(e) => {
+                                                setOpenCustomWaMenuKey(null);
+                                                handleWhatsAppLinkClick(
+                                                  e,
+                                                  cm.phone,
+                                                  item.clientName,
+                                                  cm.message,
+                                                );
+                                              }}
                                               className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
                                             >
                                               <div className="min-w-0">

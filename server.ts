@@ -358,6 +358,7 @@ app.get("/api/settings", async (req, res) => {
     msgLembreteVencido: '',
     msgTelefones: {} as Record<string, string>,
     customWhatsAppTemplates: [] as any[],
+    whatsappAppMode: 'business',
   };
   try {
     if (!db) {
@@ -378,6 +379,9 @@ app.get("/api/settings", async (req, res) => {
     }
     if (!Array.isArray(data.customWhatsAppTemplates)) {
       data.customWhatsAppTemplates = [];
+    }
+    if (data.whatsappAppMode !== 'business' && data.whatsappAppMode !== 'padrao') {
+      data.whatsappAppMode = 'business';
     }
     res.json(data);
   } catch (error) {
@@ -405,12 +409,16 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       msgLembreteVencido,
       msgTelefones,
       customWhatsAppTemplates,
+      whatsappAppMode,
     } = req.body;
     await setDoc(doc(db, "admin_settings", "1"), {
       taxaJuros,
       taxaAtrasoDia,
       tipoTaxa,
       diasLembreteAntecipado: diasLembreteAntecipado || '3',
+      ...(whatsappAppMode === 'business' || whatsappAppMode === 'padrao'
+        ? { whatsappAppMode }
+        : {}),
       ...(msgLembreteAVencer !== undefined ? { msgLembreteAVencer } : {}),
       ...(msgLembretePreVencimento !== undefined ? { msgLembretePreVencimento } : {}),
       ...(msgLembreteVenceHoje !== undefined ? { msgLembreteVenceHoje } : {}),
