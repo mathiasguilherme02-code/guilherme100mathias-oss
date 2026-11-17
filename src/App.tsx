@@ -53,6 +53,7 @@ import {
   Image as ImageIcon,
   Bell,
   BellRing,
+  Copy,
 } from "lucide-react";
 
 export interface AdminNotification {
@@ -1070,6 +1071,7 @@ export default function App() {
     message: string;
     phone: string;
   } | null>(null);
+  const [waPreviewClientId, setWaPreviewClientId] = useState<string>("");
   const [isSavingWaSettings, setIsSavingWaSettings] = useState(false);
   const [openCustomWaMenuKey, setOpenCustomWaMenuKey] = useState<string | null>(
     null,
@@ -2132,6 +2134,20 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     return false;
   };
 
+  const openManualWhatsAppSend = (
+    clientName: string,
+    message: string,
+    initialPhone = "",
+  ) => {
+    lastAutoOpenedWaPhoneRef.current = "";
+    setWaPhonePrompt({
+      isOpen: true,
+      clientName,
+      message,
+      phone: initialPhone,
+    });
+  };
+
   const handleWhatsAppLinkClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
     targetPhone: string | undefined,
@@ -2141,13 +2157,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     const digits = String(targetPhone || "").replace(/\D/g, "");
     if (digits.length < 10) {
       e.preventDefault();
-      lastAutoOpenedWaPhoneRef.current = "";
-      setWaPhonePrompt({
-        isOpen: true,
-        clientName,
-        message,
-        phone: targetPhone || "",
-      });
+      openManualWhatsAppSend(clientName, message, targetPhone || "");
     }
   };
 
@@ -3286,12 +3296,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               </div>
               <div>
                 <h3 className="text-base font-bold text-slate-800">
-                  Enviar no WhatsApp Business
+                  Enviar Mensagem para Número Manual
                 </h3>
                 <p className="text-xs text-slate-500">
                   {waPhonePrompt.clientName
-                    ? `Cliente: ${waPhonePrompt.clientName}`
-                    : "Informe o celular para abrir a conversa"}
+                    ? `Referente ao cliente: ${waPhonePrompt.clientName}`
+                    : "Informe o celular manualmente para enviar no WhatsApp Business"}
                 </p>
               </div>
             </div>
@@ -3300,94 +3310,154 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Número de Celular (com DDD)
                 </label>
-                <input
-                  type="tel"
-                  autoFocus
-                  value={waPhonePrompt.phone}
-                  onChange={(e) => {
-                    const nextPhone = e.target.value;
-                    const prevPhone = waPhonePrompt.phone;
-                    setWaPhonePrompt((prev) =>
-                      prev ? { ...prev, phone: nextPhone } : prev,
-                    );
-                    const nextDigits = nextPhone.replace(/\D/g, "");
-                    if (
-                      shouldAutoOpenOnPhoneEntry(prevPhone, nextPhone) &&
-                      lastAutoOpenedWaPhoneRef.current !==
-                        `prompt:${nextDigits}`
-                    ) {
-                      lastAutoOpenedWaPhoneRef.current = `prompt:${nextDigits}`;
-                      launchWhatsAppBusiness(nextPhone, waPhonePrompt.message);
-                    }
-                  }}
-                  onPaste={(e) => {
-                    const pasted = e.clipboardData.getData("text");
-                    const digits = pasted.replace(/\D/g, "");
-                    if (
-                      digits.length >= 10 &&
-                      lastAutoOpenedWaPhoneRef.current !== `prompt:${digits}`
-                    ) {
-                      lastAutoOpenedWaPhoneRef.current = `prompt:${digits}`;
-                      setTimeout(() => {
-                        launchWhatsAppBusiness(pasted, waPhonePrompt.message);
-                      }, 0);
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
+                <div className="flex items-center gap-2">
+                  <input
+                    type="tel"
+                    autoFocus
+                    value={waPhonePrompt.phone}
+                    onChange={(e) => {
+                      const nextPhone = e.target.value;
+                      const prevPhone = waPhonePrompt.phone;
+                      setWaPhonePrompt((prev) =>
+                        prev ? { ...prev, phone: nextPhone } : prev,
+                      );
+                      const nextDigits = nextPhone.replace(/\D/g, "");
                       if (
-                        waPhonePrompt.phone.replace(/\D/g, "").length >= 10
+                        autoOpenWaOnPhone &&
+                        shouldAutoOpenOnPhoneEntry(prevPhone, nextPhone) &&
+                        lastAutoOpenedWaPhoneRef.current !==
+                          `prompt:${nextDigits}`
                       ) {
+                        lastAutoOpenedWaPhoneRef.current = `prompt:${nextDigits}`;
                         launchWhatsAppBusiness(
-                          waPhonePrompt.phone,
+                          nextPhone,
                           waPhonePrompt.message,
                         );
                       }
-                    }
-                  }}
-                  placeholder="(31) 99999-9999"
-                  className="w-full px-3.5 py-2.5 text-sm font-medium text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
-                />
+                    }}
+                    onPaste={(e) => {
+                      if (!autoOpenWaOnPhone) return;
+                      const pasted = e.clipboardData.getData("text");
+                      const digits = pasted.replace(/\D/g, "");
+                      if (
+                        digits.length >= 10 &&
+                        lastAutoOpenedWaPhoneRef.current !== `prompt:${digits}`
+                      ) {
+                        lastAutoOpenedWaPhoneRef.current = `prompt:${digits}`;
+                        setTimeout(() => {
+                          launchWhatsAppBusiness(pasted, waPhonePrompt.message);
+                        }, 0);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (
+                          waPhonePrompt.phone.replace(/\D/g, "").length >= 10
+                        ) {
+                          launchWhatsAppBusiness(
+                            waPhonePrompt.phone,
+                            waPhonePrompt.message,
+                          );
+                        }
+                      }
+                    }}
+                    placeholder="(31) 99999-9999"
+                    className="flex-1 px-3.5 py-2.5 text-sm font-medium text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
+                  />
+                  {waPhonePrompt.phone.replace(/\D/g, "").length >= 10 ? (
+                    <a
+                      href={formatWhatsAppHref(
+                        waPhonePrompt.phone,
+                        waPhonePrompt.message,
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setWaPhonePrompt(null)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-xl transition-colors shrink-0"
+                    >
+                      <Send size={14} />
+                      Enviar
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold text-white bg-slate-300 rounded-xl cursor-not-allowed shrink-0"
+                    >
+                      <Send size={14} />
+                      Enviar
+                    </button>
+                  )}
+                </div>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Ao completar os 11 dígitos do celular (ou pressionar Enter), o WhatsApp Business abrirá automaticamente.
+                  Digite o DDD + celular e clique em <strong>Enviar</strong> (ou pressione Enter).
                 </p>
               </div>
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-slate-700 whitespace-pre-line max-h-36 overflow-y-auto">
-                {waPhonePrompt.message}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Mensagem a enviar
+                </label>
+                <textarea
+                  rows={4}
+                  value={waPhonePrompt.message}
+                  onChange={(e) =>
+                    setWaPhonePrompt((prev) =>
+                      prev ? { ...prev, message: e.target.value } : prev,
+                    )
+                  }
+                  className="w-full px-3 py-2 text-xs text-slate-800 bg-emerald-50/70 border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none leading-relaxed"
+                />
               </div>
-              <div className="flex items-center justify-end gap-2 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setWaPhonePrompt(null)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                  onClick={() => {
+                    navigator.clipboard
+                      ?.writeText(waPhonePrompt.message)
+                      .then(() =>
+                        toast.success("Mensagem copiada para a área de transferência!"),
+                      )
+                      .catch(() => {});
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                 >
-                  Cancelar
+                  <Copy size={13} />
+                  Copiar Mensagem
                 </button>
-                {waPhonePrompt.phone.replace(/\D/g, "").length >= 10 ? (
-                  <a
-                    href={formatWhatsAppHref(
-                      waPhonePrompt.phone,
-                      waPhonePrompt.message,
-                    )}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => setWaPhonePrompt(null)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors"
-                  >
-                    <Phone size={14} />
-                    Abrir WhatsApp Business
-                  </a>
-                ) : (
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    disabled
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed"
+                    onClick={() => setWaPhonePrompt(null)}
+                    className="px-3.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                   >
-                    <Phone size={14} />
-                    Abrir WhatsApp Business
+                    Cancelar
                   </button>
-                )}
+                  {waPhonePrompt.phone.replace(/\D/g, "").length >= 10 ? (
+                    <a
+                      href={formatWhatsAppHref(
+                        waPhonePrompt.phone,
+                        waPhonePrompt.message,
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setWaPhonePrompt(null)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors"
+                    >
+                      <Send size={14} />
+                      Enviar no WhatsApp Business
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed"
+                    >
+                      <Send size={14} />
+                      Enviar no WhatsApp Business
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -8694,16 +8764,41 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       : "Este campo personalizado será usado automaticamente na situação vinculada e também ficará disponível no menu rápido."
                     : resolvedBuiltIn!.hint;
 
+                  const selectedSampleClient = waPreviewClientId
+                    ? clients.find((c: any) => String(c.id) === waPreviewClientId)
+                    : null;
+                  const sampleSim = selectedSampleClient
+                    ? (selectedSampleClient.simulacoes ||
+                        (selectedSampleClient.simulacao
+                          ? [selectedSampleClient.simulacao]
+                          : []))[0]
+                    : null;
+                  const sampleParcela = sampleSim?.parcelas?.[0] || null;
+                  const previewCliente =
+                    selectedSampleClient?.nomeCompleto || "Maria Silva";
+                  const previewValor = sampleParcela
+                    ? formatCurrency(Number(sampleParcela.valor || 0))
+                    : "R$ 350,00";
+                  const previewData = sampleParcela?.dataVencimento
+                    ? formatDate(sampleParcela.dataVencimento)
+                    : "(20/11/2026) - Sexta-Feira";
+                  const previewReferencia =
+                    sampleSim?.prazo === "abater"
+                      ? "seu Lembrete de Pagamento"
+                      : sampleParcela?.numero
+                        ? `sua Parcela ${sampleParcela.numero}`
+                        : "seu Lembrete de Pagamento";
+
                   const previewText =
                     !activeCustomTemplate &&
                     resolvedBuiltIn?.key === "msgLembreteVencido" &&
                     !currentTemplateValue.trim()
-                      ? "Olá, Maria. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde 12/11/2026.\n\nO valor total da sua dívida (vencida há 5 dias) é de R$ 350,00.\n\nPor favor, regularize o quanto antes para evitar maiores encargos."
+                      ? `Olá, ${previewCliente.split(" ")[0]}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida (${previewReferencia}), referente à data ${previewData}.\n\nO valor é de ${previewValor}.\n\nPor favor, regularize o quanto antes para evitar maiores encargos.`
                       : renderWhatsAppTemplate(currentTemplateValue, {
-                          cliente: "Maria Silva",
-                          valor: "R$ 350,00",
-                          data: "(20/11/2026) - Sexta-Feira",
-                          referencia: "seu Lembrete de Pagamento",
+                          cliente: previewCliente,
+                          valor: previewValor,
+                          data: previewData,
+                          referencia: previewReferencia,
                           dias:
                             resolvedBuiltIn?.key === "msgLembreteVencido" ||
                             activeCustomTemplate?.situacao === "vencido"
@@ -8966,6 +9061,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               /\D/g,
                               "",
                             );
+                            const isManualPhoneValid =
+                              currentPhoneDigits.length >= 10;
                             const updateTemplatePhone = (rawVal: string) => {
                               if (activeCustomTemplate) {
                                 handleUpdateCustomTemplate(
@@ -8983,11 +9080,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               }
                             };
                             return (
-                              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                                <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1.5">
-                                  <Phone size={12} className="text-emerald-600" />
-                                  Celular de Destino para esta Mensagem (Opcional)
-                                </label>
+                              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
+                                    <Phone size={12} className="text-emerald-600" />
+                                    Celular de Destino para esta Mensagem (Manual / Opcional)
+                                  </label>
+                                  {isManualPhoneValid && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                                      <Check size={11} />
+                                      Número manual pronto
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                                   <input
                                     type="tel"
@@ -9038,7 +9143,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     onKeyDown={(e) => {
                                       if (
                                         e.key === "Enter" &&
-                                        currentPhoneDigits.length >= 10
+                                        isManualPhoneValid
                                       ) {
                                         e.preventDefault();
                                         launchWhatsAppBusiness(
@@ -9050,7 +9155,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     placeholder="(31) 99999-9999 — deixe em branco para usar o celular do cliente"
                                     className="flex-1 px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none tabular-nums"
                                   />
-                                  {currentPhoneDigits.length >= 10 && (
+                                  {isManualPhoneValid ? (
                                     <a
                                       href={formatWhatsAppHref(
                                         currentPhoneVal,
@@ -9058,11 +9163,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       )}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shrink-0"
+                                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shrink-0 shadow-sm"
                                     >
-                                      <Phone size={13} />
-                                      Abrir WhatsApp Business
+                                      <Send size={13} />
+                                      Enviar Mensagem
                                     </a>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      title="Digite o DDD + número do celular (mínimo 10 dígitos) para enviar"
+                                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed shrink-0"
+                                    >
+                                      <Send size={13} />
+                                      Enviar Mensagem
+                                    </button>
                                   )}
                                   {currentPhoneVal && (
                                     <button
@@ -9070,11 +9185,78 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       onClick={() => updateTemplatePhone("")}
                                       className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition-colors shrink-0"
                                     >
-                                      Usar celular do cliente
+                                      Limpar
                                     </button>
                                   )}
                                 </div>
-                                <div className="mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+
+                                {isManualPhoneValid && (
+                                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex flex-col gap-2">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                      <span className="text-[11px] font-semibold text-emerald-900">
+                                        Envio direto para o número manual:{" "}
+                                        <span className="tabular-nums underline">
+                                          {currentPhoneVal}
+                                        </span>
+                                      </span>
+                                      <div className="flex items-center gap-1.5">
+                                        <a
+                                          href={formatWhatsAppHref(
+                                            currentPhoneVal,
+                                            previewText || "",
+                                          )}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors"
+                                        >
+                                          <Send size={12} />
+                                          Enviar no WhatsApp Business
+                                        </a>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            navigator.clipboard
+                                              ?.writeText(previewText || "")
+                                              .then(() =>
+                                                toast.success(
+                                                  "Mensagem copiada!",
+                                                ),
+                                              )
+                                              .catch(() => {});
+                                          }}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+                                        >
+                                          <Copy size={12} />
+                                          Copiar
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                      <label className="text-[11px] font-medium text-emerald-900 whitespace-nowrap">
+                                        Usar dados do cliente na mensagem:
+                                      </label>
+                                      <select
+                                        value={waPreviewClientId}
+                                        onChange={(e) =>
+                                          setWaPreviewClientId(e.target.value)
+                                        }
+                                        className="flex-1 px-2.5 py-1 text-xs text-slate-800 bg-white border border-emerald-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
+                                      >
+                                        <option value="">
+                                          Exemplo padrão (Maria Silva — R$ 350,00)
+                                        </option>
+                                        {clients.map((c: any) => (
+                                          <option key={c.id} value={String(c.id)}>
+                                            {c.nomeCompleto}
+                                            {c.telefone ? ` (${c.telefone})` : ""}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                   <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
                                     <input
                                       type="checkbox"
@@ -9087,8 +9269,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     Abrir o WhatsApp Business automaticamente após digitar o celular (ou Enter)
                                   </label>
                                 </div>
-                                <p className="text-[11px] text-slate-500 mt-1">
-                                  Se preenchido, envia esta mensagem diretamente para este número no WhatsApp Business em vez do celular cadastrado na ficha.
+                                <p className="text-[11px] text-slate-500">
+                                  Se preenchido, o botão <strong>Enviar Mensagem</strong> envia diretamente para o número adicionado manualmente; caso contrário, utiliza o celular cadastrado na ficha do cliente.
                                 </p>
                               </div>
                             );
@@ -9197,8 +9379,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       rel="noopener noreferrer"
                                       className="mt-3 inline-flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors"
                                     >
-                                      <Phone size={14} />
-                                      Abrir WhatsApp Business ({configuredTargetPhone})
+                                      <Send size={14} />
+                                      Enviar Mensagem para {configuredTargetPhone}
                                     </a>
                                   )}
                                 </>
@@ -9206,7 +9388,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             })()}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-3">
-                            Exemplo exibido com dados fictícios: Maria Silva, R$ 350,00, (20/11/2026) - Sexta-Feira. As alterações passam a valer na Ficha do Cliente, Cronograma e Lembretes Agendados após clicar em &ldquo;Salvar Mensagens&rdquo;.
+                            {waPreviewClientId
+                              ? `Pré-visualização preenchida com os dados de ${previewCliente}.`
+                              : "Exemplo exibido com dados fictícios: Maria Silva, R$ 350,00, (20/11/2026) - Sexta-Feira."} As alterações nos modelos passam a valer na Ficha do Cliente, Cronograma e Lembretes Agendados após clicar em &ldquo;Salvar Mensagens&rdquo;.
                           </p>
                         </div>
                       </div>
@@ -11646,25 +11830,34 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 ? p.dataCongelamento || p.dataVencimento
                                                 : p.dataVencimento,
                                             });
-                                            return (
-                                              <div className="mt-3 pt-3 border-t border-slate-200 print:hidden">
-                                                <a
-                                                  href={formatWhatsAppHref(targetPhone, msg)}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
-                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                                >
-                                                  <Phone size={16} />
-                                                  {p.jurosCongelados
-                                                    ? "Enviar Acordo de Congelamento via WhatsApp"
-                                                    : sim.prazo === "abater"
-                                                      ? "Notificar Lembrete Vencido via WhatsApp"
-                                                      : "Notificar Parcela Vencida via WhatsApp"}
-                                                </a>
-                                              </div>
-                                            );
-                                          })()}
+                                              return (
+                                                <div className="mt-3 pt-3 border-t border-slate-200 print:hidden flex flex-col sm:flex-row gap-2">
+                                                  <a
+                                                    href={formatWhatsAppHref(targetPhone, msg)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
+                                                    className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                  >
+                                                    <Phone size={16} />
+                                                    {p.jurosCongelados
+                                                      ? "Enviar Acordo de Congelamento via WhatsApp"
+                                                      : sim.prazo === "abater"
+                                                        ? "Notificar Lembrete Vencido via WhatsApp"
+                                                        : "Notificar Parcela Vencida via WhatsApp"}
+                                                  </a>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => openManualWhatsAppSend(selectedClient.nomeCompleto, msg)}
+                                                    title="Adicionar número manualmente e enviar esta mensagem"
+                                                    className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                  >
+                                                    <Send size={14} />
+                                                    Enviar p/ Nº Manual
+                                                  </button>
+                                                </div>
+                                              );
+                                            })()}
 
                                           {isVencendoHoje && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "vence_hoje");
@@ -11677,19 +11870,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               dataStr: p.dataVencimento,
                                             });
                                             return (
-                                              <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden">
+                                              <div className="mt-3 pt-3 border-t border-yellow-200 print:hidden flex flex-col sm:flex-row gap-2">
                                                 <a
                                                   href={formatWhatsAppHref(targetPhone, msg)}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
-                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                  className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                                 >
                                                   <Phone size={16} />
                                                   {sim.prazo === "abater"
                                                     ? "Notificar Lembrete de Vencimento Hoje via WhatsApp"
                                                     : "Notificar Vencimento Hoje via WhatsApp"}
                                                 </a>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openManualWhatsAppSend(selectedClient.nomeCompleto, msg)}
+                                                  title="Adicionar número manualmente e enviar esta mensagem"
+                                                  className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                >
+                                                  <Send size={14} />
+                                                  Enviar p/ Nº Manual
+                                                </button>
                                               </div>
                                             );
                                           })()}
@@ -11706,19 +11908,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               dataStr: p.dataVencimento,
                                             });
                                             return (
-                                              <div className="mt-3 pt-3 border-t border-blue-200 print:hidden">
+                                              <div className="mt-3 pt-3 border-t border-blue-200 print:hidden flex flex-col sm:flex-row gap-2">
                                                 <a
                                                   href={formatWhatsAppHref(targetPhone, msg)}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
-                                                  className="flex justify-center items-center gap-2 w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                  className="flex-1 flex justify-center items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                                 >
                                                   <Phone size={16} />
                                                   {sim.prazo === "abater"
                                                     ? `Pré-notificar Lembrete (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`
                                                     : `Pré-notificar Vencimento (${diasParaVencimento} dia${diasParaVencimento > 1 ? "s" : ""})`}
                                                 </a>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openManualWhatsAppSend(selectedClient.nomeCompleto, msg)}
+                                                  title="Adicionar número manualmente e enviar esta mensagem"
+                                                  className="flex justify-center items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                >
+                                                  <Send size={14} />
+                                                  Enviar p/ Nº Manual
+                                                </button>
                                               </div>
                                             );
                                           })()}
@@ -11734,17 +11945,26 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               dataStr: p.dataPagamento || p.dataVencimento,
                                             });
                                             return (
-                                              <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden">
+                                              <div className="mt-3 pt-3 border-t border-emerald-200 print:hidden flex flex-col sm:flex-row gap-2">
                                                 <a
                                                   href={formatWhatsAppHref(targetPhone, msg)}
                                                   target="_blank"
                                                   rel="noopener noreferrer"
                                                   onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
-                                                  className="flex justify-center items-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                  className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
                                                 >
                                                   <Phone size={16} />
                                                   Confirmar Pagamento via WhatsApp
                                                 </a>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openManualWhatsAppSend(selectedClient.nomeCompleto, msg)}
+                                                  title="Adicionar número manualmente e enviar esta mensagem"
+                                                  className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                >
+                                                  <Send size={14} />
+                                                  Enviar p/ Nº Manual
+                                                </button>
                                               </div>
                                             );
                                           })()}
@@ -12831,23 +13051,38 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             };
                                           })();
                                           return (
-                                            <a
-                                              href={formatWhatsAppHref(cronoWa.phone, cronoWa.msg)}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              onClick={(e) =>
-                                                handleWhatsAppLinkClick(
-                                                  e,
-                                                  cronoWa.phone,
-                                                  p.clientName,
-                                                  cronoWa.msg,
-                                                )
-                                              }
-                                              className="text-green-600 hover:text-green-800 p-1 rounded-full hover:bg-green-50 transition-colors"
-                                              title="Notificar via WhatsApp Business"
-                                            >
-                                              <Phone size={18} />
-                                            </a>
+                                            <>
+                                              <a
+                                                href={formatWhatsAppHref(cronoWa.phone, cronoWa.msg)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                onClick={(e) =>
+                                                  handleWhatsAppLinkClick(
+                                                    e,
+                                                    cronoWa.phone,
+                                                    p.clientName,
+                                                    cronoWa.msg,
+                                                  )
+                                                }
+                                                className="text-green-600 hover:text-green-800 p-1 rounded-full hover:bg-green-50 transition-colors"
+                                                title="Notificar via WhatsApp Business"
+                                              >
+                                                <Phone size={18} />
+                                              </a>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  openManualWhatsAppSend(
+                                                    p.clientName,
+                                                    cronoWa.msg,
+                                                  )
+                                                }
+                                                className="text-emerald-700 hover:text-emerald-900 p-1 rounded-full hover:bg-emerald-50 transition-colors"
+                                                title="Digitar número manual e enviar mensagem"
+                                              >
+                                                <Send size={15} />
+                                              </button>
+                                            </>
                                           );
                                         })()}
                                         {(() => {
@@ -13537,26 +13772,41 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               : "a_vencer",
                                   );
                                   return (
-                                    <a
-                                      href={formatWhatsAppHref(
-                                        lembreteTargetPhone,
-                                        waMessage,
-                                      )}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) =>
-                                        handleWhatsAppLinkClick(
-                                          e,
+                                    <>
+                                      <a
+                                        href={formatWhatsAppHref(
                                           lembreteTargetPhone,
-                                          item.clientName,
                                           waMessage,
-                                        )
-                                      }
-                                      className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
-                                      title="Enviar via WhatsApp Business"
-                                    >
-                                      <Phone size={16} />
-                                    </a>
+                                        )}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(e) =>
+                                          handleWhatsAppLinkClick(
+                                            e,
+                                            lembreteTargetPhone,
+                                            item.clientName,
+                                            waMessage,
+                                          )
+                                        }
+                                        className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors shrink-0"
+                                        title="Enviar via WhatsApp Business"
+                                      >
+                                        <Phone size={16} />
+                                      </a>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          openManualWhatsAppSend(
+                                            item.clientName,
+                                            waMessage,
+                                          )
+                                        }
+                                        className="text-emerald-700 hover:text-emerald-900 p-1.5 rounded-lg hover:bg-emerald-50 transition-colors shrink-0"
+                                        title="Digitar número manual e enviar mensagem"
+                                      >
+                                        <Send size={15} />
+                                      </button>
+                                    </>
                                   );
                                 })()}
                                 {(() => {
