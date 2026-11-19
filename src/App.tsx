@@ -54,7 +54,21 @@ import {
   Bell,
   BellRing,
   Copy,
+  Play,
+  SkipForward,
+  CalendarClock,
 } from "lucide-react";
+import {
+  DEFAULT_WHATSAPP_TEMPLATES,
+  DEFAULT_AUTO_SCHEDULE_CONFIG,
+  AutoScheduleConfig,
+  ScheduledWhatsAppNotification,
+  normalizeAutoScheduleConfig,
+  getBrazilTodayISO,
+  WaTemplateKey,
+  WaSituacaoType,
+  CustomWhatsAppTemplate,
+} from "./utils/whatsappReminders";
 
 export interface AdminNotification {
   id: string;
@@ -76,39 +90,6 @@ export interface Produto {
   preco: string;
   precoOferta?: string;
   imagemUrl?: string;
-}
-
-const DEFAULT_WHATSAPP_TEMPLATES = {
-  msgLembreteAVencer:
-    "Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.",
-  msgLembretePreVencimento:
-    "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence em {dias} dia(s), no dia {data}.",
-  msgLembreteVenceHoje:
-    "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).",
-  msgLembreteCongelado:
-    "Olá {cliente}, a GM-Empréstimo informa que sua dívida no valor {valor_divida} está com juros congelados desde {data}.\n\n{abatimentos}\n\nSeu saldo devedor é de {valor}.",
-  msgLembreteConfirmacao:
-    "Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.",
-  msgLembreteVencido: "",
-};
-
-type WaTemplateKey = keyof typeof DEFAULT_WHATSAPP_TEMPLATES;
-
-type WaSituacaoType =
-  | "personalizado"
-  | "a_vencer"
-  | "pre_vencimento"
-  | "vence_hoje"
-  | "congelado"
-  | "vencido"
-  | "confirmacao";
-
-interface CustomWhatsAppTemplate {
-  id: string;
-  label: string;
-  situacao: WaSituacaoType;
-  text: string;
-  telefone?: string;
 }
 
 const WA_TEMPLATE_OPTIONS: Array<{
@@ -1068,6 +1049,7 @@ export default function App() {
     ...DEFAULT_WHATSAPP_TEMPLATES,
     msgTelefones: {} as Partial<Record<WaTemplateKey, string>>,
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
+    autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG } as AutoScheduleConfig,
   });
   const [activeWaTemplateKey, setActiveWaTemplateKey] = useState<string>(
     "msgLembreteAVencer",
@@ -1087,6 +1069,233 @@ export default function App() {
   const [openCustomWaMenuKey, setOpenCustomWaMenuKey] = useState<string | null>(
     null,
   );
+
+  // Automatic WhatsApp Reminder Schedule State
+  const [waScheduleLogs, setWaScheduleLogs] = useState<
+    ScheduledWhatsAppNotification[]
+  >([]);
+  const [waScheduleSummary, setWaScheduleSummary] = useState({
+    todayTotal: 0,
+    todayPending: 0,
+    todaySent: 0,
+    todayErrors: 0,
+    todayIgnored: 0,
+  });
+  const [waScheduleTodayISO, setWaScheduleTodayISO] = useState(
+    getBrazilTodayISO(),
+  );
+  const [isLoadingWaSchedule, setIsLoadingWaSchedule] = useState(false);
+  const [isRunningWaSchedule, setIsRunningWaSchedule] = useState(false);
+  const [isSavingAutoSchedule, setIsSavingAutoSchedule] = useState(false);
+  const [showWaSchedulePanel, setShowWaSchedulePanel] = useState(false);
+  const [waScheduleStatusFilter, setWaScheduleStatusFilter] = useState<
+    "all" | "pendente" | "enviado" | "erro" | "ignorado"
+  >("pendente");
+  const [waScheduleDateScope, setWaScheduleDateScope] = useState<
+    "hoje" | "todos"
+  >("hoje");
+  const [waBatchDispatcher, setWaBatchDispatcher] = useState<{
+    isOpen: boolean;
+    queue: ScheduledWhatsAppNotification[];
+    currentIndex: number;
+    editingPhone: string;
+  } | null>(null);
+
+  const fetchWaSchedule = async (tokenOverride?: string) => {
+    const token = tokenOverride || adminToken;
+    if (!token) return;
+    setIsLoadingWaSchedule(true);
+    try {
+      const res = await fetch("/api/whatsapp-schedule", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWaScheduleLogs(Array.isArray(data.logs) ? data.logs : []);
+        if (data.summary) setWaScheduleSummary(data.summary);
+        if (data.todayISO) setWaScheduleTodayISO(data.todayISO);
+        if (data.config) {
+          setAdminSettings((prev) => ({
+            ...prev,
+            autoScheduleConfig: normalizeAutoScheduleConfig(data.config),
+          }));
+        }
+      }
+    } catch (error) {
+      console.error("Erro ao carregar fila de agendamento WhatsApp:", error);
+    } finally {
+      setIsLoadingWaSchedule(false);
+    }
+  };
+
+  const handleRunWaSchedule = async (openPanelOnResult = true) => {
+    if (!adminToken) return;
+    setIsRunningWaSchedule(true);
+    try {
+      const res = await fetch("/api/whatsapp-schedule/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        await fetchWaSchedule();
+        if (openPanelOnResult) {
+          setShowWaSchedulePanel(true);
+        }
+        if (result.alreadyRunning) {
+          toast.info("Verificação já está em andamento.");
+        } else if (result.totalEvaluated === 0) {
+          toast.info(
+            "Nenhuma parcela elegível pelas regras de agendamento para hoje.",
+          );
+        } else if (result.sent > 0) {
+          toast.success(
+            `Agendamento concluído: ${result.sent} enviada(s) automaticamente${result.errors > 0 ? `, ${result.errors} erro(s)` : ""}.`,
+          );
+        } else if (result.errors > 0) {
+          toast.warning(
+            `Agendamento concluído com ${result.errors} erro(s). Verifique a fila.`,
+          );
+        } else {
+          toast.success(
+            `Fila atualizada: ${result.pending} notificação(ões) pronta(s) para envio.`,
+          );
+        }
+      } else {
+        toast.error("Erro ao executar agendamento automático.");
+      }
+    } catch (error) {
+      toast.error("Erro de conexão ao executar agendamento.");
+    } finally {
+      setIsRunningWaSchedule(false);
+    }
+  };
+
+  const handleUpdateWaScheduleItem = async (
+    id: string,
+    patch: {
+      status?: "pendente" | "enviado" | "erro" | "ignorado";
+      phone?: string;
+      message?: string;
+      deliveryMethod?: "whatsapp_business" | "webhook_api" | "manual";
+    },
+  ) => {
+    if (!adminToken) return;
+    try {
+      const res = await fetch(`/api/whatsapp-schedule/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.item) {
+          setWaScheduleLogs((prev) =>
+            prev.map((l) => (l.id === id ? data.item : l)),
+          );
+        }
+        fetchWaSchedule();
+      }
+    } catch (err) {
+      console.error("Erro ao atualizar status do agendamento:", err);
+    }
+  };
+
+  const handleResendWaScheduleItem = async (id: string) => {
+    if (!adminToken) return;
+    try {
+      const res = await fetch(
+        `/api/whatsapp-schedule/${encodeURIComponent(id)}/resend`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${adminToken}` },
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (data.item) {
+        setWaScheduleLogs((prev) =>
+          prev.map((l) => (l.id === id ? data.item : l)),
+        );
+      }
+      fetchWaSchedule();
+      if (data.success) {
+        toast.success("Notificação processada com sucesso.");
+      } else if (data.error) {
+        toast.error(data.error);
+      }
+    } catch (err) {
+      toast.error("Erro ao reenviar notificação.");
+    }
+  };
+
+  const handleDeleteWaScheduleItem = async (id: string) => {
+    if (!adminToken) return;
+    try {
+      const res = await fetch(`/api/whatsapp-schedule/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      if (res.ok) {
+        setWaScheduleLogs((prev) => prev.filter((l) => l.id !== id));
+        fetchWaSchedule();
+        toast.success("Registro removido da fila.");
+      }
+    } catch (err) {
+      toast.error("Erro ao remover registro.");
+    }
+  };
+
+  const handleSaveAutoScheduleSettings = async () => {
+    if (!adminToken) return;
+    setIsSavingAutoSchedule(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(adminSettings),
+      });
+      if (res.ok) {
+        toast.success("Configurações de agendamento automático salvas!");
+        fetchWaSchedule();
+      } else {
+        toast.error("Erro ao salvar configurações de agendamento.");
+      }
+    } catch (err) {
+      toast.error("Erro de conexão ao salvar agendamento.");
+    } finally {
+      setIsSavingAutoSchedule(false);
+    }
+  };
+
+  const startBatchWaDispatcher = (items?: ScheduledWhatsAppNotification[]) => {
+    const source =
+      items ||
+      waScheduleLogs.filter(
+        (l) =>
+          l.status === "pendente" &&
+          (waScheduleDateScope === "todos" || l.dateISO === waScheduleTodayISO),
+      );
+    if (source.length === 0) {
+      toast.info("Não há notificações pendentes para disparo sequencial.");
+      return;
+    }
+    setWaBatchDispatcher({
+      isOpen: true,
+      queue: source,
+      currentIndex: 0,
+      editingPhone: source[0]?.phone || "",
+    });
+  };
 
   const [simulacao, setSimulacao] = useState({
     valorSolicitado: "",
@@ -1325,6 +1534,9 @@ export default function App() {
             )
               ? settings.customWhatsAppTemplates
               : [],
+            autoScheduleConfig: normalizeAutoScheduleConfig(
+              settings.autoScheduleConfig,
+            ),
           }));
         }
 
@@ -1339,6 +1551,7 @@ export default function App() {
             setAdminToken("");
           }
           fetchChats();
+          fetchWaSchedule(adminToken);
         }
       } catch (error) {
         console.error("Erro ao buscar dados:", error);
@@ -1485,6 +1698,69 @@ export default function App() {
                 },
               },
             });
+          }
+        } else if (data.type === "AUTO_SCHEDULE_RUN") {
+          if (adminToken) {
+            fetchWaSchedule(adminToken);
+            fetchData();
+            const pCount = Number(data.payload?.pending || 0);
+            const sCount = Number(data.payload?.sent || 0);
+            const eCount = Number(data.payload?.errors || 0);
+            if (pCount > 0 || sCount > 0 || eCount > 0) {
+              playNotificationSound();
+              const summaryMsg =
+                sCount > 0
+                  ? `${sCount} lembrete(s) enviado(s) automaticamente via API${eCount > 0 ? ` (${eCount} erro(s))` : ""}.`
+                  : `${pCount} lembrete(s) de vencimento agendado(s) pronto(s) para envio no WhatsApp.`;
+              if (
+                typeof window !== "undefined" &&
+                "Notification" in window &&
+                Notification.permission === "granted"
+              ) {
+                try {
+                  const n = new Notification("⏰ Lembretes WhatsApp Agendados", {
+                    body: summaryMsg,
+                    icon: "/favicon.ico",
+                  });
+                  n.onclick = () => {
+                    window.focus();
+                    setView("admin");
+                    setAdminTab("lembretes");
+                    setShowWaSchedulePanel(true);
+                  };
+                } catch (e) {}
+              }
+              const newNotif: AdminNotification = {
+                id: `sched-${Date.now()}`,
+                type: "info",
+                title: "Agendamento Automático WhatsApp",
+                message: summaryMsg,
+                timestamp: data.payload?.timestamp || new Date().toISOString(),
+                read: false,
+              };
+              setAdminNotifications((prev) => {
+                const updated = [newNotif, ...prev];
+                try {
+                  localStorage.setItem(
+                    "gm_admin_notifications",
+                    JSON.stringify(updated.slice(0, 50)),
+                  );
+                } catch (err) {}
+                return updated;
+              });
+              toast.info("⏰ Agendamento Automático WhatsApp", {
+                description: summaryMsg,
+                duration: 15000,
+                action: {
+                  label: "Abrir Fila",
+                  onClick: () => {
+                    setView("admin");
+                    setAdminTab("lembretes");
+                    setShowWaSchedulePanel(true);
+                  },
+                },
+              });
+            }
           }
         } else if (data.type === "CHAT_UPDATE" || data.type === "CHAT_READ") {
           if (data.type === "CHAT_UPDATE" && data.payload?.newMessage) {
@@ -3664,6 +3940,206 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           </div>
         </div>
       )}
+      {waBatchDispatcher?.isOpen && (() => {
+        const currentItem =
+          waBatchDispatcher.queue[waBatchDispatcher.currentIndex];
+        const total = waBatchDispatcher.queue.length;
+        const idx = waBatchDispatcher.currentIndex;
+        const phoneToUse = waBatchDispatcher.editingPhone;
+        const phoneDigits = phoneToUse.replace(/\D/g, "");
+        const hasValidPhone = phoneDigits.length >= 10;
+
+        const advanceQueue = (
+          action: "enviado" | "ignorado" | "pular",
+        ) => {
+          if (currentItem && action !== "pular") {
+            handleUpdateWaScheduleItem(currentItem.id, {
+              status: action,
+              phone: phoneToUse,
+              deliveryMethod:
+                action === "enviado" ? "whatsapp_business" : undefined,
+            });
+          }
+          const nextIdx = idx + 1;
+          if (nextIdx >= total) {
+            setWaBatchDispatcher(null);
+            toast.success("Fila de disparo sequencial finalizada!");
+          } else {
+            setWaBatchDispatcher((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    currentIndex: nextIdx,
+                    editingPhone: prev.queue[nextIdx]?.phone || "",
+                  }
+                : null,
+            );
+          }
+        };
+
+        if (!currentItem) return null;
+        const situacaoBadges: Record<string, { label: string; cls: string }> = {
+          vence_hoje: {
+            label: "Vence Hoje",
+            cls: "bg-amber-100 text-amber-800 border-amber-200",
+          },
+          pre_vencimento: {
+            label: `Pré-Vencimento (${currentItem.dias}d)`,
+            cls: "bg-blue-100 text-blue-800 border-blue-200",
+          },
+          vencido: {
+            label: `Vencido (${currentItem.dias}d)`,
+            cls: "bg-red-100 text-red-800 border-red-200",
+          },
+          congelado: {
+            label: "Juros Congelados",
+            cls: "bg-indigo-100 text-indigo-800 border-indigo-200",
+          },
+        };
+        const badge = situacaoBadges[currentItem.situacao] || {
+          label: currentItem.situacao,
+          cls: "bg-slate-100 text-slate-700 border-slate-200",
+        };
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[75] p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl relative">
+              <button
+                type="button"
+                onClick={() => setWaBatchDispatcher(null)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={22} />
+              </button>
+
+              <div className="flex items-center justify-between gap-3 pr-8 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center shrink-0">
+                    <Send size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">
+                      Disparo Sequencial via WhatsApp
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Notificação {idx + 1} de {total}
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${badge.cls}`}
+                >
+                  {badge.label}
+                </span>
+              </div>
+
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mb-4">
+                <div
+                  className="bg-emerald-500 h-full transition-all"
+                  style={{ width: `${Math.round(((idx + 1) / total) * 100)}%` }}
+                />
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 mb-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-bold text-slate-800 text-sm">
+                    {currentItem.clientName}
+                  </span>
+                  <span className="font-bold text-slate-900 tabular-nums">
+                    {formatCurrency(currentItem.valor)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                  <span>
+                    {currentItem.prazo === "abater"
+                      ? `Lembrete #${currentItem.parcelaNumero}`
+                      : `Parcela #${currentItem.parcelaNumero}`}
+                  </span>
+                  <span>
+                    Vencimento: {formatDate(currentItem.dataVencimento)}
+                  </span>
+                </div>
+                <div className="pt-1">
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Celular de Destino (com DDD)
+                  </label>
+                  <input
+                    type="tel"
+                    value={phoneToUse}
+                    onChange={(e) =>
+                      setWaBatchDispatcher((prev) =>
+                        prev ? { ...prev, editingPhone: e.target.value } : null,
+                      )
+                    }
+                    placeholder="(31) 99999-9999"
+                    className="w-full px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
+                  />
+                  {!hasValidPhone && (
+                    <p className="text-[11px] text-red-600 mt-1">
+                      Informe um celular válido (mínimo 10 dígitos) ou clique em Pular/Ignorar.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Mensagem gerada pelo modelo configurado:
+                </label>
+                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3 text-xs text-slate-800 whitespace-pre-line leading-relaxed max-h-52 overflow-y-auto">
+                  {currentItem.message}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => advanceQueue("ignorado")}
+                    className="px-3 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                  >
+                    Ignorar hoje
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => advanceQueue("pular")}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors"
+                  >
+                    <SkipForward size={13} />
+                    Pular
+                  </button>
+                </div>
+
+                {hasValidPhone ? (
+                  <a
+                    href={formatWhatsAppHref(phoneToUse, currentItem.message)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      setTimeout(() => advanceQueue("enviado"), 150);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shadow-sm"
+                  >
+                    <Send size={14} />
+                    {idx + 1 < total
+                      ? "Enviar no WhatsApp e Próximo"
+                      : "Enviar no WhatsApp e Concluir"}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed"
+                  >
+                    <Send size={14} />
+                    Enviar no WhatsApp
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* Modals */}
       {showReprovadoAlert && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -9714,6 +10190,365 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 })()}
               </div>
 
+              {/* Agendamento Automático de Lembretes via WhatsApp */}
+              <div className="mt-6 pt-6 border-t border-slate-200">
+                {(() => {
+                  const autoCfg = normalizeAutoScheduleConfig(
+                    adminSettings.autoScheduleConfig,
+                  );
+                  const updateAutoCfg = (patch: Partial<AutoScheduleConfig>) => {
+                    setAdminSettings((prev) => ({
+                      ...prev,
+                      autoScheduleConfig: {
+                        ...normalizeAutoScheduleConfig(prev.autoScheduleConfig),
+                        ...patch,
+                      },
+                    }));
+                  };
+                  return (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <CalendarClock
+                              size={19}
+                              className="text-emerald-600"
+                            />
+                            Agendamento Automático de Lembretes via WhatsApp
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Avalia automaticamente a data de vencimento das parcelas e prepara ou dispara os lembretes usando os modelos configurados acima.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={autoCfg.enabled}
+                              onChange={(e) =>
+                                updateAutoCfg({ enabled: e.target.checked })
+                              }
+                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span
+                              className={`text-xs font-bold ${
+                                autoCfg.enabled
+                                  ? "text-emerald-700"
+                                  : "text-slate-600"
+                              }`}
+                            >
+                              {autoCfg.enabled
+                                ? "Agendamento Ativo"
+                                : "Agendamento Desativado"}
+                            </span>
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdminTab("lembretes");
+                              setShowWaSchedulePanel(true);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors"
+                          >
+                            <BellRing size={14} className="text-yellow-600" />
+                            Abrir Fila ({waScheduleSummary.todayPending})
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isSavingAutoSchedule}
+                            onClick={handleSaveAutoScheduleSettings}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-lg transition-colors"
+                          >
+                            <Save size={14} />
+                            {isSavingAutoSchedule
+                              ? "Salvando..."
+                              : "Salvar Agendamento"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                          <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                            <Clock size={14} className="text-emerald-600" />
+                            Horário Diário de Execução
+                          </label>
+                          <input
+                            type="time"
+                            value={autoCfg.horarioExecucao}
+                            onChange={(e) =>
+                              updateAutoCfg({ horarioExecucao: e.target.value })
+                            }
+                            className="w-full px-3 py-2 text-sm font-semibold text-slate-800 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
+                          />
+                          <p className="text-[11px] text-slate-500 mt-1.5">
+                            Horário de Brasília (executado automaticamente todos os dias sem repetir na mesma data).
+                          </p>
+                        </div>
+
+                        <div className="bg-white border border-slate-200 rounded-xl p-3.5 md:col-span-2">
+                          <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                            Modo de Disparo das Notificações
+                          </label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateAutoCfg({
+                                  modoEnvio: "fila_whatsapp_business",
+                                })
+                              }
+                              className={`text-left p-2.5 rounded-lg border transition-colors ${
+                                autoCfg.modoEnvio === "fila_whatsapp_business"
+                                  ? "bg-emerald-50 border-emerald-400 text-emerald-950"
+                                  : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                              }`}
+                            >
+                              <div className="text-xs font-bold flex items-center gap-1.5">
+                                <Phone size={13} className="text-emerald-600" />
+                                Fila Diária + WhatsApp Business
+                              </div>
+                              <p className="text-[11px] opacity-80 mt-0.5">
+                                Gera os lembretes no horário, emite alerta no painel e permite disparo sequencial direto no WhatsApp Business.
+                              </p>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateAutoCfg({ modoEnvio: "webhook_api" })
+                              }
+                              className={`text-left p-2.5 rounded-lg border transition-colors ${
+                                autoCfg.modoEnvio === "webhook_api"
+                                  ? "bg-emerald-50 border-emerald-400 text-emerald-950"
+                                  : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                              }`}
+                            >
+                              <div className="text-xs font-bold flex items-center gap-1.5">
+                                <Send size={13} className="text-emerald-600" />
+                                API / Webhook Automático (Servidor)
+                              </div>
+                              <p className="text-[11px] opacity-80 mt-0.5">
+                                Envia POST automático via Evolution API, Z-API, n8n ou WhatsApp Cloud API mesmo com o navegador fechado.
+                              </p>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {autoCfg.modoEnvio === "webhook_api" && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white border border-emerald-200 rounded-xl p-3.5">
+                          <div className="md:col-span-2">
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              URL do Webhook / Gateway WhatsApp (POST JSON)
+                            </label>
+                            <input
+                              type="url"
+                              value={autoCfg.webhookUrl}
+                              onChange={(e) =>
+                                updateAutoCfg({ webhookUrl: e.target.value })
+                              }
+                              placeholder="https://sua-api.com/whatsapp/send-text"
+                              className="w-full px-3 py-1.5 text-xs text-slate-800 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Token / Authorization (Opcional)
+                            </label>
+                            <input
+                              type="password"
+                              value={autoCfg.webhookToken}
+                              onChange={(e) =>
+                                updateAutoCfg({ webhookToken: e.target.value })
+                              }
+                              placeholder="Bearer seu-token..."
+                              className="w-full px-3 py-1.5 text-xs text-slate-800 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
+                          <p className="md:col-span-3 text-[11px] text-slate-500">
+                            Payload enviado automaticamente: <code className="bg-slate-100 px-1 rounded">{"{ phone, phoneDigits, number, clientName, message, text, situacao, parcelaNumero, dataVencimento, valor }"}</code>.
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="bg-white border border-slate-200 rounded-xl p-4">
+                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">
+                          Regras por Situação do Vencimento (Modelos Configurados Acima)
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/70 space-y-2">
+                            <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.enviarPreVencimento}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    enviarPreVencimento: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Pré-Vencimento (usa modelo &ldquo;Pré-Vencimento&rdquo;)
+                            </label>
+                            {autoCfg.enviarPreVencimento && (
+                              <select
+                                value={autoCfg.preVencimentoModo}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    preVencimentoModo:
+                                      e.target.value === "dia_exato"
+                                        ? "dia_exato"
+                                        : "janela",
+                                  })
+                                }
+                                className="w-full px-2.5 py-1 text-xs text-slate-700 bg-white border border-slate-300 rounded-md outline-none"
+                              >
+                                <option value="janela">
+                                  Qualquer parcela dentro de {adminSettings.diasLembreteAntecipado || "3"} dia(s) antes
+                                </option>
+                                <option value="dia_exato">
+                                  Apenas exatamente {adminSettings.diasLembreteAntecipado || "3"} dia(s) antes
+                                </option>
+                              </select>
+                            )}
+                          </div>
+
+                          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/70 space-y-1.5">
+                            <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.enviarVenceHoje}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    enviarVenceHoje: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Vence Hoje (usa modelo &ldquo;Vence Hoje&rdquo;)
+                            </label>
+                            <p className="text-[11px] text-slate-500 pl-6">
+                              Agenda no dia exato do vencimento de cada parcela ou lembrete.
+                            </p>
+                          </div>
+
+                          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/70 space-y-2">
+                            <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.enviarVencido}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    enviarVencido: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Vencido / Em Atraso (usa modelo &ldquo;Vencido&rdquo;)
+                            </label>
+                            {autoCfg.enviarVencido && (
+                              <div className="flex items-center gap-2 pl-6 text-xs text-slate-600">
+                                <span>Repetir a cada</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="60"
+                                  value={autoCfg.frequenciaVencidoDias}
+                                  onChange={(e) =>
+                                    updateAutoCfg({
+                                      frequenciaVencidoDias: e.target.value,
+                                    })
+                                  }
+                                  className="w-14 px-2 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded tabular-nums"
+                                />
+                                <span>dia(s) de atraso</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50/70 space-y-2">
+                            <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.enviarCongelado}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    enviarCongelado: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Juros Congelados (usa modelo &ldquo;Juros Congelados&rdquo;)
+                            </label>
+                            {autoCfg.enviarCongelado && (
+                              <div className="flex items-center gap-2 pl-6 text-xs text-slate-600">
+                                <span>Repetir a cada</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="60"
+                                  value={autoCfg.frequenciaCongeladoDias}
+                                  onChange={(e) =>
+                                    updateAutoCfg({
+                                      frequenciaCongeladoDias: e.target.value,
+                                    })
+                                  }
+                                  className="w-14 px-2 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded tabular-nums"
+                                />
+                                <span>dia(s)</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-slate-100">
+                          <div className="flex flex-wrap items-center gap-4">
+                            <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.incluirEmprestimos}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    incluirEmprestimos: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Incluir Parcelas de Empréstimos
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={autoCfg.incluirLembretesAbater}
+                                onChange={(e) =>
+                                  updateAutoCfg({
+                                    incluirLembretesAbater: e.target.checked,
+                                  })
+                                }
+                                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                              />
+                              Incluir Lembretes (Abater)
+                            </label>
+                          </div>
+                          {autoCfg.lastRunAt && (
+                            <span className="text-[11px] text-slate-500 tabular-nums">
+                              Última execução:{" "}
+                              {new Date(autoCfg.lastRunAt).toLocaleString(
+                                "pt-BR",
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div className="mt-4 pt-4 border-t border-slate-200 bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-sm">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                   <div>
@@ -13717,6 +14552,439 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </button>
                 </div>
               </div>
+
+              {/* Agendamento Automático WhatsApp Banner & Fila */}
+              {(() => {
+                const autoCfg = normalizeAutoScheduleConfig(
+                  adminSettings.autoScheduleConfig,
+                );
+                const visibleScheduleLogs = waScheduleLogs.filter((l) => {
+                  if (
+                    waScheduleDateScope === "hoje" &&
+                    l.dateISO !== waScheduleTodayISO
+                  ) {
+                    return false;
+                  }
+                  if (
+                    waScheduleStatusFilter !== "all" &&
+                    l.status !== waScheduleStatusFilter
+                  ) {
+                    return false;
+                  }
+                  return true;
+                });
+                const pendingForDispatch = visibleScheduleLogs.filter(
+                  (l) => l.status === "pendente",
+                );
+                const situacaoLabel: Record<string, string> = {
+                  vence_hoje: "Vence Hoje",
+                  pre_vencimento: "Pré-Vencimento",
+                  vencido: "Vencido",
+                  congelado: "Juros Congelados",
+                };
+                const situacaoClass: Record<string, string> = {
+                  vence_hoje: "bg-amber-100 text-amber-800 border-amber-200",
+                  pre_vencimento: "bg-blue-100 text-blue-800 border-blue-200",
+                  vencido: "bg-red-100 text-red-800 border-red-200",
+                  congelado: "bg-indigo-100 text-indigo-800 border-indigo-200",
+                };
+
+                return (
+                  <div className="mb-6 border border-emerald-200 bg-emerald-50/50 rounded-2xl p-4 print:hidden">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+                          <CalendarClock size={19} />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-800">
+                              Agendamento Automático WhatsApp
+                            </h3>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                                autoCfg.enabled
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                                  : "bg-slate-100 text-slate-600 border-slate-300"
+                              }`}
+                            >
+                              {autoCfg.enabled
+                                ? `Ativo (${autoCfg.horarioExecucao})`
+                                : "Desativado"}
+                            </span>
+                            <span className="text-[11px] text-slate-600 font-medium">
+                              ·{" "}
+                              {autoCfg.modoEnvio === "webhook_api"
+                                ? "Envio Automático via API/Webhook"
+                                : "Fila WhatsApp Business"}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 mt-1 tabular-nums">
+                            <span>
+                              Hoje: <strong>{waScheduleSummary.todayPending}</strong>{" "}
+                              pendente(s)
+                            </span>
+                            <span className="text-emerald-700">
+                              <strong>{waScheduleSummary.todaySent}</strong>{" "}
+                              enviado(s)
+                            </span>
+                            {waScheduleSummary.todayErrors > 0 && (
+                              <span className="text-red-600">
+                                <strong>{waScheduleSummary.todayErrors}</strong>{" "}
+                                erro(s)
+                              </span>
+                            )}
+                            {autoCfg.lastRunAt && (
+                              <span className="text-[11px] text-slate-500">
+                                · Última verificação:{" "}
+                                {new Date(autoCfg.lastRunAt).toLocaleString(
+                                  "pt-BR",
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={isRunningWaSchedule}
+                          onClick={() => handleRunWaSchedule(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-lg transition-colors shadow-xs"
+                        >
+                          <Play
+                            size={13}
+                            className={isRunningWaSchedule ? "animate-pulse" : ""}
+                          />
+                          {isRunningWaSchedule
+                            ? "Verificando..."
+                            : "Executar Agendamento Agora"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!showWaSchedulePanel) fetchWaSchedule();
+                            setShowWaSchedulePanel((v) => !v);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors"
+                        >
+                          <BellRing size={13} className="text-emerald-600" />
+                          {showWaSchedulePanel
+                            ? "Ocultar Fila"
+                            : `Ver Fila (${waScheduleSummary.todayPending})`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAdminTab("configuracoes")}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+                        >
+                          Configurar Regras
+                        </button>
+                      </div>
+                    </div>
+
+                    {showWaSchedulePanel && (
+                      <div className="mt-4 pt-4 border-t border-emerald-200 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex items-center gap-1 p-0.5 bg-white border border-slate-200 rounded-lg">
+                              <button
+                                type="button"
+                                onClick={() => setWaScheduleDateScope("hoje")}
+                                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                                  waScheduleDateScope === "hoje"
+                                    ? "bg-slate-800 text-white"
+                                    : "text-slate-600 hover:text-slate-900"
+                                }`}
+                              >
+                                Hoje ({waScheduleTodayISO.split("-").reverse().join("/")})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setWaScheduleDateScope("todos")}
+                                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                                  waScheduleDateScope === "todos"
+                                    ? "bg-slate-800 text-white"
+                                    : "text-slate-600 hover:text-slate-900"
+                                }`}
+                              >
+                                Histórico Completo
+                              </button>
+                            </div>
+
+                            <select
+                              value={waScheduleStatusFilter}
+                              onChange={(e) =>
+                                setWaScheduleStatusFilter(e.target.value as any)
+                              }
+                              className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg outline-none"
+                            >
+                              <option value="pendente">Pendentes</option>
+                              <option value="enviado">Enviados</option>
+                              <option value="erro">Com Erro</option>
+                              <option value="ignorado">Ignorados</option>
+                              <option value="all">Todos os Status</option>
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={() => fetchWaSchedule()}
+                              disabled={isLoadingWaSchedule}
+                              className="p-1.5 text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-lg transition-colors"
+                              title="Atualizar fila"
+                            >
+                              <RefreshCw
+                                size={14}
+                                className={
+                                  isLoadingWaSchedule ? "animate-spin" : ""
+                                }
+                              />
+                            </button>
+                          </div>
+
+                          {pendingForDispatch.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                startBatchWaDispatcher(pendingForDispatch)
+                              }
+                              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shadow-xs"
+                            >
+                              <Send size={13} />
+                              Disparo Sequencial ({pendingForDispatch.length}{" "}
+                              pendente{pendingForDispatch.length === 1 ? "" : "s"})
+                            </button>
+                          )}
+                        </div>
+
+                        {visibleScheduleLogs.length > 0 ? (
+                          <div className="overflow-x-auto bg-white border border-slate-200 rounded-xl">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-600">
+                                  <th className="py-2.5 px-3 font-semibold">
+                                    Cliente / Celular
+                                  </th>
+                                  <th className="py-2.5 px-3 font-semibold">
+                                    Situação / Vencimento
+                                  </th>
+                                  <th className="py-2.5 px-3 font-semibold">
+                                    Mensagem Gerada
+                                  </th>
+                                  <th className="py-2.5 px-3 font-semibold">
+                                    Status
+                                  </th>
+                                  <th className="py-2.5 px-3 font-semibold text-right">
+                                    Ações
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {visibleScheduleLogs.map((log) => (
+                                  <tr
+                                    key={log.id}
+                                    className="hover:bg-slate-50/80 transition-colors"
+                                  >
+                                    <td className="py-2.5 px-3 align-top min-w-[170px]">
+                                      <div className="font-semibold text-slate-800">
+                                        {log.clientName}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 tabular-nums mt-0.5">
+                                        {log.phone || "Sem telefone"}
+                                        {log.hasCustomPhone && (
+                                          <span className="ml-1 text-[10px] text-emerald-700 font-semibold">
+                                            (Manual)
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] font-bold text-slate-700 mt-0.5 tabular-nums">
+                                        {formatCurrency(log.valor)}
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-3 align-top min-w-[155px]">
+                                      <span
+                                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                                          situacaoClass[log.situacao] ||
+                                          "bg-slate-100 text-slate-700"
+                                        }`}
+                                      >
+                                        {situacaoLabel[log.situacao] ||
+                                          log.situacao}
+                                        {log.dias > 0 ? ` (${log.dias}d)` : ""}
+                                      </span>
+                                      <div className="text-[11px] text-slate-600 mt-1">
+                                        {log.prazo === "abater"
+                                          ? `Lembrete #${log.parcelaNumero}`
+                                          : `Parcela #${log.parcelaNumero}`}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 tabular-nums">
+                                        Venc: {formatDate(log.dataVencimento)}
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-3 align-top max-w-md">
+                                      <p className="text-[11px] text-slate-700 whitespace-pre-line line-clamp-3 leading-relaxed">
+                                        {log.message}
+                                      </p>
+                                      {log.errorMessage && (
+                                        <p className="text-[11px] text-red-600 mt-1 font-medium">
+                                          {log.errorMessage}
+                                        </p>
+                                      )}
+                                    </td>
+                                    <td className="py-2.5 px-3 align-top whitespace-nowrap">
+                                      {log.status === "enviado" ? (
+                                        <div>
+                                          <span className="text-[11px] font-bold text-emerald-700">
+                                            Enviado
+                                          </span>
+                                          {log.sentAt && (
+                                            <div className="text-[10px] text-slate-500 tabular-nums">
+                                              {new Date(
+                                                log.sentAt,
+                                              ).toLocaleTimeString("pt-BR", {
+                                                hour: "2-digit",
+                                                minute: "2-digit",
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : log.status === "erro" ? (
+                                        <span className="text-[11px] font-bold text-red-600">
+                                          Erro
+                                        </span>
+                                      ) : log.status === "ignorado" ? (
+                                        <span className="text-[11px] font-semibold text-slate-500">
+                                          Ignorado
+                                        </span>
+                                      ) : (
+                                        <span className="text-[11px] font-bold text-amber-700">
+                                          Pendente
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-2.5 px-3 align-top text-right whitespace-nowrap">
+                                      <div className="flex items-center justify-end gap-1.5">
+                                        {log.phoneDigits &&
+                                        log.phoneDigits.length >= 10 ? (
+                                          <a
+                                            href={formatWhatsAppHref(
+                                              log.phone,
+                                              log.message,
+                                            )}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={() => {
+                                              if (log.status !== "enviado") {
+                                                handleUpdateWaScheduleItem(
+                                                  log.id,
+                                                  {
+                                                    status: "enviado",
+                                                    deliveryMethod:
+                                                      "whatsapp_business",
+                                                  },
+                                                );
+                                              }
+                                            }}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] transition-colors"
+                                            title="Abrir no WhatsApp Business e marcar como enviado"
+                                          >
+                                            <Send size={11} />
+                                            Enviar
+                                          </a>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              openManualWhatsAppSend(
+                                                log.clientName,
+                                                log.message,
+                                                log.phone,
+                                              )
+                                            }
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 transition-colors"
+                                          >
+                                            <Phone size={11} />
+                                            Informar Nº
+                                          </button>
+                                        )}
+
+                                        {log.status !== "enviado" && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleUpdateWaScheduleItem(
+                                                log.id,
+                                                {
+                                                  status: "enviado",
+                                                  deliveryMethod: "manual",
+                                                },
+                                              )
+                                            }
+                                            className="p-1 text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
+                                            title="Marcar como enviado"
+                                          >
+                                            <Check size={14} />
+                                          </button>
+                                        )}
+
+                                        {log.status === "erro" && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleResendWaScheduleItem(log.id)
+                                            }
+                                            className="p-1 text-blue-700 hover:bg-blue-50 rounded transition-colors"
+                                            title="Reenviar / Voltar para pendente"
+                                          >
+                                            <RefreshCw size={13} />
+                                          </button>
+                                        )}
+
+                                        {log.status === "pendente" && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleUpdateWaScheduleItem(
+                                                log.id,
+                                                { status: "ignorado" },
+                                              )
+                                            }
+                                            className="p-1 text-slate-500 hover:bg-slate-100 rounded transition-colors"
+                                            title="Ignorar esta notificação hoje"
+                                          >
+                                            <SkipForward size={13} />
+                                          </button>
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleDeleteWaScheduleItem(log.id)
+                                          }
+                                          className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                                          title="Excluir da fila"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="bg-white border border-dashed border-slate-300 rounded-xl p-6 text-center text-xs text-slate-500">
+                            Nenhuma notificação agendada encontrada para este filtro. Clique em{" "}
+                            <strong>Executar Agendamento Agora</strong> para verificar os vencimentos de hoje.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Resumo Financeiro Consolidado */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">

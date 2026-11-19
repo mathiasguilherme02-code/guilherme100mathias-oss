@@ -5,6 +5,15 @@ import admin from "firebase-admin";
 import { ZipArchive } from "archiver";
 import fs, { readFileSync, existsSync } from "fs";
 import dotenv from 'dotenv';
+import {
+  DEFAULT_WHATSAPP_TEMPLATES,
+  DEFAULT_AUTO_SCHEDULE_CONFIG,
+  normalizeAutoScheduleConfig,
+  evaluateAutoScheduleNotifications,
+  getBrazilTodayISO,
+  getBrazilTimeHHMM,
+  ScheduledWhatsAppNotification,
+} from './src/utils/whatsappReminders';
 
 dotenv.config();
 
@@ -60,7 +69,9 @@ const loadData = () => {
       { id: "mock9", nome: "Consórcio de Automóveis", descricao: "Planeje a compra do seu carro sem pagar juros através de consórcios parceiros.", preco: "40000", imagemUrl: "" },
       { id: "mock10", nome: "Consórcio de Imóveis", descricao: "A forma mais econômica de planejar a compra da sua casa própria.", preco: "150000", imagemUrl: "" }
     ],
-    mockClients: []
+    mockClients: [],
+    mockSettings: null,
+    mockScheduleLogs: []
   };
 };
 
@@ -69,11 +80,15 @@ const saveData = (data: any) => {
 };
 
 let appData = loadData();
-let mockProdutos = appData.mockProdutos;
-let mockClients = appData.mockClients;
+let mockProdutos = appData.mockProdutos || [];
+let mockClients = appData.mockClients || [];
+let mockSettings: any = appData.mockSettings || null;
+let mockScheduleLogs: ScheduledWhatsAppNotification[] = Array.isArray(appData.mockScheduleLogs)
+  ? appData.mockScheduleLogs
+  : [];
 
 const syncData = () => {
-  saveData({ mockProdutos, mockClients });
+  saveData({ mockProdutos, mockClients, mockSettings, mockScheduleLogs });
 };
 
 
@@ -343,57 +358,64 @@ app.post("/api/clients/login", async (req, res) => {
   }
 });
 
+const buildDefaultSettings = () => ({
+  taxaJuros: '40',
+  taxaAtrasoDia: '8',
+  tipoTaxa: 'mensal',
+  diasLembreteAntecipado: '3',
+  ...DEFAULT_WHATSAPP_TEMPLATES,
+  msgTelefones: {} as Record<string, string>,
+  customWhatsAppTemplates: [] as any[],
+  whatsappAppMode: 'business',
+  autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG },
+});
+
+const normalizeLoadedSettings = (raw: any) => {
+  const defaultSettings = buildDefaultSettings();
+  const data = { ...defaultSettings, ...(raw || {}) };
+  const legacyFrozenDefaults = [
+    'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
+    'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).',
+    'Olá {cliente}, a GM-Empréstimo informa que sua dívida está com juros congelados desde {data}.\n{abatimentos}\n\nSeu saldo devedor é de {valor}.',
+  ];
+  if (
+    typeof data.msgLembreteCongelado === 'string' &&
+    legacyFrozenDefaults.includes(data.msgLembreteCongelado.trim())
+  ) {
+    data.msgLembreteCongelado = defaultSettings.msgLembreteCongelado;
+  }
+  if (!data.diasLembreteAntecipado) {
+    data.diasLembreteAntecipado = '3';
+  }
+  if (!data.msgTelefones || typeof data.msgTelefones !== 'object' || Array.isArray(data.msgTelefones)) {
+    data.msgTelefones = {};
+  }
+  if (!Array.isArray(data.customWhatsAppTemplates)) {
+    data.customWhatsAppTemplates = [];
+  }
+  if (data.whatsappAppMode !== 'business' && data.whatsappAppMode !== 'padrao') {
+    data.whatsappAppMode = 'business';
+  }
+  data.autoScheduleConfig = normalizeAutoScheduleConfig(data.autoScheduleConfig);
+  return data;
+};
+
+const loadServerSettings = async () => {
+  if (!db) {
+    return normalizeLoadedSettings(mockSettings);
+  }
+  const docRef = doc(db, "admin_settings", "1");
+  const docSnap = await getDoc(docRef);
+  if (!docSnap.exists()) {
+    return normalizeLoadedSettings(null);
+  }
+  return normalizeLoadedSettings(docSnap.data());
+};
+
 // Get Admin Settings (Public, needed for simulation)
 app.get("/api/settings", async (req, res) => {
-  const defaultSettings = {
-    taxaJuros: '40',
-    taxaAtrasoDia: '8',
-    tipoTaxa: 'mensal',
-    diasLembreteAntecipado: '3',
-    msgLembreteAVencer: 'Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.',
-    msgLembretePreVencimento: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence em {dias} dia(s), no dia {data}.',
-    msgLembreteVenceHoje: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).',
-    msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que sua dívida no valor {valor_divida} está com juros congelados desde {data}.\n\n{abatimentos}\n\nSeu saldo devedor é de {valor}.',
-    msgLembreteConfirmacao: 'Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.',
-    msgLembreteVencido: '',
-    msgTelefones: {} as Record<string, string>,
-    customWhatsAppTemplates: [] as any[],
-    whatsappAppMode: 'business',
-  };
   try {
-    if (!db) {
-      return res.json(defaultSettings);
-    }
-    const docRef = doc(db, "admin_settings", "1");
-    const docSnap = await getDoc(docRef);
-      
-    if (!docSnap.exists()) {
-      return res.json(defaultSettings);
-    }
-    const data = { ...defaultSettings, ...docSnap.data() };
-    const legacyFrozenDefaults = [
-      'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
-      'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).',
-      'Olá {cliente}, a GM-Empréstimo informa que sua dívida está com juros congelados desde {data}.\n{abatimentos}\n\nSeu saldo devedor é de {valor}.',
-    ];
-    if (
-      typeof data.msgLembreteCongelado === 'string' &&
-      legacyFrozenDefaults.includes(data.msgLembreteCongelado.trim())
-    ) {
-      data.msgLembreteCongelado = defaultSettings.msgLembreteCongelado;
-    }
-    if (!data.diasLembreteAntecipado) {
-      data.diasLembreteAntecipado = '3';
-    }
-    if (!data.msgTelefones || typeof data.msgTelefones !== 'object' || Array.isArray(data.msgTelefones)) {
-      data.msgTelefones = {};
-    }
-    if (!Array.isArray(data.customWhatsAppTemplates)) {
-      data.customWhatsAppTemplates = [];
-    }
-    if (data.whatsappAppMode !== 'business' && data.whatsappAppMode !== 'padrao') {
-      data.whatsappAppMode = 'business';
-    }
+    const data = await loadServerSettings();
     res.json(data);
   } catch (error) {
     console.error("Error fetching settings:", error);
@@ -404,9 +426,6 @@ app.get("/api/settings", async (req, res) => {
 // Update Admin Settings (Protected)
 app.put("/api/settings", requireAdmin, async (req, res) => {
   try {
-    if (!db) {
-      return res.json({ success: true });
-    }
     const {
       taxaJuros,
       taxaAtrasoDia,
@@ -421,8 +440,26 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       msgTelefones,
       customWhatsAppTemplates,
       whatsappAppMode,
+      autoScheduleConfig,
     } = req.body;
-    await setDoc(doc(db, "admin_settings", "1"), {
+
+    const currentSettings = await loadServerSettings();
+    const mergedAutoConfig = autoScheduleConfig
+      ? normalizeAutoScheduleConfig({
+          ...currentSettings.autoScheduleConfig,
+          ...autoScheduleConfig,
+          lastRunDate:
+            autoScheduleConfig.lastRunDate !== undefined
+              ? autoScheduleConfig.lastRunDate
+              : currentSettings.autoScheduleConfig?.lastRunDate || "",
+          lastRunAt:
+            autoScheduleConfig.lastRunAt !== undefined
+              ? autoScheduleConfig.lastRunAt
+              : currentSettings.autoScheduleConfig?.lastRunAt || "",
+        })
+      : currentSettings.autoScheduleConfig;
+
+    const payloadToSave: any = {
       taxaJuros,
       taxaAtrasoDia,
       tipoTaxa,
@@ -454,8 +491,18 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
             })),
           }
         : {}),
-    }, { merge: true });
-      
+      ...(autoScheduleConfig ? { autoScheduleConfig: mergedAutoConfig } : {}),
+    };
+
+    if (!db) {
+      mockSettings = { ...(mockSettings || {}), ...payloadToSave };
+      syncData();
+      broadcastUpdate('UPDATE_SETTINGS');
+      return res.json({ success: true });
+    }
+
+    await setDoc(doc(db, "admin_settings", "1"), sanitizeForFirestore(payloadToSave), { merge: true });
+
     broadcastUpdate('UPDATE_SETTINGS');
     res.json({ success: true });
   } catch (error) {
@@ -1284,6 +1331,434 @@ app.get("/api/backup", requireAdmin, async (req, res) => {
   }
 });
 
+// --- AUTOMATIC WHATSAPP SCHEDULE ENGINE & ROUTES ---
+
+const loadAllClientsForSchedule = async (): Promise<any[]> => {
+  if (!db) {
+    return mockClients.map((c) => {
+      let merged = { ...c };
+      if (merged.dados) {
+        const dados = typeof merged.dados === 'string' ? JSON.parse(merged.dados) : merged.dados;
+        merged = { ...merged, ...dados };
+        delete merged.dados;
+      }
+      return merged;
+    });
+  }
+  const snap = await db.collection("clients").get();
+  return snap.docs.map((d: any) => {
+    const c = d.data();
+    const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
+    const merged = { ...c, ...dados, id: d.id };
+    delete merged.dados;
+    return merged;
+  });
+};
+
+const loadScheduleLogsFromStore = async (): Promise<ScheduledWhatsAppNotification[]> => {
+  if (!db) {
+    return [...mockScheduleLogs].sort((a, b) =>
+      (b.dateISO || "").localeCompare(a.dateISO || "") ||
+      (b.createdAt || "").localeCompare(a.createdAt || "")
+    );
+  }
+  const snap = await db
+    .collection("whatsapp_schedule_logs")
+    .orderBy("createdAt", "desc")
+    .limit(400)
+    .get();
+  return snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as ScheduledWhatsAppNotification));
+};
+
+const saveScheduleLogToStore = async (item: ScheduledWhatsAppNotification) => {
+  const sanitized = sanitizeForFirestore(item);
+  if (!db) {
+    const idx = mockScheduleLogs.findIndex((l) => l.id === item.id);
+    if (idx >= 0) {
+      mockScheduleLogs[idx] = sanitized;
+    } else {
+      mockScheduleLogs.unshift(sanitized);
+      if (mockScheduleLogs.length > 500) {
+        mockScheduleLogs = mockScheduleLogs.slice(0, 500);
+      }
+    }
+    syncData();
+    return;
+  }
+  await setDoc(doc(db, "whatsapp_schedule_logs", item.id), sanitized, { merge: true });
+};
+
+const sendNotificationViaWebhook = async (
+  item: ScheduledWhatsAppNotification,
+  webhookUrl: string,
+  webhookToken: string,
+): Promise<{ ok: boolean; error?: string }> => {
+  if (!webhookUrl || !/^https?:\/\//i.test(webhookUrl)) {
+    return { ok: false, error: "URL do Webhook/API inválida ou não configurada." };
+  }
+  if (!item.phoneDigits || item.phoneDigits.length < 10) {
+    return { ok: false, error: "Telefone do destinatário inválido ou ausente." };
+  }
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (webhookToken) {
+      headers["Authorization"] = webhookToken.startsWith("Bearer ")
+        ? webhookToken
+        : `Bearer ${webhookToken}`;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch(webhookUrl, {
+      method: "POST",
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        id: item.id,
+        clientId: item.clientId,
+        clientName: item.clientName,
+        clientCpf: item.clientCpf,
+        phone: item.phone,
+        phoneDigits: item.phoneDigits,
+        number: item.phoneDigits,
+        message: item.message,
+        text: item.message,
+        situacao: item.situacao,
+        parcelaNumero: item.parcelaNumero,
+        dataVencimento: item.dataVencimento,
+        valor: item.valor,
+        valorDivida: item.valorDivida,
+        dias: item.dias,
+        dateISO: item.dateISO,
+      }),
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: `HTTP ${resp.status}${txt ? `: ${txt.slice(0, 140)}` : ""}`,
+      };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Falha na requisição do Webhook" };
+  }
+};
+
+let isSchedulerRunning = false;
+
+const runAutoWhatsAppSchedule = async (options: {
+  trigger: "automatic" | "manual";
+  dateISO?: string;
+}) => {
+  if (isSchedulerRunning) {
+    return { alreadyRunning: true, generated: 0, sent: 0, pending: 0, errors: 0, dateISO: options.dateISO || getBrazilTodayISO() };
+  }
+  isSchedulerRunning = true;
+  const targetDateISO = options.dateISO || getBrazilTodayISO();
+  try {
+    const settings = await loadServerSettings();
+    const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
+    const clients = await loadAllClientsForSchedule();
+    const existingLogs = await loadScheduleLogsFromStore();
+    const existingMap = new Map(existingLogs.map((l) => [l.id, l]));
+
+    const candidates = evaluateAutoScheduleNotifications(clients, settings, targetDateISO);
+
+    let generated = 0;
+    let sent = 0;
+    let pending = 0;
+    let errors = 0;
+    const processedItems: ScheduledWhatsAppNotification[] = [];
+
+    for (const candidate of candidates) {
+      const existing = existingMap.get(candidate.id);
+      if (existing && (existing.status === "enviado" || existing.status === "ignorado")) {
+        continue;
+      }
+
+      let itemToSave: ScheduledWhatsAppNotification = existing
+        ? {
+            ...existing,
+            phone: candidate.phone,
+            phoneDigits: candidate.phoneDigits,
+            hasCustomPhone: candidate.hasCustomPhone,
+            valor: candidate.valor,
+            valorDivida: candidate.valorDivida,
+            dias: candidate.dias,
+            message: candidate.message,
+          }
+        : { ...candidate };
+
+      if (!existing) generated++;
+
+      if (config.modoEnvio === "webhook_api") {
+        if (config.webhookUrl) {
+          const result = await sendNotificationViaWebhook(
+            itemToSave,
+            config.webhookUrl,
+            config.webhookToken,
+          );
+          if (result.ok) {
+            itemToSave = {
+              ...itemToSave,
+              status: "enviado",
+              sentAt: new Date().toISOString(),
+              deliveryMethod: "webhook_api",
+              errorMessage: "",
+            };
+            sent++;
+          } else {
+            itemToSave = {
+              ...itemToSave,
+              status: "erro",
+              deliveryMethod: "webhook_api",
+              errorMessage: result.error || "Erro ao enviar via Webhook",
+            };
+            errors++;
+          }
+        } else {
+          itemToSave = {
+            ...itemToSave,
+            status: "erro",
+            deliveryMethod: "webhook_api",
+            errorMessage: "URL do Webhook/API não configurada nas Configurações.",
+          };
+          errors++;
+        }
+      } else {
+        itemToSave = {
+          ...itemToSave,
+          status: "pendente",
+          deliveryMethod: "whatsapp_business",
+          errorMessage: !itemToSave.phoneDigits || itemToSave.phoneDigits.length < 10
+            ? "Cliente sem celular válido cadastrado"
+            : "",
+        };
+        pending++;
+      }
+
+      await saveScheduleLogToStore(itemToSave);
+      processedItems.push(itemToSave);
+    }
+
+    const updatedAutoConfig = {
+      ...config,
+      lastRunDate: targetDateISO,
+      lastRunAt: new Date().toISOString(),
+    };
+    if (!db) {
+      mockSettings = { ...(mockSettings || {}), autoScheduleConfig: updatedAutoConfig };
+      syncData();
+    } else {
+      await setDoc(
+        doc(db, "admin_settings", "1"),
+        sanitizeForFirestore({ autoScheduleConfig: updatedAutoConfig }),
+        { merge: true },
+      );
+    }
+
+    broadcastUpdate("AUTO_SCHEDULE_RUN", {
+      dateISO: targetDateISO,
+      trigger: options.trigger,
+      totalEvaluated: candidates.length,
+      generated,
+      sent,
+      pending,
+      errors,
+      modoEnvio: config.modoEnvio,
+      timestamp: updatedAutoConfig.lastRunAt,
+    });
+
+    return {
+      alreadyRunning: false,
+      dateISO: targetDateISO,
+      totalEvaluated: candidates.length,
+      generated,
+      sent,
+      pending,
+      errors,
+      items: processedItems,
+    };
+  } finally {
+    isSchedulerRunning = false;
+  }
+};
+
+app.get("/api/whatsapp-schedule", requireAdmin, async (req, res) => {
+  try {
+    const settings = await loadServerSettings();
+    const logs = await loadScheduleLogsFromStore();
+    const todayISO = getBrazilTodayISO();
+    const currentTimeSP = getBrazilTimeHHMM();
+    const filterDate = typeof req.query.date === "string" ? req.query.date : "";
+    const filteredLogs = filterDate
+      ? logs.filter((l) => l.dateISO === filterDate)
+      : logs;
+
+    const todayLogs = logs.filter((l) => l.dateISO === todayISO);
+    const summary = {
+      todayTotal: todayLogs.length,
+      todayPending: todayLogs.filter((l) => l.status === "pendente").length,
+      todaySent: todayLogs.filter((l) => l.status === "enviado").length,
+      todayErrors: todayLogs.filter((l) => l.status === "erro").length,
+      todayIgnored: todayLogs.filter((l) => l.status === "ignorado").length,
+    };
+
+    res.json({
+      logs: filteredLogs,
+      config: settings.autoScheduleConfig,
+      todayISO,
+      currentTimeSP,
+      summary,
+    });
+  } catch (error: any) {
+    console.error("Error fetching whatsapp schedule:", error);
+    res.status(500).json({ error: "Falha ao buscar fila de agendamentos" });
+  }
+});
+
+app.post("/api/whatsapp-schedule/run", requireAdmin, async (req, res) => {
+  try {
+    const dateISO =
+      typeof req.body?.dateISO === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.dateISO)
+        ? req.body.dateISO
+        : getBrazilTodayISO();
+    const result = await runAutoWhatsAppSchedule({
+      trigger: "manual",
+      dateISO,
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error("Error running manual whatsapp schedule:", error);
+    res.status(500).json({ error: error?.message || "Falha ao executar agendamento" });
+  }
+});
+
+app.patch("/api/whatsapp-schedule/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, phone, message, deliveryMethod, errorMessage } = req.body || {};
+    const logs = await loadScheduleLogsFromStore();
+    const existing = logs.find((l) => l.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: "Agendamento não encontrado" });
+    }
+    const updatedPhone = phone !== undefined ? String(phone) : existing.phone;
+    const updatedDigits = updatedPhone.replace(/\D/g, "");
+    const normalizedDigits =
+      updatedDigits.length > 11 && updatedDigits.startsWith("55")
+        ? updatedDigits
+        : updatedDigits
+          ? `55${updatedDigits}`
+          : "";
+
+    const updated: ScheduledWhatsAppNotification = {
+      ...existing,
+      ...(status ? { status } : {}),
+      ...(message !== undefined ? { message: String(message) } : {}),
+      ...(phone !== undefined ? { phone: updatedPhone, phoneDigits: normalizedDigits } : {}),
+      ...(deliveryMethod ? { deliveryMethod } : {}),
+      ...(errorMessage !== undefined ? { errorMessage: String(errorMessage) } : {}),
+      ...(status === "enviado" ? { sentAt: new Date().toISOString(), errorMessage: "" } : {}),
+    };
+
+    await saveScheduleLogToStore(updated);
+    res.json({ success: true, item: updated });
+  } catch (error: any) {
+    console.error("Error updating schedule log:", error);
+    res.status(500).json({ error: "Falha ao atualizar agendamento" });
+  }
+});
+
+app.post("/api/whatsapp-schedule/:id/resend", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await loadScheduleLogsFromStore();
+    const existing = logs.find((l) => l.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: "Agendamento não encontrado" });
+    }
+    const settings = await loadServerSettings();
+    const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
+    if (config.modoEnvio === "webhook_api" && config.webhookUrl) {
+      const result = await sendNotificationViaWebhook(
+        existing,
+        config.webhookUrl,
+        config.webhookToken,
+      );
+      const updated: ScheduledWhatsAppNotification = result.ok
+        ? {
+            ...existing,
+            status: "enviado",
+            sentAt: new Date().toISOString(),
+            deliveryMethod: "webhook_api",
+            errorMessage: "",
+          }
+        : {
+            ...existing,
+            status: "erro",
+            deliveryMethod: "webhook_api",
+            errorMessage: result.error || "Erro ao reenviar",
+          };
+      await saveScheduleLogToStore(updated);
+      return res.json({ success: result.ok, item: updated, error: result.error });
+    }
+    const resetItem: ScheduledWhatsAppNotification = {
+      ...existing,
+      status: "pendente",
+      errorMessage: "",
+    };
+    await saveScheduleLogToStore(resetItem);
+    res.json({ success: true, item: resetItem });
+  } catch (error: any) {
+    console.error("Error resending schedule item:", error);
+    res.status(500).json({ error: "Falha ao reenviar agendamento" });
+  }
+});
+
+app.delete("/api/whatsapp-schedule/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!db) {
+      mockScheduleLogs = mockScheduleLogs.filter((l) => l.id !== id);
+      syncData();
+      return res.json({ success: true });
+    }
+    await deleteDoc(doc(db, "whatsapp_schedule_logs", id));
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting schedule log:", error);
+    res.status(500).json({ error: "Falha ao excluir registro de agendamento" });
+  }
+});
+
+const startAutoScheduleCron = () => {
+  const checkAndRun = async () => {
+    try {
+      const settings = await loadServerSettings();
+      const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
+      if (!config.enabled) return;
+
+      const todayISO = getBrazilTodayISO();
+      const nowTime = getBrazilTimeHHMM();
+      if (config.lastRunDate === todayISO) return;
+      if (nowTime >= config.horarioExecucao) {
+        console.log(`[AutoSchedule] Executando agendamento automático (${todayISO} ${nowTime} >= ${config.horarioExecucao})`);
+        await runAutoWhatsAppSchedule({ trigger: "automatic", dateISO: todayISO });
+      }
+    } catch (err) {
+      console.error("[AutoSchedule] Erro no ciclo automático:", err);
+    }
+  };
+
+  // Run initial check 12s after server start, then every 60 seconds
+  setTimeout(checkAndRun, 12000);
+  setInterval(checkAndRun, 60000);
+};
+
 // Error handler middleware
 app.use((err: any, req: any, res: any, next: any) => {
   if (err.type === 'entity.too.large') {
@@ -1304,6 +1779,7 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     app.use(vite.middlewares);
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
+      startAutoScheduleCron();
     });
   }
   startVite();
@@ -1315,6 +1791,7 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    startAutoScheduleCron();
   });
 }
 
