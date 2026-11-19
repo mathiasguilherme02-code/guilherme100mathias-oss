@@ -353,7 +353,7 @@ app.get("/api/settings", async (req, res) => {
     msgLembreteAVencer: 'Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.',
     msgLembretePreVencimento: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence em {dias} dia(s), no dia {data}.',
     msgLembreteVenceHoje: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).',
-    msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).',
+    msgLembreteCongelado: 'Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).',
     msgLembreteConfirmacao: 'Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.',
     msgLembreteVencido: '',
     msgTelefones: {} as Record<string, string>,

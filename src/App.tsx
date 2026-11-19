@@ -86,7 +86,7 @@ const DEFAULT_WHATSAPP_TEMPLATES = {
   msgLembreteVenceHoje:
     "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).",
   msgLembreteCongelado:
-    "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).",
+    "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).",
   msgLembreteConfirmacao:
     "Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.",
   msgLembreteVencido: "",
@@ -362,6 +362,9 @@ const getPrazoLabel = (prazo?: string) => {
   }
 };
 
+
+const isParcelaCongelada = (p: any) =>
+  Boolean(p?.jurosCongelados || p?.isCongelamento);
 
 const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
   if (!p || p.paga || p.status === "pago") return 0;
@@ -1827,15 +1830,86 @@ export default function App() {
     return dateString;
   };
 
-  const formatAbatimentosWhatsApp = (p: any): string => {
-    const list = Array.isArray(p?.abatimentos) ? p.abatimentos : [];
-    if (list.length === 0) return "";
+  const parseMonetaryValue = (val: any): number => {
+    if (typeof val === "number") return isNaN(val) ? 0 : val;
+    if (val === null || val === undefined) return 0;
+    const s = String(val).trim().replace(/R\$\s*/gi, "");
+    if (!s) return 0;
+    if (s.includes(",")) {
+      const cleaned = s.replace(/\./g, "").replace(",", ".");
+      const n = parseFloat(cleaned);
+      return isNaN(n) ? 0 : n;
+    }
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  };
+
+  const formatAbatimentosWhatsApp = (
+    p: any,
+    sim?: any,
+    client?: any,
+  ): string => {
+    const normalizeEntries = (list: any[], refLabel = "") =>
+      (Array.isArray(list) ? list : [])
+        .map((a: any) => ({
+          data: String(a?.data || a?.dataPagamento || a?.date || "").trim(),
+          valor: parseMonetaryValue(a?.valor ?? a?.value ?? 0),
+          refLabel,
+        }))
+        .filter((a) => a.valor > 0 || Boolean(a.data));
+
+    let entries = normalizeEntries(p?.abatimentos);
+
+    if (entries.length === 0 && sim) {
+      const simAbat = normalizeEntries(sim?.abatimentos);
+      const simParcelas = Array.isArray(sim?.parcelas) ? sim.parcelas : [];
+      const fromSimParcelas = simParcelas.flatMap((par: any, idx: number) => {
+        const ref =
+          simParcelas.length > 1
+            ? sim?.prazo === "abater"
+              ? `Lembrete ${par?.numero || idx + 1}`
+              : `Parcela ${par?.numero || idx + 1}`
+            : "";
+        return normalizeEntries(par?.abatimentos, ref);
+      });
+      entries = [...simAbat, ...fromSimParcelas];
+    }
+
+    if (entries.length === 0 && client) {
+      const allSims =
+        client.simulacoes || (client.simulacao ? [client.simulacao] : []);
+      const activeSims = allSims.filter(isSimulacaoAtiva);
+      const simsToScan = activeSims.length > 0 ? activeSims : allSims;
+      entries = simsToScan.flatMap((s: any) => {
+        const sAbat = normalizeEntries(s?.abatimentos);
+        const sParcelas = Array.isArray(s?.parcelas) ? s.parcelas : [];
+        const fromParcelas = sParcelas.flatMap((par: any, idx: number) => {
+          const ref =
+            sParcelas.length > 1
+              ? s?.prazo === "abater"
+                ? `Lembrete ${par?.numero || idx + 1}`
+                : `Parcela ${par?.numero || idx + 1}`
+              : "";
+          return normalizeEntries(par?.abatimentos, ref);
+        });
+        return [...sAbat, ...fromParcelas];
+      });
+    }
+
+    if (entries.length === 0) return "";
+
+    entries.sort((a, b) => {
+      const da = a.data ? a.data.split("T")[0] : "";
+      const db = b.data ? b.data.split("T")[0] : "";
+      return da.localeCompare(db);
+    });
+
     let totalAbatido = 0;
-    const linhas = list.map((a: any) => {
-      const val = Number(a?.valor || 0);
-      totalAbatido += val;
-      const dataAbat = a?.data ? formatDate(a.data) : "Data não informada";
-      return `• ${dataAbat}: ${formatCurrency(val)}`;
+    const linhas = entries.map((a) => {
+      totalAbatido += a.valor;
+      const dataAbat = a.data ? formatDate(a.data) : "Data não informada";
+      const refSuffix = a.refLabel ? ` (${a.refLabel})` : "";
+      return `• ${dataAbat}: ${formatCurrency(a.valor)}${refSuffix}`;
     });
     return `Abatimentos registrados na ficha:\n${linhas.join("\n")}\nTotal abatido: ${formatCurrency(totalAbatido)}`;
   };
@@ -1864,6 +1938,7 @@ export default function App() {
         vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
       )
       .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
+      .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   };
@@ -1874,6 +1949,8 @@ export default function App() {
     diasAtraso: number,
     valorAtualizado: number,
     prazo?: string,
+    sim?: any,
+    client?: any,
   ) => {
     if (
       adminSettings.msgLembreteVencido &&
@@ -1889,7 +1966,7 @@ export default function App() {
         data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
         referencia: itemDesc,
         dias: diasAtraso,
-        abatimentos: formatAbatimentosWhatsApp(p),
+        abatimentos: formatAbatimentosWhatsApp(p, sim, client),
       });
     }
 
@@ -1984,6 +2061,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       | "confirmacao";
     cliente: string;
     p: any;
+    sim?: any;
+    client?: any;
     prazo?: string;
     valor: number;
     dias?: number;
@@ -2000,10 +2079,16 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         ? formatDate(params.p.dataVencimento)
         : "";
 
-    const abatimentosTexto = formatAbatimentosWhatsApp(params.p);
+    const abatimentosTexto = formatAbatimentosWhatsApp(
+      params.p,
+      params.sim,
+      params.client,
+    );
+    const isCongeladoMsg =
+      params.type === "congelado" || isParcelaCongelada(params.p);
     const appendAbatimentosIfCongelado = (tplText: string, rendered: string) => {
       if (
-        params.type === "congelado" &&
+        isCongeladoMsg &&
         abatimentosTexto &&
         !/\{abatimentos\}/i.test(tplText)
       ) {
@@ -2037,6 +2122,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         params.dias || 0,
         params.valor,
         params.prazo,
+        params.sim,
+        params.client,
       );
     }
 
@@ -2074,6 +2161,8 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
   const getCustomWhatsAppMessages = (params: {
     cliente: string;
     p: any;
+    sim?: any;
+    client?: any;
     prazo?: string;
     valor: number;
     dias?: number;
@@ -2094,7 +2183,12 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       : params.p.dataVencimento
         ? formatDate(params.p.dataVencimento)
         : "";
-    const abatimentosTexto = formatAbatimentosWhatsApp(params.p);
+    const abatimentosTexto = formatAbatimentosWhatsApp(
+      params.p,
+      params.sim,
+      params.client,
+    );
+    const parcelaCongelada = isParcelaCongelada(params.p);
 
     return customList.map((tpl: CustomWhatsAppTemplate) => {
       const rendered = renderWhatsAppTemplate(tpl.text, {
@@ -2106,7 +2200,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         abatimentos: abatimentosTexto,
       });
       const finalMessage =
-        tpl.situacao === "congelado" &&
+        (tpl.situacao === "congelado" || parcelaCongelada) &&
         abatimentosTexto &&
         !/\{abatimentos\}/i.test(tpl.text)
           ? `${rendered}\n\n${abatimentosTexto}`
@@ -6454,6 +6548,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         }
                         return {
                           ...p,
+                          sim: s,
+                          client: c,
                           valorRestante: Math.max(
                             0,
                             valorComJuros - abatimentosTotal,
@@ -6500,21 +6596,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                 if (cronogramaStatusFilter !== "all") {
                   if (cronogramaStatusFilter === "congeladas") {
-                    if (!p.jurosCongelados) return false;
+                    if (!isParcelaCongelada(p)) return false;
                   } else if (
                     cronogramaStatusFilter === "vencidas" &&
-                    (vencimento >= hoje || p.jurosCongelados)
+                    (vencimento >= hoje || isParcelaCongelada(p))
                   ) {
                     return false;
                   } else if (
                     cronogramaStatusFilter === "hoje" &&
                     (vencimento.getTime() !== hoje.getTime() ||
-                      p.jurosCongelados)
+                      isParcelaCongelada(p))
                   ) {
                     return false;
                   } else if (
                     cronogramaStatusFilter === "a_vencer" &&
-                    (vencimento <= hoje || p.jurosCongelados)
+                    (vencimento <= hoje || isParcelaCongelada(p))
                   ) {
                     return false;
                   }
@@ -6614,7 +6710,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         diffParaVencimento / (1000 * 60 * 60 * 24),
                       );
 
-                      const isCongelado = !isPago && Boolean(p.jurosCongelados);
+                      const isCongelado = !isPago && isParcelaCongelada(p);
                       const isVencendoHoje =
                         !isPago && !isCongelado && vencimento.getTime() === hoje.getTime();
                       const isVencido =
@@ -6638,6 +6734,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                       return {
                         ...p,
+                        sim: s,
+                        client: c,
                         uniqueKey: `${c.id}-${sIdx}-${pIdx}`,
                         clientId: c.id,
                         clientName: c.nomeCompleto || "Cliente",
@@ -7804,6 +7902,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             jurosCongelados: existingParcela
               ? existingParcela.jurosCongelados
               : undefined,
+            isCongelamento: existingParcela
+              ? existingParcela.isCongelamento
+              : undefined,
             dataCongelamento: existingParcela
               ? existingParcela.dataCongelamento
               : undefined,
@@ -8848,7 +8949,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     (isPreviewCongelado
                       ? sampleParcelasWithSim.find(
                           (entry: any) =>
-                            entry.par?.jurosCongelados ||
+                            isParcelaCongelada(entry.par) &&
+                            Array.isArray(entry.par?.abatimentos) &&
+                            entry.par.abatimentos.length > 0,
+                        ) ||
+                        sampleParcelasWithSim.find(
+                          (entry: any) =>
+                            isParcelaCongelada(entry.par) ||
                             (Array.isArray(entry.par?.abatimentos) &&
                               entry.par.abatimentos.length > 0),
                         )
@@ -8891,8 +8998,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       : sampleParcela?.numero
                         ? `sua Parcela ${sampleParcela.numero}`
                         : "seu Lembrete de Pagamento";
-                  const previewAbatimentos = sampleParcela
-                    ? formatAbatimentosWhatsApp(sampleParcela)
+                  const previewAbatimentos = sampleParcela || selectedSampleClient
+                    ? formatAbatimentosWhatsApp(
+                        sampleParcela,
+                        sampleSim,
+                        selectedSampleClient,
+                      )
                     : isPreviewCongelado
                       ? "Abatimentos registrados na ficha:\n• (12/11/2026) - Quinta-Feira: R$ 150,00\nTotal abatido: R$ 150,00"
                       : "";
@@ -9305,6 +9416,34 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   )}
                                 </div>
 
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5">
+                                  <label className="text-[11px] font-medium text-slate-700 whitespace-nowrap">
+                                    Usar dados do cliente na mensagem:
+                                  </label>
+                                  <select
+                                    value={waPreviewClientId}
+                                    onChange={(e) =>
+                                      setWaPreviewClientId(e.target.value)
+                                    }
+                                    className="flex-1 px-2.5 py-1 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
+                                  >
+                                    <option value="">
+                                      Exemplo padrão (Maria Silva — R$ 350,00)
+                                    </option>
+                                    {clients
+                                      .filter(
+                                        (c: any) =>
+                                          c.id !== "admin-transactions",
+                                      )
+                                      .map((c: any) => (
+                                        <option key={c.id} value={String(c.id)}>
+                                          {c.nomeCompleto}
+                                          {c.telefone ? ` (${c.telefone})` : ""}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+
                                 {isManualPhoneValid && (
                                   <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex flex-col gap-2">
                                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -9345,28 +9484,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           Copiar
                                         </button>
                                       </div>
-                                    </div>
-                                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                      <label className="text-[11px] font-medium text-emerald-900 whitespace-nowrap">
-                                        Usar dados do cliente na mensagem:
-                                      </label>
-                                      <select
-                                        value={waPreviewClientId}
-                                        onChange={(e) =>
-                                          setWaPreviewClientId(e.target.value)
-                                        }
-                                        className="flex-1 px-2.5 py-1 text-xs text-slate-800 bg-white border border-emerald-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
-                                      >
-                                        <option value="">
-                                          Exemplo padrão (Maria Silva — R$ 350,00)
-                                        </option>
-                                        {clients.map((c: any) => (
-                                          <option key={c.id} value={String(c.id)}>
-                                            {c.nomeCompleto}
-                                            {c.telefone ? ` (${c.telefone})` : ""}
-                                          </option>
-                                        ))}
-                                      </select>
                                     </div>
                                   </div>
                                 )}
@@ -11897,89 +12014,167 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             </div>
                                           )}
 
-                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (
-                                            <div className={`mt-3 pt-3 border-t ${p.jurosCongelados ? "border-blue-200 bg-blue-50/50 p-2.5 rounded-lg" : "border-red-200"}`}>
-                                              <div className={`${p.jurosCongelados ? "text-blue-700" : "text-red-600"} font-semibold mb-1 text-sm flex items-center gap-1`}>
-                                                {p.jurosCongelados
-                                                  ? `❄️ Juros Congelados${p.dataCongelamento ? ` (Até ${formatDate(p.dataCongelamento)})` : ""}`
-                                                  : sim.prazo === "abater"
-                                                    ? "⚠️ Lembrete Vencido"
-                                                    : "⚠️ Parcela Vencida"}
-                                              </div>
-                                              <div className={`grid grid-cols-2 gap-1 text-xs ${p.jurosCongelados ? "text-blue-900" : "text-red-800"}`}>
-                                                <div>
-                                                  {p.jurosCongelados ? "Atraso acordado:" : "Atraso:"} {diasAtraso}{" "}
-                                                  {diasAtraso === 1 ? "dia" : "dias"}
+                                          {(() => {
+                                            const isCongelada =
+                                              !p.paga &&
+                                              p.status !== "pago" &&
+                                              isParcelaCongelada(p);
+                                            if (
+                                              !(
+                                                isVencida ||
+                                                diasAtraso > 0 ||
+                                                isCongelada
+                                              ) ||
+                                              isEditing
+                                            ) {
+                                              return null;
+                                            }
+                                            return (
+                                              <div
+                                                className={`mt-3 pt-3 border-t ${isCongelada ? "border-blue-200 bg-blue-50/50 p-2.5 rounded-lg" : "border-red-200"}`}
+                                              >
+                                                <div
+                                                  className={`${isCongelada ? "text-blue-700" : "text-red-600"} font-semibold mb-1 text-sm flex items-center gap-1`}
+                                                >
+                                                  {isCongelada
+                                                    ? `❄️ Juros Congelados${p.dataCongelamento ? ` (Até ${formatDate(p.dataCongelamento)})` : ""}`
+                                                    : sim.prazo === "abater"
+                                                      ? "⚠️ Lembrete Vencido"
+                                                      : "⚠️ Parcela Vencida"}
                                                 </div>
-                                                <div>
-                                                  Taxa:{" "}
-                                                  {sim.prazo === "abater" && (!sim.aplicarJurosDiarios && (!sim.taxaAtrasoDia || parseFloat(sim.taxaAtrasoDia) === 0))
-                                                    ? 0
-                                                    : diasAtraso *
-                                                      (parseFloat(
+                                                <div
+                                                  className={`grid grid-cols-2 gap-1 text-xs ${isCongelada ? "text-blue-900" : "text-red-800"}`}
+                                                >
+                                                  <div>
+                                                    {isCongelada
+                                                      ? "Atraso acordado:"
+                                                      : "Atraso:"}{" "}
+                                                    {diasAtraso}{" "}
+                                                    {diasAtraso === 1
+                                                      ? "dia"
+                                                      : "dias"}
+                                                  </div>
+                                                  <div>
+                                                    Taxa:{" "}
+                                                    {sim.prazo === "abater" &&
+                                                    !sim.aplicarJurosDiarios &&
+                                                    (!sim.taxaAtrasoDia ||
+                                                      parseFloat(
                                                         sim.taxaAtrasoDia,
-                                                      ) || parseFloat(adminSettings.taxaAtrasoDia) || 1)}
-                                                  %
-                                                </div>
-                                                <div className="col-span-2 font-bold text-sm mt-1">
-                                                  Valor Atualizado:{" "}
-                                                  {formatCurrency(
-                                                    valorAtualizado,
-                                                  )}
+                                                      ) === 0)
+                                                      ? 0
+                                                      : diasAtraso *
+                                                        (parseFloat(
+                                                          sim.taxaAtrasoDia,
+                                                        ) ||
+                                                          parseFloat(
+                                                            adminSettings.taxaAtrasoDia,
+                                                          ) ||
+                                                          1)}
+                                                    %
+                                                  </div>
+                                                  <div className="col-span-2 font-bold text-sm mt-1">
+                                                    Valor Atualizado:{" "}
+                                                    {formatCurrency(
+                                                      valorAtualizado,
+                                                    )}
+                                                  </div>
                                                 </div>
                                               </div>
-                                            </div>
-                                          )}
+                                            );
+                                          })()}
 
-                                          {(isVencida || diasAtraso > 0 || p.jurosCongelados) && !isEditing && (() => {
-                                            const waType = p.jurosCongelados ? "congelado" : "vencido";
-                                            const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, waType);
-                                            const msg = buildWhatsAppPaymentMessage({
-                                              type: waType,
-                                              cliente: selectedClient.nomeCompleto,
-                                              p,
-                                              prazo: sim.prazo,
-                                              valor: valorAtualizado,
-                                              dias: diasAtraso,
-                                              dataStr: p.jurosCongelados
-                                                ? p.dataCongelamento || p.dataVencimento
-                                                : p.dataVencimento,
-                                            });
-                                              return (
-                                                <div className="mt-3 pt-3 border-t border-slate-200 print:hidden flex flex-col sm:flex-row gap-2">
-                                                  <a
-                                                    href={formatWhatsAppHref(targetPhone, msg)}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    onClick={(e) => handleWhatsAppLinkClick(e, targetPhone, selectedClient.nomeCompleto, msg)}
-                                                    className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
-                                                  >
-                                                    <Phone size={16} />
-                                                    {p.jurosCongelados
-                                                      ? "Enviar Acordo de Congelamento via WhatsApp"
-                                                      : sim.prazo === "abater"
-                                                        ? "Notificar Lembrete Vencido via WhatsApp"
-                                                        : "Notificar Parcela Vencida via WhatsApp"}
-                                                  </a>
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => openManualWhatsAppSend(selectedClient.nomeCompleto, msg)}
-                                                    title="Adicionar número manualmente e enviar esta mensagem"
-                                                    className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
-                                                  >
-                                                    <Send size={14} />
-                                                    Enviar p/ Nº Manual
-                                                  </button>
-                                                </div>
+                                          {(() => {
+                                            const isCongelada =
+                                              !p.paga &&
+                                              p.status !== "pago" &&
+                                              isParcelaCongelada(p);
+                                            if (
+                                              !(
+                                                isVencida ||
+                                                diasAtraso > 0 ||
+                                                isCongelada
+                                              ) ||
+                                              isEditing
+                                            ) {
+                                              return null;
+                                            }
+                                            const waType = isCongelada
+                                              ? "congelado"
+                                              : "vencido";
+                                            const targetPhone =
+                                              resolveWhatsAppTargetPhone(
+                                                selectedClient.telefone,
+                                                waType,
                                               );
-                                            })()}
+                                            const msg =
+                                              buildWhatsAppPaymentMessage({
+                                                type: waType,
+                                                cliente:
+                                                  selectedClient.nomeCompleto,
+                                                p,
+                                                sim,
+                                                client: selectedClient,
+                                                prazo: sim.prazo,
+                                                valor: valorAtualizado,
+                                                dias: diasAtraso,
+                                                dataStr: isCongelada
+                                                  ? p.dataCongelamento ||
+                                                    p.dataVencimento
+                                                  : p.dataVencimento,
+                                              });
+                                            return (
+                                              <div className="mt-3 pt-3 border-t border-slate-200 print:hidden flex flex-col sm:flex-row gap-2">
+                                                <a
+                                                  href={formatWhatsAppHref(
+                                                    targetPhone,
+                                                    msg,
+                                                  )}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  onClick={(e) =>
+                                                    handleWhatsAppLinkClick(
+                                                      e,
+                                                      targetPhone,
+                                                      selectedClient.nomeCompleto,
+                                                      msg,
+                                                    )
+                                                  }
+                                                  className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                >
+                                                  <Phone size={16} />
+                                                  {isCongelada
+                                                    ? "Enviar Acordo de Congelamento via WhatsApp"
+                                                    : sim.prazo === "abater"
+                                                      ? "Notificar Lembrete Vencido via WhatsApp"
+                                                      : "Notificar Parcela Vencida via WhatsApp"}
+                                                </a>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    openManualWhatsAppSend(
+                                                      selectedClient.nomeCompleto,
+                                                      msg,
+                                                    )
+                                                  }
+                                                  title="Adicionar número manualmente e enviar esta mensagem"
+                                                  className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                >
+                                                  <Send size={14} />
+                                                  Enviar p/ Nº Manual
+                                                </button>
+                                              </div>
+                                            );
+                                          })()}
 
-                                          {isVencendoHoje && (() => {
+                                          {isVencendoHoje && !isParcelaCongelada(p) && !isEditing && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "vence_hoje");
                                             const msg = buildWhatsAppPaymentMessage({
                                               type: "vence_hoje",
                                               cliente: selectedClient.nomeCompleto,
                                               p,
+                                              sim,
+                                              client: selectedClient,
                                               prazo: sim.prazo,
                                               valor: valorAtualizado,
                                               dataStr: p.dataVencimento,
@@ -12011,12 +12206,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             );
                                           })()}
 
-                                          {isPreVencimento && (() => {
+                                          {isPreVencimento && !isParcelaCongelada(p) && !isEditing && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "pre_vencimento");
                                             const msg = buildWhatsAppPaymentMessage({
                                               type: "pre_vencimento",
                                               cliente: selectedClient.nomeCompleto,
                                               p,
+                                              sim,
+                                              client: selectedClient,
                                               prazo: sim.prazo,
                                               valor: valorAtualizado,
                                               dias: diasParaVencimento,
@@ -12055,6 +12252,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               type: "confirmacao",
                                               cliente: selectedClient.nomeCompleto,
                                               p,
+                                              sim,
+                                              client: selectedClient,
                                               prazo: sim.prazo,
                                               valor: Number(p.valor || 0),
                                               dataStr: p.dataPagamento || p.dataVencimento,
@@ -12091,6 +12290,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   cliente:
                                                     selectedClient.nomeCompleto,
                                                   p,
+                                                  sim,
+                                                  client: selectedClient,
                                                   prazo: sim.prazo,
                                                   valor: p.paga
                                                     ? Number(p.valor || 0)
@@ -12104,7 +12305,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   dataStr: p.paga
                                                     ? p.dataPagamento ||
                                                       p.dataVencimento
-                                                    : p.jurosCongelados
+                                                    : isParcelaCongelada(p)
                                                       ? p.dataCongelamento ||
                                                         p.dataVencimento
                                                       : p.dataVencimento,
@@ -12984,7 +13185,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                       const allFrozen =
                         parcelas.length > 0 &&
-                        parcelas.every((p: any) => p.jurosCongelados);
+                        parcelas.every((p: any) => isParcelaCongelada(p));
 
                       if (cronogramaStatusFilter === "congeladas" || allFrozen) {
                         dateLabel += " (Congeladas)";
@@ -13055,7 +13256,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       {p.prazo === "abater" ? "Lembrete" : p.numero}
                                     </td>
                                     <td className="py-3 px-6">
-                                      {p.jurosCongelados ? (
+                                      {isParcelaCongelada(p) ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
                                           ❄️ Congeladas{p.dataCongelamento ? ` (${formatDate(p.dataCongelamento)})` : ""}
                                         </span>
@@ -13080,13 +13281,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       <div className="flex items-center justify-end gap-2">
                                         {(() => {
                                           const cronoWa = (() => {
-                                            if (p.jurosCongelados) {
+                                            if (isParcelaCongelada(p)) {
                                               return {
                                                 phone: resolveWhatsAppTargetPhone(p.clientPhone, "congelado"),
                                                 msg: buildWhatsAppPaymentMessage({
                                                   type: "congelado",
                                                   cliente: p.clientName,
                                                   p,
+                                                  sim: p.sim,
+                                                  client: p.client,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataCongelamento || p.dataVencimento,
@@ -13100,6 +13303,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   type: "vence_hoje",
                                                   cliente: p.clientName,
                                                   p,
+                                                  sim: p.sim,
+                                                  client: p.client,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   dataStr: p.dataVencimento,
@@ -13113,6 +13318,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   type: "pre_vencimento",
                                                   cliente: p.clientName,
                                                   p,
+                                                  sim: p.sim,
+                                                  client: p.client,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   dias: diasParaVencimento,
@@ -13146,6 +13353,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   type: "vencido",
                                                   cliente: p.clientName,
                                                   p,
+                                                  sim: p.sim,
+                                                  client: p.client,
                                                   prazo: p.prazo,
                                                   valor: valorAtualizado,
                                                   dias: diasAtraso,
@@ -13159,6 +13368,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 type: "a_vencer",
                                                 cliente: p.clientName,
                                                 p,
+                                                sim: p.sim,
+                                                client: p.client,
                                                 prazo: p.prazo,
                                                 valor: p.valorRestante,
                                                 dataStr: p.dataVencimento,
@@ -13205,6 +13416,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             getCustomWhatsAppMessages({
                                               cliente: p.clientName,
                                               p,
+                                              sim: p.sim,
+                                              client: p.client,
                                               prazo: p.prazo,
                                               valor: p.valorRestante,
                                               dias: isVencida
@@ -13213,7 +13426,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     0,
                                                     diasParaVencimento,
                                                   ),
-                                              dataStr: p.jurosCongelados
+                                              dataStr: isParcelaCongelada(p)
                                                 ? p.dataCongelamento ||
                                                   p.dataVencimento
                                                 : p.dataVencimento,
@@ -13717,6 +13930,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               type: "confirmacao",
                               cliente: item.clientName,
                               p: item,
+                              sim: item.sim,
+                              client: item.client,
                               prazo: item.prazo,
                               valor: Number(item.valor || 0),
                               dataStr: item.dataPagamento || item.dataVencimento,
@@ -13726,6 +13941,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 type: "congelado",
                                 cliente: item.clientName,
                                 p: item,
+                                sim: item.sim,
+                                client: item.client,
                                 prazo: item.prazo,
                                 valor: item.valorRestante,
                                 dataStr: item.dataCongelamento || item.dataVencimento,
@@ -13735,6 +13952,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   type: "vence_hoje",
                                   cliente: item.clientName,
                                   p: item,
+                                  sim: item.sim,
+                                  client: item.client,
                                   prazo: item.prazo,
                                   valor: item.valorRestante,
                                   dataStr: item.dataVencimento,
@@ -13744,6 +13963,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     type: "pre_vencimento",
                                     cliente: item.clientName,
                                     p: item,
+                                    sim: item.sim,
+                                    client: item.client,
                                     prazo: item.prazo,
                                     valor: item.valorRestante,
                                     dias: item.diasParaVencimento,
@@ -13754,6 +13975,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       type: "vencido",
                                       cliente: item.clientName,
                                       p: item,
+                                      sim: item.sim,
+                                      client: item.client,
                                       prazo: item.prazo,
                                       valor: item.valorAtualizado,
                                       dias: item.diasAtraso,
@@ -13763,6 +13986,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       type: "a_vencer",
                                       cliente: item.clientName,
                                       p: item,
+                                      sim: item.sim,
+                                      client: item.client,
                                       prazo: item.prazo,
                                       valor: item.valorRestante,
                                       dataStr: item.dataVencimento,
@@ -13929,6 +14154,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                     getCustomWhatsAppMessages({
                                       cliente: item.clientName,
                                       p: item,
+                                      sim: item.sim,
+                                      client: item.client,
                                       prazo: item.prazo,
                                       valor: item.isPago
                                         ? Number(item.valor || 0)
