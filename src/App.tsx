@@ -86,7 +86,7 @@ const DEFAULT_WHATSAPP_TEMPLATES = {
   msgLembreteVenceHoje:
     "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).",
   msgLembreteCongelado:
-    "Olá {cliente}, a GM-Empréstimo informa que sua dívida está com juros congelados desde {data}.\n{abatimentos}\n\nSeu saldo devedor é de {valor}.",
+    "Olá {cliente}, a GM-Empréstimo informa que sua dívida no valor {valor_divida} está com juros congelados desde {data}.\n\n{abatimentos}\n\nSeu saldo devedor é de {valor}.",
   msgLembreteConfirmacao:
     "Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.",
   msgLembreteVencido: "",
@@ -134,7 +134,7 @@ const WA_TEMPLATE_OPTIONS: Array<{
   {
     key: "msgLembreteCongelado",
     label: "Juros Congelados",
-    hint: "Enviada quando há acordo de congelamento de juros ({data} mostra a data de congelamento, {abatimentos} lista os abatimentos com datas e {valor} o saldo devedor).",
+    hint: "Enviada quando há acordo de congelamento de juros ({valor_divida} mostra o valor da dívida antes dos abatimentos, {data} a data de congelamento, {abatimentos} os abatimentos com datas e {valor} o saldo devedor).",
   },
   {
     key: "msgLembreteVencido",
@@ -150,7 +150,8 @@ const WA_TEMPLATE_OPTIONS: Array<{
 
 const WA_DYNAMIC_TAGS: Array<{ tag: string; desc: string }> = [
   { tag: "{cliente}", desc: "Primeiro nome do cliente (também aceita {nome})" },
-  { tag: "{valor}", desc: "Valor / saldo devedor formatado (ex: R$ 350,00)" },
+  { tag: "{valor_divida}", desc: "Valor da dívida antes dos abatimentos (ex: R$ 1.186,80)" },
+  { tag: "{valor}", desc: "Saldo devedor / valor final (ex: R$ 606,80)" },
   { tag: "{data}", desc: "Data e dia da semana" },
   { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
   { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
@@ -1296,6 +1297,7 @@ export default function App() {
           const legacyFrozenDefaults = [
             "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).",
             "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).",
+            "Olá {cliente}, a GM-Empréstimo informa que sua dívida está com juros congelados desde {data}.\n{abatimentos}\n\nSeu saldo devedor é de {valor}.",
           ];
           const normalizedFrozenMsg =
             typeof settings.msgLembreteCongelado === "string" &&
@@ -1931,6 +1933,7 @@ export default function App() {
     vars: {
       cliente: string;
       valor: string;
+      valorDivida?: string;
       data: string;
       referencia: string;
       dias?: string | number;
@@ -1942,7 +1945,8 @@ export default function App() {
       : "Cliente";
     return template
       .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
-      .replace(/\{valor\}/gi, vars.valor || "")
+      .replace(/\{(?:valor_divida|valor_total|divida)\}/gi, vars.valorDivida || vars.valor || "")
+      .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, vars.valor || "")
       .replace(/\{data\}/gi, vars.data || "")
       .replace(/\{referencia\}/gi, vars.referencia || "")
       .replace(
@@ -1963,6 +1967,7 @@ export default function App() {
     prazo?: string,
     sim?: any,
     client?: any,
+    valorDivida?: number,
   ) => {
     if (
       adminSettings.msgLembreteVencido &&
@@ -1972,9 +1977,18 @@ export default function App() {
         prazo === "abater"
           ? "seu Lembrete de Pagamento"
           : `sua Parcela ${p.numero}`;
+      const pAbatTotal = Array.isArray(p?.abatimentos)
+        ? p.abatimentos.reduce(
+            (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
+            0,
+          )
+        : 0;
+      const resolvedDivida =
+        valorDivida !== undefined ? valorDivida : valorAtualizado + pAbatTotal;
       return renderWhatsAppTemplate(adminSettings.msgLembreteVencido, {
         cliente: nomeCompleto,
         valor: formatCurrency(valorAtualizado),
+        valorDivida: formatCurrency(resolvedDivida),
         data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
         referencia: itemDesc,
         dias: diasAtraso,
@@ -2077,6 +2091,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     client?: any;
     prazo?: string;
     valor: number;
+    valorDivida?: number;
     dias?: number;
     dataStr?: string;
   }) => {
@@ -2085,6 +2100,17 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         ? "seu Lembrete de Pagamento"
         : `sua Parcela ${params.p.numero}`;
     const formattedValor = formatCurrency(params.valor);
+    const pAbatTotal = Array.isArray(params.p?.abatimentos)
+      ? params.p.abatimentos.reduce(
+          (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
+          0,
+        )
+      : 0;
+    const resolvedValorDivida =
+      params.valorDivida !== undefined
+        ? params.valorDivida
+        : params.valor + pAbatTotal;
+    const formattedValorDivida = formatCurrency(resolvedValorDivida);
     const formattedData = params.dataStr
       ? formatDate(params.dataStr)
       : params.p.dataVencimento
@@ -2119,6 +2145,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       const renderedCustom = renderWhatsAppTemplate(customOverride.text, {
         cliente: params.cliente,
         valor: formattedValor,
+        valorDivida: formattedValorDivida,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
@@ -2136,6 +2163,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         params.prazo,
         params.sim,
         params.client,
+        resolvedValorDivida,
       );
     }
 
@@ -2162,6 +2190,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     const renderedMsg = renderWhatsAppTemplate(selectedTemplate, {
       cliente: params.cliente,
       valor: formattedValor,
+      valorDivida: formattedValorDivida,
       data: formattedData,
       referencia: itemDesc,
       dias: params.dias ?? 0,
@@ -2177,6 +2206,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     client?: any;
     prazo?: string;
     valor: number;
+    valorDivida?: number;
     dias?: number;
     dataStr?: string;
     clientPhoneOverride?: string;
@@ -2190,6 +2220,17 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         ? "seu Lembrete de Pagamento"
         : `sua Parcela ${params.p.numero}`;
     const formattedValor = formatCurrency(params.valor);
+    const pAbatTotal = Array.isArray(params.p?.abatimentos)
+      ? params.p.abatimentos.reduce(
+          (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
+          0,
+        )
+      : 0;
+    const formattedValorDivida = formatCurrency(
+      params.valorDivida !== undefined
+        ? params.valorDivida
+        : params.valor + pAbatTotal,
+    );
     const formattedData = params.dataStr
       ? formatDate(params.dataStr)
       : params.p.dataVencimento
@@ -2206,6 +2247,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       const rendered = renderWhatsAppTemplate(tpl.text, {
         cliente: params.cliente,
         valor: formattedValor,
+        valorDivida: formattedValorDivida,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
@@ -6562,6 +6604,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           ...p,
                           sim: s,
                           client: c,
+                          valorComJuros,
                           valorRestante: Math.max(
                             0,
                             valorComJuros - abatimentosTotal,
@@ -6772,6 +6815,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         statusKey,
                         valorRestante,
                         valorAtualizado: valorRestante,
+                        valorComJuros,
                       };
                     })
                     .filter(Boolean);
@@ -8982,28 +9026,54 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   const sampleSim = preferredSample?.s || sampleSimList[0] || null;
                   const sampleParcela = preferredSample?.par || null;
                   const previewCliente =
-                    selectedSampleClient?.nomeCompleto || "Maria Silva";
+                    selectedSampleClient?.nomeCompleto || "Patricia";
+                  const sampleAbatTotal = sampleParcela && Array.isArray(sampleParcela.abatimentos)
+                    ? sampleParcela.abatimentos.reduce(
+                        (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
+                        0,
+                      )
+                    : 0;
+                  const sampleDiasAtraso = sampleParcela
+                    ? getParcelaDiasAtraso(sampleParcela, new Date())
+                    : 0;
+                  const sampleHasDaily =
+                    sampleSim?.prazo === "abater"
+                      ? Boolean(sampleSim?.aplicarJurosDiarios) ||
+                        (sampleSim?.aplicarJurosDiarios !== false &&
+                          parseFloat(sampleSim?.taxaAtrasoDia || "0") > 0)
+                      : true;
+                  const sampleTaxaDia = sampleHasDaily
+                    ? parseFloat(sampleSim?.taxaAtrasoDia) ||
+                      parseFloat(adminSettings.taxaAtrasoDia) ||
+                      1
+                    : 0;
+                  let sampleValorComJuros = sampleParcela
+                    ? Number(sampleParcela.valor || 0)
+                    : 0;
+                  if (sampleParcela && sampleDiasAtraso > 0) {
+                    sampleValorComJuros +=
+                      sampleValorComJuros * (sampleTaxaDia / 100) * sampleDiasAtraso;
+                  }
+                  const previewValorDivida = sampleParcela
+                    ? formatCurrency(sampleValorComJuros)
+                    : isPreviewCongelado
+                      ? "R$ 1.186,80"
+                      : "R$ 350,00";
                   const previewValor = sampleParcela
                     ? formatCurrency(
-                        Math.max(
-                          0,
-                          Number(sampleParcela.valor || 0) -
-                            (Array.isArray(sampleParcela.abatimentos)
-                              ? sampleParcela.abatimentos.reduce(
-                                  (acc: number, a: any) =>
-                                    acc + (Number(a?.valor) || 0),
-                                  0,
-                                )
-                              : 0),
-                        ),
+                        Math.max(0, sampleValorComJuros - sampleAbatTotal),
                       )
-                    : "R$ 350,00";
+                    : isPreviewCongelado
+                      ? "R$ 606,80"
+                      : "R$ 350,00";
                   const previewData = sampleParcela?.dataCongelamento &&
                     isPreviewCongelado
                     ? formatDate(sampleParcela.dataCongelamento)
                     : sampleParcela?.dataVencimento
                       ? formatDate(sampleParcela.dataVencimento)
-                      : "(20/11/2026) - Sexta-Feira";
+                      : isPreviewCongelado
+                        ? "(07/08/2026) - Sexta-feira"
+                        : "(20/11/2026) - Sexta-Feira";
                   const previewReferencia =
                     sampleSim?.prazo === "abater"
                       ? "seu Lembrete de Pagamento"
@@ -9028,6 +9098,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       : renderWhatsAppTemplate(currentTemplateValue, {
                           cliente: previewCliente,
                           valor: previewValor,
+                          valorDivida: previewValorDivida,
                           data: previewData,
                           referencia: previewReferencia,
                           dias:
@@ -10951,6 +11022,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             diasAtraso;
                                       }
 
+                                      const valorComJurosSemAbatimentos =
+                                        valorAtualizado;
                                       valorAtualizado = Math.max(
                                         0,
                                         valorAtualizado - abatimentosTotal,
@@ -12129,6 +12202,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 client: selectedClient,
                                                 prazo: sim.prazo,
                                                 valor: valorAtualizado,
+                                                valorDivida:
+                                                  valorComJurosSemAbatimentos,
                                                 dias: diasAtraso,
                                                 dataStr: isCongelada
                                                   ? p.dataCongelamento ||
@@ -12308,6 +12383,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valor: p.paga
                                                     ? Number(p.valor || 0)
                                                     : valorAtualizado,
+                                                  valorDivida: p.paga
+                                                    ? Number(p.valor || 0)
+                                                    : valorComJurosSemAbatimentos,
                                                   dias: isVencida
                                                     ? diasAtraso
                                                     : Math.max(
@@ -13304,6 +13382,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   client: p.client,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
+                                                  valorDivida: p.valorComJuros,
                                                   dataStr: p.dataCongelamento || p.dataVencimento,
                                                 }),
                                               };
@@ -13432,6 +13511,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               client: p.client,
                                               prazo: p.prazo,
                                               valor: p.valorRestante,
+                                              valorDivida: p.valorComJuros,
                                               dias: isVencida
                                                 ? getParcelaDiasAtraso(p, hoje)
                                                 : Math.max(
@@ -13957,6 +14037,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 client: item.client,
                                 prazo: item.prazo,
                                 valor: item.valorRestante,
+                                valorDivida: item.valorComJuros,
                                 dataStr: item.dataCongelamento || item.dataVencimento,
                               })
                             : item.isVencendoHoje
