@@ -134,7 +134,7 @@ const WA_TEMPLATE_OPTIONS: Array<{
   {
     key: "msgLembreteCongelado",
     label: "Juros Congelados",
-    hint: "Enviada quando há acordo de congelamento de juros (tag {data} mostra a data limite do acordo).",
+    hint: "Enviada quando há acordo de congelamento de juros (tag {data} mostra a data limite do acordo e os abatimentos com datas da ficha são incluídos automaticamente).",
   },
   {
     key: "msgLembreteVencido",
@@ -154,6 +154,7 @@ const WA_DYNAMIC_TAGS: Array<{ tag: string; desc: string }> = [
   { tag: "{data}", desc: "Data e dia da semana" },
   { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
   { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
+  { tag: "{abatimentos}", desc: "Lista de abatimentos com datas e valores" },
 ];
 
 const initialFormData = {
@@ -1826,6 +1827,19 @@ export default function App() {
     return dateString;
   };
 
+  const formatAbatimentosWhatsApp = (p: any): string => {
+    const list = Array.isArray(p?.abatimentos) ? p.abatimentos : [];
+    if (list.length === 0) return "";
+    let totalAbatido = 0;
+    const linhas = list.map((a: any) => {
+      const val = Number(a?.valor || 0);
+      totalAbatido += val;
+      const dataAbat = a?.data ? formatDate(a.data) : "Data não informada";
+      return `• ${dataAbat}: ${formatCurrency(val)}`;
+    });
+    return `Abatimentos registrados na ficha:\n${linhas.join("\n")}\nTotal abatido: ${formatCurrency(totalAbatido)}`;
+  };
+
   const renderWhatsAppTemplate = (
     template: string,
     vars: {
@@ -1834,6 +1848,7 @@ export default function App() {
       data: string;
       referencia: string;
       dias?: string | number;
+      abatimentos?: string;
     },
   ) => {
     const firstName = vars.cliente
@@ -1847,7 +1862,10 @@ export default function App() {
       .replace(
         /\{dias\}/gi,
         vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
-      );
+      )
+      .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   };
 
   const generateVencidaMessage = (
@@ -1871,6 +1889,7 @@ export default function App() {
         data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
         referencia: itemDesc,
         dias: diasAtraso,
+        abatimentos: formatAbatimentosWhatsApp(p),
       });
     }
 
@@ -1981,6 +2000,18 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         ? formatDate(params.p.dataVencimento)
         : "";
 
+    const abatimentosTexto = formatAbatimentosWhatsApp(params.p);
+    const appendAbatimentosIfCongelado = (tplText: string, rendered: string) => {
+      if (
+        params.type === "congelado" &&
+        abatimentosTexto &&
+        !/\{abatimentos\}/i.test(tplText)
+      ) {
+        return `${rendered}\n\n${abatimentosTexto}`;
+      }
+      return rendered;
+    };
+
     const customOverride = (
       adminSettings.customWhatsAppTemplates || []
     ).find(
@@ -1988,13 +2019,15 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         tpl.situacao === params.type && tpl.text && tpl.text.trim().length > 0,
     );
     if (customOverride) {
-      return renderWhatsAppTemplate(customOverride.text, {
+      const renderedCustom = renderWhatsAppTemplate(customOverride.text, {
         cliente: params.cliente,
         valor: formattedValor,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
+        abatimentos: abatimentosTexto,
       });
+      return appendAbatimentosIfCongelado(customOverride.text, renderedCustom);
     }
 
     if (params.type === "vencido") {
@@ -2026,13 +2059,16 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
           : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteConfirmacao,
       };
 
-    return renderWhatsAppTemplate(templateMap[params.type], {
+    const selectedTemplate = templateMap[params.type];
+    const renderedMsg = renderWhatsAppTemplate(selectedTemplate, {
       cliente: params.cliente,
       valor: formattedValor,
       data: formattedData,
       referencia: itemDesc,
       dias: params.dias ?? 0,
+      abatimentos: abatimentosTexto,
     });
+    return appendAbatimentosIfCongelado(selectedTemplate, renderedMsg);
   };
 
   const getCustomWhatsAppMessages = (params: {
@@ -2058,20 +2094,31 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       : params.p.dataVencimento
         ? formatDate(params.p.dataVencimento)
         : "";
+    const abatimentosTexto = formatAbatimentosWhatsApp(params.p);
 
-    return customList.map((tpl: CustomWhatsAppTemplate) => ({
-      id: tpl.id,
-      label: tpl.label || "Modelo Personalizado",
-      phone: tpl.telefone?.trim() || params.clientPhoneOverride || "",
-      hasCustomPhone: Boolean(tpl.telefone?.trim()),
-      message: renderWhatsAppTemplate(tpl.text, {
+    return customList.map((tpl: CustomWhatsAppTemplate) => {
+      const rendered = renderWhatsAppTemplate(tpl.text, {
         cliente: params.cliente,
         valor: formattedValor,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
-      }),
-    }));
+        abatimentos: abatimentosTexto,
+      });
+      const finalMessage =
+        tpl.situacao === "congelado" &&
+        abatimentosTexto &&
+        !/\{abatimentos\}/i.test(tpl.text)
+          ? `${rendered}\n\n${abatimentosTexto}`
+          : rendered;
+      return {
+        id: tpl.id,
+        label: tpl.label || "Modelo Personalizado",
+        phone: tpl.telefone?.trim() || params.clientPhoneOverride || "",
+        hasCustomPhone: Boolean(tpl.telefone?.trim()),
+        message: finalMessage,
+      };
+    });
   };
 
   const normalizeWhatsAppDigits = (phone: string | undefined) => {
@@ -8782,29 +8829,75 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   const selectedSampleClient = waPreviewClientId
                     ? clients.find((c: any) => String(c.id) === waPreviewClientId)
                     : null;
-                  const sampleSim = selectedSampleClient
-                    ? (selectedSampleClient.simulacoes ||
-                        (selectedSampleClient.simulacao
-                          ? [selectedSampleClient.simulacao]
-                          : []))[0]
-                    : null;
-                  const sampleParcela = sampleSim?.parcelas?.[0] || null;
+                  const sampleSimList = selectedSampleClient
+                    ? selectedSampleClient.simulacoes ||
+                      (selectedSampleClient.simulacao
+                        ? [selectedSampleClient.simulacao]
+                        : [])
+                    : [];
+                  const sampleParcelasWithSim = sampleSimList.flatMap(
+                    (s: any) =>
+                      (Array.isArray(s?.parcelas) ? s.parcelas : []).map(
+                        (par: any) => ({ s, par }),
+                      ),
+                  );
+                  const isPreviewCongelado =
+                    resolvedBuiltIn?.key === "msgLembreteCongelado" ||
+                    activeCustomTemplate?.situacao === "congelado";
+                  const preferredSample =
+                    (isPreviewCongelado
+                      ? sampleParcelasWithSim.find(
+                          (entry: any) =>
+                            entry.par?.jurosCongelados ||
+                            (Array.isArray(entry.par?.abatimentos) &&
+                              entry.par.abatimentos.length > 0),
+                        )
+                      : null) ||
+                    sampleParcelasWithSim.find(
+                      (entry: any) =>
+                        Array.isArray(entry.par?.abatimentos) &&
+                        entry.par.abatimentos.length > 0,
+                    ) ||
+                    sampleParcelasWithSim[0] ||
+                    null;
+                  const sampleSim = preferredSample?.s || sampleSimList[0] || null;
+                  const sampleParcela = preferredSample?.par || null;
                   const previewCliente =
                     selectedSampleClient?.nomeCompleto || "Maria Silva";
                   const previewValor = sampleParcela
-                    ? formatCurrency(Number(sampleParcela.valor || 0))
+                    ? formatCurrency(
+                        Math.max(
+                          0,
+                          Number(sampleParcela.valor || 0) -
+                            (Array.isArray(sampleParcela.abatimentos)
+                              ? sampleParcela.abatimentos.reduce(
+                                  (acc: number, a: any) =>
+                                    acc + (Number(a?.valor) || 0),
+                                  0,
+                                )
+                              : 0),
+                        ),
+                      )
                     : "R$ 350,00";
-                  const previewData = sampleParcela?.dataVencimento
-                    ? formatDate(sampleParcela.dataVencimento)
-                    : "(20/11/2026) - Sexta-Feira";
+                  const previewData = sampleParcela?.dataCongelamento &&
+                    isPreviewCongelado
+                    ? formatDate(sampleParcela.dataCongelamento)
+                    : sampleParcela?.dataVencimento
+                      ? formatDate(sampleParcela.dataVencimento)
+                      : "(20/11/2026) - Sexta-Feira";
                   const previewReferencia =
                     sampleSim?.prazo === "abater"
                       ? "seu Lembrete de Pagamento"
                       : sampleParcela?.numero
                         ? `sua Parcela ${sampleParcela.numero}`
                         : "seu Lembrete de Pagamento";
+                  const previewAbatimentos = sampleParcela
+                    ? formatAbatimentosWhatsApp(sampleParcela)
+                    : isPreviewCongelado
+                      ? "Abatimentos registrados na ficha:\n• (12/11/2026) - Quinta-Feira: R$ 150,00\nTotal abatido: R$ 150,00"
+                      : "";
 
-                  const previewText =
+                  const renderedPreviewBase =
                     !activeCustomTemplate &&
                     resolvedBuiltIn?.key === "msgLembreteVencido" &&
                     !currentTemplateValue.trim()
@@ -8819,7 +8912,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             activeCustomTemplate?.situacao === "vencido"
                               ? 5
                               : adminSettings.diasLembreteAntecipado || "3",
+                          abatimentos: previewAbatimentos,
                         });
+                  const previewText =
+                    isPreviewCongelado &&
+                    previewAbatimentos &&
+                    !/\{abatimentos\}/i.test(currentTemplateValue)
+                      ? `${renderedPreviewBase}\n\n${previewAbatimentos}`
+                      : renderedPreviewBase;
 
                   return (
                     <>
