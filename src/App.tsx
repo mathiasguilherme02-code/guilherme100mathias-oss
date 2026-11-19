@@ -86,7 +86,7 @@ const DEFAULT_WHATSAPP_TEMPLATES = {
   msgLembreteVenceHoje:
     "Olá {cliente}, a GM-Empréstimo informa que {referencia} no valor de {valor} vence hoje, {data}. O pagamento deve ser realizado até as 18 horas via Pix. Nossa chave Pix: 31972323040 (Silmara).",
   msgLembreteCongelado:
-    "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).",
+    "Olá {cliente}, a GM-Empréstimo informa que sua dívida está com juros congelados desde {data}.\n{abatimentos}\n\nSeu saldo devedor é de {valor}.",
   msgLembreteConfirmacao:
     "Olá {cliente}, a GM-Empréstimo confirma o recebimento do pagamento de {referencia} no valor de {valor}, pago na data de {data}. Até a próxima.",
   msgLembreteVencido: "",
@@ -134,7 +134,7 @@ const WA_TEMPLATE_OPTIONS: Array<{
   {
     key: "msgLembreteCongelado",
     label: "Juros Congelados",
-    hint: "Enviada quando há acordo de congelamento de juros (tag {data} mostra a data limite do acordo e os abatimentos com datas da ficha são incluídos automaticamente).",
+    hint: "Enviada quando há acordo de congelamento de juros ({data} mostra a data de congelamento, {abatimentos} lista os abatimentos com datas e {valor} o saldo devedor).",
   },
   {
     key: "msgLembreteVencido",
@@ -149,8 +149,8 @@ const WA_TEMPLATE_OPTIONS: Array<{
 ];
 
 const WA_DYNAMIC_TAGS: Array<{ tag: string; desc: string }> = [
-  { tag: "{cliente}", desc: "Primeiro nome do cliente" },
-  { tag: "{valor}", desc: "Valor formatado (ex: R$ 350,00)" },
+  { tag: "{cliente}", desc: "Primeiro nome do cliente (também aceita {nome})" },
+  { tag: "{valor}", desc: "Valor / saldo devedor formatado (ex: R$ 350,00)" },
   { tag: "{data}", desc: "Data e dia da semana" },
   { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
   { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
@@ -1293,11 +1293,23 @@ export default function App() {
 
         if (settingsRes.ok) {
           const settings = await settingsRes.json();
+          const legacyFrozenDefaults = [
+            "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}. Nossa chave Pix para quitação: 31972323040 (Silmara).",
+            "Olá {cliente}, a GM-Empréstimo informa que {referencia} está com juros congelados para pagamento até {data} no valor de {valor}.\n\n{abatimentos}\n\nNossa chave Pix para quitação: 31972323040 (Silmara).",
+          ];
+          const normalizedFrozenMsg =
+            typeof settings.msgLembreteCongelado === "string" &&
+            legacyFrozenDefaults.includes(settings.msgLembreteCongelado.trim())
+              ? DEFAULT_WHATSAPP_TEMPLATES.msgLembreteCongelado
+              : settings.msgLembreteCongelado;
           setAdminSettings((prev) => ({
             ...prev,
             ...DEFAULT_WHATSAPP_TEMPLATES,
             diasLembreteAntecipado: settings.diasLembreteAntecipado || "3",
             ...settings,
+            ...(normalizedFrozenMsg !== undefined
+              ? { msgLembreteCongelado: normalizedFrozenMsg }
+              : {}),
             whatsappAppMode:
               settings.whatsappAppMode === "padrao" ? "padrao" : "business",
             msgTelefones:
@@ -1909,7 +1921,7 @@ export default function App() {
       totalAbatido += a.valor;
       const dataAbat = a.data ? formatDate(a.data) : "Data não informada";
       const refSuffix = a.refLabel ? ` (${a.refLabel})` : "";
-      return `• ${dataAbat}: ${formatCurrency(a.valor)}${refSuffix}`;
+      return `* ${dataAbat}: ${formatCurrency(a.valor)}${refSuffix}`;
     });
     return `Abatimentos registrados na ficha:\n${linhas.join("\n")}\nTotal abatido: ${formatCurrency(totalAbatido)}`;
   };
@@ -1929,7 +1941,7 @@ export default function App() {
       ? String(vars.cliente).trim().split(" ")[0]
       : "Cliente";
     return template
-      .replace(/\{cliente\}/gi, firstName || "Cliente")
+      .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
       .replace(/\{valor\}/gi, vars.valor || "")
       .replace(/\{data\}/gi, vars.data || "")
       .replace(/\{referencia\}/gi, vars.referencia || "")
@@ -9005,7 +9017,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         selectedSampleClient,
                       )
                     : isPreviewCongelado
-                      ? "Abatimentos registrados na ficha:\n• (12/11/2026) - Quinta-Feira: R$ 150,00\nTotal abatido: R$ 150,00"
+                      ? "Abatimentos registrados na ficha:\n* (18/09/2026) - Sexta-feira: R$ 130,00\n* (30/09/2026) - Quarta-feira: R$ 200,00\n* (01/10/2026) - Quinta-feira: R$ 100,00\n* (07/11/2026) - Sábado: R$ 150,00\nTotal abatido: R$ 580,00"
                       : "";
 
                   const renderedPreviewBase =
