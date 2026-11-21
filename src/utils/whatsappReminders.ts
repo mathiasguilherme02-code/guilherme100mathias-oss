@@ -1,3 +1,8 @@
+import {
+  calculateParcelaDetails,
+  formatISOToBR,
+} from "./installmentMath";
+
 export const DEFAULT_WHATSAPP_TEMPLATES = {
   msgLembreteAVencer:
     "Olá {cliente}, a GM-Empréstimo lembra que {referencia} no valor de {valor} vencerá em {data}.",
@@ -210,37 +215,23 @@ export const parseMonetaryValueShared = (val: any): number => {
   return isNaN(n) ? 0 : n;
 };
 
-export const isParcelaCongeladaShared = (p: any): boolean =>
-  Boolean(p?.jurosCongelados || p?.isCongelamento);
+export const isParcelaCongeladaShared = (
+  p: any,
+  options?: { sim?: any; taxaGlobal?: string | number; hoje?: Date | string },
+): boolean => {
+  if (!p || p.paga || p.status === "pago") return false;
+  if (p?.jurosCongelados || p?.isCongelamento) return true;
+  if (!Array.isArray(p?.abatimentos) || p.abatimentos.length === 0) return false;
+  return calculateParcelaDetails(p, options).isCongeladoEfetivo;
+};
 
 export const getParcelaDiasAtrasoShared = (
   p: any,
   hoje: Date = new Date(),
+  sim?: any,
+  taxaGlobal?: string | number,
 ): number => {
-  if (!p || p.paga || p.status === "pago") return 0;
-  if (!p.dataVencimento) return 0;
-
-  const vencimento = parseLocalDateShared(p.dataVencimento);
-
-  if (p.jurosCongelados) {
-    if (p.dataCongelamento) {
-      const dataCongelada = parseLocalDateShared(p.dataCongelamento);
-      if (dataCongelada > vencimento) {
-        const diffTime = dataCongelada.getTime() - vencimento.getTime();
-        return Math.round(diffTime / (1000 * 60 * 60 * 24));
-      }
-      return 0;
-    }
-    return 0;
-  }
-
-  const hojeClean = parseLocalDateShared(hoje);
-  if (vencimento >= hojeClean) {
-    return 0;
-  }
-
-  const diffTime = Math.max(0, hojeClean.getTime() - vencimento.getTime());
-  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+  return calculateParcelaDetails(p, { sim, taxaGlobal, hoje }).diasJurosCobrados;
 };
 
 export const isSimulacaoAtivaShared = (s: any): boolean => {
@@ -341,6 +332,7 @@ export const renderWhatsAppTemplateShared = (
     referencia: string;
     dias?: string | number;
     abatimentos?: string;
+    prazoCongelamento?: string;
   },
 ): string => {
   const firstName = vars.cliente
@@ -360,6 +352,7 @@ export const renderWhatsAppTemplateShared = (
       vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
     )
     .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
+    .replace(/\{prazo_congelamento\}/gi, vars.prazoCongelamento || "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -377,6 +370,15 @@ export const generateVencidaMessageShared = (
   valorDivida?: number,
   hojeDate: Date = new Date(),
 ): string => {
+  const calc = calculateParcelaDetails(p, {
+    sim,
+    taxaGlobal: settings.taxaAtrasoDia,
+    hoje: hojeDate,
+  });
+  const prazoCongelamentoStr = calc.freezeEndDateISO
+    ? formatISOToBR(calc.freezeEndDateISO)
+    : "";
+
   if (settings.msgLembreteVencido && settings.msgLembreteVencido.trim()) {
     const itemDesc =
       prazo === "abater"
@@ -398,6 +400,7 @@ export const generateVencidaMessageShared = (
       referencia: itemDesc,
       dias: diasAtraso,
       abatimentos: formatAbatimentosWhatsAppShared(p, sim, client),
+      prazoCongelamento: prazoCongelamentoStr,
     });
   }
 
@@ -418,6 +421,9 @@ export const generateVencidaMessageShared = (
           : "";
         mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrencyShared(a.valor)}\n`;
       });
+      if (calc.isPrazo7DiasVencido && calc.freezeStartDateISO && calc.freezeEndDateISO) {
+        mensagem += `\nO prazo de congelamento de 7 dias (de ${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. Os juros diários foram retomados sobre o saldo restante (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
+      }
       mensagem += `\nRestando ainda o saldo de: ${formatCurrencyShared(valorAtualizado)}.\n`;
     } else {
       mensagem += `O valor total da sua dívida (vencida há ${diasAtraso} dias) é de ${formatCurrencyShared(valorAtualizado)}.\n`;
@@ -442,6 +448,9 @@ export const generateVencidaMessageShared = (
         : "";
       mensagem += `- ${dataStr}: ${formatCurrencyShared(a.valor)} (há ${dias} dia${dias !== 1 ? "s" : ""})\n`;
     });
+    if (calc.isPrazo7DiasVencido && calc.freezeStartDateISO && calc.freezeEndDateISO) {
+      mensagem += `\n⚠️ O prazo de 7 dias corridos de congelamento (${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. O valor já pago foi abatido (saldo restante de ${formatCurrencyShared(calc.saldoAposUltimoAbatimento)}) e os juros diários foram retomados (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
+    }
     mensagem += `\n`;
   }
 
@@ -461,7 +470,7 @@ export const generateVencidaMessageShared = (
       mensagem += `O valor acordado com juros congelados para pagamento é de ${formatCurrencyShared(valorAtualizado)}.\n`;
     }
   } else {
-    mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrencyShared(valorAtualizado)}.\n`;
+    mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} de juros calculados) é de ${formatCurrencyShared(valorAtualizado)}.\n`;
   }
 
   mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
@@ -517,17 +526,34 @@ export const buildWhatsAppPaymentMessageShared = (
     params.sim,
     params.client,
   );
+  const calc = calculateParcelaDetails(params.p, {
+    sim: params.sim,
+    taxaGlobal: settings.taxaAtrasoDia,
+    hoje: params.hojeDate || new Date(),
+  });
+  const prazoCongelamentoStr = calc.freezeEndDateISO
+    ? formatISOToBR(calc.freezeEndDateISO)
+    : "";
   const isCongeladoMsg =
-    params.type === "congelado" || isParcelaCongeladaShared(params.p);
-  const appendAbatimentosIfCongelado = (tplText: string, rendered: string) => {
+    params.type === "congelado" || calc.isCongeladoEfetivo;
+  const finalizeCongeladoMsg = (tplText: string, rendered: string) => {
+    let out = rendered;
     if (
       isCongeladoMsg &&
       abatimentosTexto &&
       !/\{abatimentos\}/i.test(tplText)
     ) {
-      return `${rendered}\n\n${abatimentosTexto}`;
+      out = `${out}\n\n${abatimentosTexto}`;
     }
-    return rendered;
+    if (
+      isCongeladoMsg &&
+      calc.isCongelado7DiasAtivo &&
+      calc.freezeEndDateISO &&
+      !/\{prazo_congelamento\}/i.test(tplText)
+    ) {
+      out = `${out}\n\nPrazo do congelamento (40% - 7 dias corridos): até ${formatISOToBR(calc.freezeEndDateISO)}. Após esse prazo, caso o saldo restante não seja quitado integralmente, os juros diários serão retomados sobre o saldo restante.`;
+    }
+    return out;
   };
 
   const customOverride = (settings.customWhatsAppTemplates || []).find(
@@ -543,8 +569,9 @@ export const buildWhatsAppPaymentMessageShared = (
       referencia: itemDesc,
       dias: params.dias ?? 0,
       abatimentos: abatimentosTexto,
+      prazoCongelamento: prazoCongelamentoStr,
     });
-    return appendAbatimentosIfCongelado(customOverride.text, renderedCustom);
+    return finalizeCongeladoMsg(customOverride.text, renderedCustom);
   }
 
   if (params.type === "vencido") {
@@ -589,8 +616,9 @@ export const buildWhatsAppPaymentMessageShared = (
     referencia: itemDesc,
     dias: params.dias ?? 0,
     abatimentos: abatimentosTexto,
+    prazoCongelamento: prazoCongelamentoStr,
   });
-  return appendAbatimentosIfCongelado(selectedTemplate, renderedMsg);
+  return finalizeCongeladoMsg(selectedTemplate, renderedMsg);
 };
 
 export const normalizeWhatsAppDigitsShared = (
@@ -741,34 +769,16 @@ export const evaluateAutoScheduleNotifications = (
         const diffMs = vencimento.getTime() - hoje.getTime();
         const diasParaVencimento = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-        const abatimentosTotal = Array.isArray(p?.abatimentos)
-          ? p.abatimentos.reduce(
-              (acc: number, a: any) =>
-                acc + parseMonetaryValueShared(a?.valor ?? 0),
-              0,
-            )
-          : 0;
-        const diasAtraso = getParcelaDiasAtrasoShared(p, hoje);
-        const hasDailyInterest =
-          s.prazo === "abater"
-            ? Boolean(s.aplicarJurosDiarios) ||
-              (s.aplicarJurosDiarios !== false &&
-                parseFloat(s.taxaAtrasoDia || "0") > 0)
-            : true;
-        const taxaDia = hasDailyInterest
-          ? parseFloat(s.taxaAtrasoDia) ||
-            parseFloat(settings.taxaAtrasoDia || "0") ||
-            1
-          : 0;
+        const calc = calculateParcelaDetails(p, {
+          sim: s,
+          taxaGlobal: settings.taxaAtrasoDia,
+          hoje,
+        });
+        const diasAtraso = calc.diasJurosCobrados;
+        const valorComJuros = calc.valorTotalSemAbatimentos;
+        const valorRestante = calc.valorAtualizado;
 
-        const valorBase = Number(p.valor || 0);
-        let valorComJuros = valorBase;
-        if (diasAtraso > 0) {
-          valorComJuros += valorBase * (taxaDia / 100) * diasAtraso;
-        }
-        const valorRestante = Math.max(0, valorComJuros - abatimentosTotal);
-
-        const isCongelado = isParcelaCongeladaShared(p);
+        const isCongelado = calc.isCongeladoEfetivo;
         const isVencendoHoje =
           !isCongelado && vencimento.getTime() === hoje.getTime();
         const isVencido = !isCongelado && !isVencendoHoje && vencimento < hoje;
@@ -786,7 +796,9 @@ export const evaluateAutoScheduleNotifications = (
         if (isCongelado) {
           if (!config.enviarCongelado) return;
           const refDateStr =
-            String(p.dataCongelamento || "").split("T")[0] || vencDateStr;
+            calc.freezeStartDateISO ||
+            String(p.dataCongelamento || "").split("T")[0] ||
+            vencDateStr;
           const refDate = parseLocalDateShared(refDateStr);
           const diffRefDays = Math.abs(
             Math.round(

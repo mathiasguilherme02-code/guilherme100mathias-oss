@@ -14,6 +14,10 @@ import {
   getBrazilTimeHHMM,
   ScheduledWhatsAppNotification,
 } from './src/utils/whatsappReminders';
+import {
+  DEFAULT_FERIADOS_CONFIG,
+  normalizeFeriadosConfig,
+} from './src/utils/holidays';
 
 dotenv.config();
 
@@ -368,6 +372,7 @@ const buildDefaultSettings = () => ({
   customWhatsAppTemplates: [] as any[],
   whatsappAppMode: 'business',
   autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG },
+  feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
 });
 
 const normalizeLoadedSettings = (raw: any) => {
@@ -397,6 +402,7 @@ const normalizeLoadedSettings = (raw: any) => {
     data.whatsappAppMode = 'business';
   }
   data.autoScheduleConfig = normalizeAutoScheduleConfig(data.autoScheduleConfig);
+  data.feriadosConfig = normalizeFeriadosConfig(data.feriadosConfig);
   return data;
 };
 
@@ -441,6 +447,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       customWhatsAppTemplates,
       whatsappAppMode,
       autoScheduleConfig,
+      feriadosConfig,
     } = req.body;
 
     const currentSettings = await loadServerSettings();
@@ -492,6 +499,9 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
           }
         : {}),
       ...(autoScheduleConfig ? { autoScheduleConfig: mergedAutoConfig } : {}),
+      ...(feriadosConfig !== undefined
+        ? { feriadosConfig: normalizeFeriadosConfig(feriadosConfig) }
+        : {}),
     };
 
     if (!db) {

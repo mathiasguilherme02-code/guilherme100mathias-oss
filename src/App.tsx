@@ -69,6 +69,19 @@ import {
   WaSituacaoType,
   CustomWhatsAppTemplate,
 } from "./utils/whatsappReminders";
+import {
+  DEFAULT_FERIADOS_CONFIG,
+  FeriadosConfig,
+  FeriadoPersonalizadoItem,
+  normalizeFeriadosConfig,
+  calculateQuintoDiaUtilDetails,
+  resolveNacionalHolidayISOForYear,
+  setActiveFeriadosConfig,
+} from "./utils/holidays";
+import {
+  calculateParcelaDetails,
+  formatISOToBR,
+} from "./utils/installmentMath";
 
 export interface AdminNotification {
   id: string;
@@ -241,59 +254,30 @@ const parseLocalDate = (dateString: string | any) => {
 
 /**
  * Retorna a data correspondente ao 5º dia útil do mês especificado.
- * Dias úteis: Segunda a Sexta-feira (excluindo fins de semana e feriados nacionais fixos no Brasil).
+ * Dias úteis: Segunda a Sexta-feira (excluindo fins de semana e feriados nacionais/personalizados configurados).
  * @param year Ano (ex: 2026)
  * @param month Mês (0 para Janeiro, 11 para Dezembro - aceita valores > 11 com rollover automático)
  */
-const getQuintoDiaUtil = (year: number, month: number): Date => {
-  const feriadosFixos = [
-    "01-01", // Confraternização Universal
-    "04-21", // Tiradentes
-    "05-01", // Dia do Trabalhador
-    "09-07", // Independência do Brasil
-    "10-12", // Nossa Senhora Aparecida
-    "11-02", // Finados
-    "11-15", // Proclamação da República
-    "11-20", // Dia da Consciência Negra
-    "12-25", // Natal
-  ];
-
-  // Normalizar ano e mês (para o caso de month > 11 ou < 0)
-  const base = new Date(year, month, 1, 12, 0, 0, 0);
-  const targetYear = base.getFullYear();
-  const targetMonth = base.getMonth();
-
-  let businessDaysCount = 0;
-  let currentDay = 1;
-
-  while (businessDaysCount < 5 && currentDay <= 31) {
-    const candidate = new Date(targetYear, targetMonth, currentDay, 12, 0, 0, 0);
-    if (candidate.getMonth() !== targetMonth) break;
-
-    const dayOfWeek = candidate.getDay(); // 0 = Domingo, 6 = Sábado
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-    const mStr = String(candidate.getMonth() + 1).padStart(2, "0");
-    const dStr = String(candidate.getDate()).padStart(2, "0");
-    const isHoliday = feriadosFixos.includes(`${mStr}-${dStr}`);
-
-    if (!isWeekend && !isHoliday) {
-      businessDaysCount++;
-      if (businessDaysCount === 5) {
-        return candidate;
-      }
-    }
-    currentDay++;
-  }
-
-  return new Date(targetYear, targetMonth, Math.min(currentDay, 7), 12, 0, 0, 0);
+const getQuintoDiaUtil = (
+  year: number,
+  month: number,
+  feriadosConfig?: FeriadosConfig | null,
+): Date => {
+  return calculateQuintoDiaUtilDetails(year, month, feriadosConfig).date;
 };
 
-const getQuintoDiaUtilISO = (year: number, month: number): string => {
-  return getLocalISODate(getQuintoDiaUtil(year, month));
+const getQuintoDiaUtilISO = (
+  year: number,
+  month: number,
+  feriadosConfig?: FeriadosConfig | null,
+): string => {
+  return calculateQuintoDiaUtilDetails(year, month, feriadosConfig).iso;
 };
 
-const getQuintoDiaUtilFromYearMonth = (yearMonth: string) => {
+const getQuintoDiaUtilFromYearMonth = (
+  yearMonth: string,
+  feriadosConfig?: FeriadosConfig | null,
+) => {
   let ym = yearMonth;
   if (!ym || !ym.includes("-")) {
     ym = getLocalISOMonth(new Date());
@@ -301,25 +285,7 @@ const getQuintoDiaUtilFromYearMonth = (yearMonth: string) => {
   const parts = ym.split("-");
   const year = parseInt(parts[0], 10);
   const month = parseInt(parts[1], 10) - 1;
-  const d = getQuintoDiaUtil(year, month);
-  const diasSemana = [
-    "Domingo",
-    "Segunda-feira",
-    "Terça-feira",
-    "Quarta-feira",
-    "Quinta-feira",
-    "Sexta-feira",
-    "Sábado",
-  ];
-  const diaStr = String(d.getDate()).padStart(2, "0");
-  const mesStr = String(d.getMonth() + 1).padStart(2, "0");
-  const anoStr = d.getFullYear();
-  return {
-    date: d,
-    iso: getLocalISODate(d),
-    diaSemana: diasSemana[d.getDay()],
-    label: `${diaStr}/${mesStr}/${anoStr} (${diasSemana[d.getDay()]})`,
-  };
+  return calculateQuintoDiaUtilDetails(year, month, feriadosConfig);
 };
 
 const getPrazoLabel = (prazo?: string) => {
@@ -345,34 +311,25 @@ const getPrazoLabel = (prazo?: string) => {
 };
 
 
-const isParcelaCongelada = (p: any) =>
-  Boolean(p?.jurosCongelados || p?.isCongelamento);
+const isParcelaCongelada = (
+  p: any,
+  sim?: any,
+  taxaGlobal?: string | number,
+  hoje: Date = new Date(),
+) => {
+  if (!p || p.paga || p.status === "pago") return false;
+  if (p?.jurosCongelados || p?.isCongelamento) return true;
+  if (!Array.isArray(p?.abatimentos) || p.abatimentos.length === 0) return false;
+  return calculateParcelaDetails(p, { sim, taxaGlobal, hoje }).isCongeladoEfetivo;
+};
 
-const getParcelaDiasAtraso = (p: any, hoje: Date = new Date()) => {
-  if (!p || p.paga || p.status === "pago") return 0;
-  if (!p.dataVencimento) return 0;
-
-  const vencimento = parseLocalDate(p.dataVencimento);
-
-  if (p.jurosCongelados) {
-    if (p.dataCongelamento) {
-      const dataCongelada = parseLocalDate(p.dataCongelamento);
-      if (dataCongelada > vencimento) {
-        const diffTime = dataCongelada.getTime() - vencimento.getTime();
-        return Math.round(diffTime / (1000 * 60 * 60 * 24));
-      }
-      return 0;
-    }
-    return 0;
-  }
-
-  const hojeClean = parseLocalDate(hoje);
-  if (vencimento >= hojeClean) {
-    return 0;
-  }
-
-  const diffTime = Math.max(0, hojeClean.getTime() - vencimento.getTime());
-  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+const getParcelaDiasAtraso = (
+  p: any,
+  hoje: Date = new Date(),
+  sim?: any,
+  taxaGlobal?: string | number,
+) => {
+  return calculateParcelaDetails(p, { sim, taxaGlobal, hoje }).diasJurosCobrados;
 };
 
 const isSimulacaoAtiva = (s: any) => {
@@ -1050,7 +1007,18 @@ export default function App() {
     msgTelefones: {} as Partial<Record<WaTemplateKey, string>>,
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
     autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG } as AutoScheduleConfig,
+    feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
   });
+  setActiveFeriadosConfig(adminSettings.feriadosConfig);
+
+  const [newHolidayName, setNewHolidayName] = useState("");
+  const [newHolidayDate, setNewHolidayDate] = useState("");
+  const [newHolidayRecorrente, setNewHolidayRecorrente] = useState(true);
+  const [holidaysPreviewYear, setHolidaysPreviewYear] = useState(() =>
+    new Date().getFullYear(),
+  );
+  const [isSavingFeriados, setIsSavingFeriados] = useState(false);
+
   const [activeWaTemplateKey, setActiveWaTemplateKey] = useState<string>(
     "msgLembreteAVencer",
   );
@@ -1274,6 +1242,30 @@ export default function App() {
       toast.error("Erro de conexão ao salvar agendamento.");
     } finally {
       setIsSavingAutoSchedule(false);
+    }
+  };
+
+  const handleSaveFeriadosSettings = async () => {
+    if (!adminToken) return;
+    setIsSavingFeriados(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(adminSettings),
+      });
+      if (res.ok) {
+        toast.success("Feriados salvos e aplicados ao cálculo do 5º dia útil!");
+      } else {
+        toast.error("Erro ao salvar configurações de feriados.");
+      }
+    } catch (err) {
+      toast.error("Erro de conexão ao salvar feriados.");
+    } finally {
+      setIsSavingFeriados(false);
     }
   };
 
@@ -1537,7 +1529,11 @@ export default function App() {
             autoScheduleConfig: normalizeAutoScheduleConfig(
               settings.autoScheduleConfig,
             ),
+            feriadosConfig: normalizeFeriadosConfig(settings.feriadosConfig),
           }));
+          setActiveFeriadosConfig(
+            normalizeFeriadosConfig(settings.feriadosConfig),
+          );
         }
 
         if (adminToken) {
@@ -2214,6 +2210,7 @@ export default function App() {
       referencia: string;
       dias?: string | number;
       abatimentos?: string;
+      prazoCongelamento?: string;
     },
   ) => {
     const firstName = vars.cliente
@@ -2230,6 +2227,7 @@ export default function App() {
         vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
       )
       .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
+      .replace(/\{prazo_congelamento\}/gi, vars.prazoCongelamento || "")
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
@@ -2245,6 +2243,15 @@ export default function App() {
     client?: any,
     valorDivida?: number,
   ) => {
+    const calc = calculateParcelaDetails(p, {
+      sim,
+      taxaGlobal: adminSettings.taxaAtrasoDia,
+      hoje: new Date(),
+    });
+    const prazoCongelamentoStr = calc.freezeEndDateISO
+      ? formatISOToBR(calc.freezeEndDateISO)
+      : "";
+
     if (
       adminSettings.msgLembreteVencido &&
       adminSettings.msgLembreteVencido.trim()
@@ -2269,6 +2276,7 @@ export default function App() {
         referencia: itemDesc,
         dias: diasAtraso,
         abatimentos: formatAbatimentosWhatsApp(p, sim, client),
+        prazoCongelamento: prazoCongelamentoStr,
       });
     }
 
@@ -2294,6 +2302,13 @@ export default function App() {
           mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrency(a.valor)}
 `;
         });
+        if (
+          calc.isPrazo7DiasVencido &&
+          calc.freezeStartDateISO &&
+          calc.freezeEndDateISO
+        ) {
+          mensagem += `\nO prazo de congelamento de 7 dias (de ${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. Os juros diários foram retomados sobre o saldo restante (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
+        }
         mensagem += `
 Restando ainda o saldo de: ${formatCurrency(valorAtualizado)}.
 `;
@@ -2325,6 +2340,13 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? "s" : ""})
 `;
       });
+      if (
+        calc.isPrazo7DiasVencido &&
+        calc.freezeStartDateISO &&
+        calc.freezeEndDateISO
+      ) {
+        mensagem += `\n⚠️ O prazo de 7 dias corridos de congelamento (${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. O valor já pago foi abatido (saldo restante de ${formatCurrency(calc.saldoAposUltimoAbatimento)}) e os juros diários foram retomados (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
+      }
       mensagem += `
 `;
     }
@@ -2344,7 +2366,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
 `;
       }
     } else {
-      mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
+      mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} de juros calculados) é de ${formatCurrency(valorAtualizado)}.
 `;
     }
 
@@ -2398,17 +2420,34 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       params.sim,
       params.client,
     );
+    const calc = calculateParcelaDetails(params.p, {
+      sim: params.sim,
+      taxaGlobal: adminSettings.taxaAtrasoDia,
+      hoje: new Date(),
+    });
+    const prazoCongelamentoStr = calc.freezeEndDateISO
+      ? formatISOToBR(calc.freezeEndDateISO)
+      : "";
     const isCongeladoMsg =
-      params.type === "congelado" || isParcelaCongelada(params.p);
-    const appendAbatimentosIfCongelado = (tplText: string, rendered: string) => {
+      params.type === "congelado" || calc.isCongeladoEfetivo;
+    const finalizeCongeladoMsg = (tplText: string, rendered: string) => {
+      let out = rendered;
       if (
         isCongeladoMsg &&
         abatimentosTexto &&
         !/\{abatimentos\}/i.test(tplText)
       ) {
-        return `${rendered}\n\n${abatimentosTexto}`;
+        out = `${out}\n\n${abatimentosTexto}`;
       }
-      return rendered;
+      if (
+        isCongeladoMsg &&
+        calc.isCongelado7DiasAtivo &&
+        calc.freezeEndDateISO &&
+        !/\{prazo_congelamento\}/i.test(tplText)
+      ) {
+        out = `${out}\n\nPrazo do congelamento (40% - 7 dias corridos): até ${formatISOToBR(calc.freezeEndDateISO)}. Após esse prazo, caso o saldo restante não seja quitado integralmente, os juros diários serão retomados sobre o saldo restante.`;
+      }
+      return out;
     };
 
     const customOverride = (
@@ -2426,8 +2465,9 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         referencia: itemDesc,
         dias: params.dias ?? 0,
         abatimentos: abatimentosTexto,
+        prazoCongelamento: prazoCongelamentoStr,
       });
-      return appendAbatimentosIfCongelado(customOverride.text, renderedCustom);
+      return finalizeCongeladoMsg(customOverride.text, renderedCustom);
     }
 
     if (params.type === "vencido") {
@@ -2471,8 +2511,9 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       referencia: itemDesc,
       dias: params.dias ?? 0,
       abatimentos: abatimentosTexto,
+      prazoCongelamento: prazoCongelamentoStr,
     });
-    return appendAbatimentosIfCongelado(selectedTemplate, renderedMsg);
+    return finalizeCongeladoMsg(selectedTemplate, renderedMsg);
   };
 
   const getCustomWhatsAppMessages = (params: {
@@ -2517,7 +2558,15 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       params.sim,
       params.client,
     );
-    const parcelaCongelada = isParcelaCongelada(params.p);
+    const calc = calculateParcelaDetails(params.p, {
+      sim: params.sim,
+      taxaGlobal: adminSettings.taxaAtrasoDia,
+      hoje: new Date(),
+    });
+    const prazoCongelamentoStr = calc.freezeEndDateISO
+      ? formatISOToBR(calc.freezeEndDateISO)
+      : "";
+    const parcelaCongelada = calc.isCongeladoEfetivo;
 
     return customList.map((tpl: CustomWhatsAppTemplate) => {
       const rendered = renderWhatsAppTemplate(tpl.text, {
@@ -2528,6 +2577,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         referencia: itemDesc,
         dias: params.dias ?? 0,
         abatimentos: abatimentosTexto,
+        prazoCongelamento: prazoCongelamentoStr,
       });
       const finalMessage =
         (tpl.situacao === "congelado" || parcelaCongelada) &&
@@ -2705,7 +2755,12 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       for (const p of sim.parcelas || []) {
         if (!p.paga && p.status !== "pago") {
           const vencimento = parseLocalDate(p.dataVencimento);
-          if (p.jurosCongelados) {
+          const calc = calculateParcelaDetails(p, {
+            sim,
+            taxaGlobal: adminSettings.taxaAtrasoDia,
+            hoje,
+          });
+          if (calc.isCongeladoEfetivo) {
             hasCongeladas = true;
             continue;
           }
@@ -2715,14 +2770,13 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
           } else if (vencimento > hoje) {
             hasEmDia = true;
           } else {
-            // vencimento < hoje
-            const diasAtraso = getParcelaDiasAtraso(p, hoje);
+            const diasAtraso = calc.diasJurosCobrados;
 
             if (diasAtraso > 60) {
               hasInadimplenteAntigo = true;
             } else if (diasAtraso > 30) {
               hasMuitoAtrasado = true;
-            } else if (diasAtraso > 0) {
+            } else if (diasAtraso > 0 || calc.isPrazo7DiasVencido) {
               hasAtrasado = true;
             } else {
               hasEmDia = true;
@@ -2785,7 +2839,12 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       if (!sim.parcelas) continue;
       for (const p of sim.parcelas) {
         if (!p.paga && p.status !== "pago") {
-          const diasAtraso = getParcelaDiasAtraso(p, hoje);
+          const diasAtraso = getParcelaDiasAtraso(
+            p,
+            hoje,
+            sim,
+            adminSettings.taxaAtrasoDia,
+          );
           if (diasAtraso > maxDias) {
             maxDias = diasAtraso;
           }
@@ -3354,30 +3413,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
     (sim.parcelas || []).forEach((p: any) => {
       if (!p.paga && p.status !== "pago") {
-        const vencimento = parseLocalDate(p.dataVencimento);
-        const isVencida = vencimento < hoje;
-        const diasAtraso = getParcelaDiasAtraso(p, hoje);
-        let valorAtualizado = Number(p.valor);
-        const abatimentosTotal = p.abatimentos
-          ? p.abatimentos.reduce((acc: number, a: any) => acc + a.valor, 0)
-          : 0;
-
-        if (isVencida || diasAtraso > 0) {
-          const hasDailyInterest =
-            sim.prazo === "abater"
-              ? Boolean(sim.aplicarJurosDiarios) ||
-                (sim.aplicarJurosDiarios !== false &&
-                  parseFloat(sim.taxaAtrasoDia || "0") > 0)
-              : true;
-          const taxaDia = hasDailyInterest
-            ? parseFloat(sim.taxaAtrasoDia) ||
-              parseFloat(adminSettings.taxaAtrasoDia) ||
-              1
-            : 0;
-          valorAtualizado = Number(p.valor) + Number(p.valor) * (taxaDia / 100) * diasAtraso;
-        }
-        valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
-        total += valorAtualizado;
+        const calc = calculateParcelaDetails(p, {
+          sim,
+          taxaGlobal: adminSettings.taxaAtrasoDia,
+          hoje,
+        });
+        total += calc.valorAtualizado;
       }
     });
     return total;
@@ -6197,47 +6238,32 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 p.dataVencimento,
                               );
 
-                              const isVencida = !p.paga && p.status !== "pago" && vencimento < hoje;
+                              const calc = calculateParcelaDetails(p, {
+                                sim,
+                                taxaGlobal: adminSettings.taxaAtrasoDia,
+                                hoje,
+                              });
+                              const isCongeladaAtiva = calc.isCongeladoEfetivo;
+                              const isVencida =
+                                !p.paga &&
+                                p.status !== "pago" &&
+                                !isCongeladaAtiva &&
+                                vencimento < hoje;
                               const isVencendoHoje =
                                 !p.paga &&
                                 p.status !== "pago" &&
+                                !isCongeladaAtiva &&
                                 vencimento.getTime() === hoje.getTime();
-                              const diasAtraso = getParcelaDiasAtraso(p, hoje);
-                              let valorAtualizado = Number(p.valor);
-                              const abatimentosTotal = p.abatimentos
-                                ? p.abatimentos.reduce(
-                                    (acc: number, a: any) => acc + a.valor,
-                                    0,
-                                  )
-                                : 0;
-
-                              if (isVencida || diasAtraso > 0) {
-                                const hasDailyInterest =
-                                  sim.prazo === "abater"
-                                    ? Boolean(sim.aplicarJurosDiarios) ||
-                                      (sim.aplicarJurosDiarios !== false &&
-                                        parseFloat(sim.taxaAtrasoDia || "0") > 0)
-                                    : true;
-                                const taxaDia = hasDailyInterest
-                                  ? parseFloat(sim.taxaAtrasoDia) || 1
-                                  : 0;
-                                valorAtualizado =
-                                  Number(p.valor) +
-                                  Number(p.valor) * (taxaDia / 100) * diasAtraso;
-                              }
-
-                              valorAtualizado = Math.max(
-                                0,
-                                valorAtualizado - abatimentosTotal,
-                              );
+                              const diasAtraso = calc.diasJurosCobrados;
+                              const valorAtualizado = calc.valorAtualizado;
 
                               return (
                                 <div
                                   key={i}
-                                  className={`border-2 rounded-xl p-5 ${isVencida ? "border-red-400 bg-red-50 shadow-sm" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50 shadow-sm" : "border-slate-200 bg-white"}`}
+                                  className={`border-2 rounded-xl p-5 ${isCongeladaAtiva ? "border-blue-300 bg-blue-50/40 shadow-sm" : isVencida ? "border-red-400 bg-red-50 shadow-sm" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50 shadow-sm" : "border-slate-200 bg-white"}`}
                                 >
                                   <div className="flex justify-between items-center mb-3">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                       <span className="font-bold text-lg text-slate-800">
                                         {sim.prazo === "abater" ? "Lembrete" : `Parcela ${p.numero}`}
                                         {p.isCongelamento && (
@@ -6245,7 +6271,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             Apenas Juros
                                           </span>
                                         )}
-                                        {p.jurosCongelados && (
+                                        {calc.isCongelado7DiasAtivo && calc.freezeEndDateISO ? (
+                                          <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                            ❄️ Congelamento 40% (até {formatISOToBR(calc.freezeEndDateISO)})
+                                          </span>
+                                        ) : p.jurosCongelados ? (
                                             <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
                                               ❄️ Congeladas{p.dataCongelamento ? ` em ${formatDate(p.dataCongelamento)}` : ""}
                                               {(() => {
@@ -6269,7 +6299,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   : "";
                                               })()}
                                             </span>
-                                          )}
+                                          ) : null}
                                       </span>
                                       {isVencendoHoje && (
                                         <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-2 py-0.5 rounded animate-pulse">
@@ -6352,22 +6382,29 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       </div>
                                     )}
 
-                                  {(isVencida || diasAtraso > 0 || p.jurosCongelados) && (
-                                    <div className="mt-4 pt-4 border-t border-red-200">
-                                      <div className="text-red-600 font-bold mb-2 flex items-center gap-1">
-                                        {p.jurosCongelados
-                                          ? "❄️ Congeladas"
+                                  {(isVencida || diasAtraso > 0 || isCongeladaAtiva) && (
+                                    <div className={`mt-4 pt-4 border-t ${isCongeladaAtiva ? "border-blue-200" : "border-red-200"}`}>
+                                      <div className={`${isCongeladaAtiva ? "text-blue-700" : "text-red-600"} font-bold mb-2 flex items-center gap-1`}>
+                                        {isCongeladaAtiva
+                                          ? calc.isCongelado7DiasAtivo && calc.freezeEndDateISO
+                                            ? `❄️ Juros Congelados por 7 dias (até ${formatISOToBR(calc.freezeEndDateISO)})`
+                                            : "❄️ Congeladas"
                                           : "⚠️ Atenção: Parcela em Atraso"}
                                       </div>
-                                      <div className="bg-white rounded-lg p-3 border border-red-100">
-                                        <div className="flex justify-between text-sm text-red-800 mb-1">
-                                          <span>Dias de atraso:</span>
+                                      <div className={`bg-white rounded-lg p-3 border ${isCongeladaAtiva ? "border-blue-100" : "border-red-100"}`}>
+                                        {calc.isPrazo7DiasVencido && calc.freezeEndDateISO && (
+                                          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-2">
+                                            Prazo de 7 dias encerrou em {formatISOToBR(calc.freezeEndDateISO)}. Juros retomados sobre o saldo restante ({formatCurrency(calc.saldoAposUltimoAbatimento)}).
+                                          </div>
+                                        )}
+                                        <div className={`flex justify-between text-sm mb-1 ${isCongeladaAtiva ? "text-blue-800" : "text-red-800"}`}>
+                                          <span>Dias de juros calculados:</span>
                                           <span className="font-semibold">
                                             {diasAtraso}{" "}
                                             {diasAtraso === 1 ? "dia" : "dias"}
                                           </span>
                                         </div>
-                                        <div className="flex justify-between text-lg font-bold text-red-700 mt-2 pt-2 border-t border-red-100">
+                                        <div className={`flex justify-between text-lg font-bold mt-2 pt-2 border-t ${isCongeladaAtiva ? "text-blue-700 border-blue-100" : "text-red-700 border-red-100"}`}>
                                           <span>Valor Atualizado:</span>
                                           <span>
                                             {formatCurrency(valorAtualizado)}
@@ -7053,38 +7090,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   .flatMap((s: any, sIdx: number) =>
                     (Array.isArray(s.parcelas) ? s.parcelas : []).map(
                       (p: any, pIdx: number) => {
-                        const abatimentosTotal = p.abatimentos
-                          ? p.abatimentos.reduce(
-                              (acc: number, a: any) => acc + a.valor,
-                              0,
-                            )
-                          : 0;
-                        const diasAtraso = getParcelaDiasAtraso(p, new Date());
-                        const hasDailyInterest =
-                          s.prazo === "abater"
-                            ? Boolean(s.aplicarJurosDiarios) ||
-                              (s.aplicarJurosDiarios !== false &&
-                                parseFloat(s.taxaAtrasoDia || "0") > 0)
-                            : true;
-                        const taxaDia = hasDailyInterest
-                          ? parseFloat(s.taxaAtrasoDia) ||
-                            parseFloat(adminSettings.taxaAtrasoDia) ||
-                            1
-                          : 0;
-                        let valorComJuros = parseFloat(p.valor || 0);
-                        if (diasAtraso > 0) {
-                          valorComJuros +=
-                            valorComJuros * (taxaDia / 100) * diasAtraso;
-                        }
+                        const calc = calculateParcelaDetails(p, {
+                          sim: s,
+                          taxaGlobal: adminSettings.taxaAtrasoDia,
+                          hoje: new Date(),
+                        });
                         return {
                           ...p,
                           sim: s,
                           client: c,
-                          valorComJuros,
-                          valorRestante: Math.max(
-                            0,
-                            valorComJuros - abatimentosTotal,
-                          ),
+                          calcDetails: calc,
+                          isCongeladoEfetivo: calc.isCongeladoEfetivo,
+                          isCongelado7DiasAtivo: calc.isCongelado7DiasAtivo,
+                          isPrazo7DiasVencido: calc.isPrazo7DiasVencido,
+                          freezeStartDateISO: calc.freezeStartDateISO,
+                          freezeEndDateISO: calc.freezeEndDateISO,
+                          diasAtraso: calc.diasJurosCobrados,
+                          valorComJuros: calc.valorTotalSemAbatimentos,
+                          valorRestante: calc.valorAtualizado,
                           clientId: c.id,
                           clientName: c.nomeCompleto,
                           clientPhone: c.telefone,
@@ -7125,23 +7148,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 if (cronogramaMonth !== "all" && month !== cronogramaMonth)
                   return false;
 
+                const pCongelada = Boolean(p.isCongeladoEfetivo);
                 if (cronogramaStatusFilter !== "all") {
                   if (cronogramaStatusFilter === "congeladas") {
-                    if (!isParcelaCongelada(p)) return false;
+                    if (!pCongelada) return false;
                   } else if (
                     cronogramaStatusFilter === "vencidas" &&
-                    (vencimento >= hoje || isParcelaCongelada(p))
+                    (vencimento >= hoje || pCongelada)
                   ) {
                     return false;
                   } else if (
                     cronogramaStatusFilter === "hoje" &&
-                    (vencimento.getTime() !== hoje.getTime() ||
-                      isParcelaCongelada(p))
+                    (vencimento.getTime() !== hoje.getTime() || pCongelada)
                   ) {
                     return false;
                   } else if (
                     cronogramaStatusFilter === "a_vencer" &&
-                    (vencimento <= hoje || isParcelaCongelada(p))
+                    (vencimento <= hoje || pCongelada)
                   ) {
                     return false;
                   }
@@ -7201,33 +7224,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       // Do not list unpaid installments from archived/renegotiated loans
                       if (!isPago && !simAtiva) return null;
 
-                      const abatimentosTotal = p.abatimentos
-                        ? p.abatimentos.reduce(
-                            (acc: number, a: any) => acc + (Number(a.valor) || 0),
-                            0,
-                          )
-                        : 0;
-                      const diasAtraso = isPago ? 0 : getParcelaDiasAtraso(p, hoje);
-                      const hasDailyInterest =
-                        s.prazo === "abater"
-                          ? Boolean(s.aplicarJurosDiarios) ||
-                            (s.aplicarJurosDiarios !== false &&
-                              parseFloat(s.taxaAtrasoDia || "0") > 0)
-                          : true;
-                      const taxaDia = hasDailyInterest
-                        ? parseFloat(s.taxaAtrasoDia) ||
-                          parseFloat(adminSettings.taxaAtrasoDia) ||
-                          1
-                        : 0;
-
-                      const valorBase = Number(p.valor || 0);
-                      let valorComJuros = valorBase;
-                      if (!isPago && diasAtraso > 0) {
-                        valorComJuros += valorBase * (taxaDia / 100) * diasAtraso;
-                      }
-                      const valorRestante = isPago
-                        ? Math.max(0, valorBase)
-                        : Math.max(0, valorComJuros - abatimentosTotal);
+                      const calc = calculateParcelaDetails(p, {
+                        sim: s,
+                        taxaGlobal: adminSettings.taxaAtrasoDia,
+                        hoje,
+                      });
+                      const abatimentosTotal = calc.abatimentosTotal;
+                      const diasAtraso = isPago ? 0 : calc.diasJurosCobrados;
+                      const valorComJuros = calc.valorTotalSemAbatimentos;
+                      const valorRestante = calc.valorAtualizado;
 
                       const vencDateStr = (p.dataVencimento || "").split("T")[0];
                       const vencimento = vencDateStr
@@ -7241,7 +7246,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         diffParaVencimento / (1000 * 60 * 60 * 24),
                       );
 
-                      const isCongelado = !isPago && isParcelaCongelada(p);
+                      const isCongelado = !isPago && calc.isCongeladoEfetivo;
                       const isVencendoHoje =
                         !isPago && !isCongelado && vencimento.getTime() === hoje.getTime();
                       const isVencido =
@@ -7267,6 +7272,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         ...p,
                         sim: s,
                         client: c,
+                        calcDetails: calc,
+                        isCongelado7DiasAtivo: calc.isCongelado7DiasAtivo,
+                        isPrazo7DiasVencido: calc.isPrazo7DiasVencido,
+                        freezeStartDateISO: calc.freezeStartDateISO,
+                        freezeEndDateISO: calc.freezeEndDateISO,
                         uniqueKey: `${c.id}-${sIdx}-${pIdx}`,
                         clientId: c.id,
                         clientName: c.nomeCompleto || "Cliente",
@@ -7712,11 +7722,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     hoje.setHours(0, 0, 0, 0);
                     const date = p.dataVencimento || "";
                     const vencimento = parseLocalDate(date);
-                    const dias = getParcelaDiasAtraso(p, hoje);
+                    const calc = calculateParcelaDetails(p, {
+                      sim: s,
+                      taxaGlobal: adminSettings.taxaAtrasoDia,
+                      hoje,
+                    });
                     return (
                       !p.paga &&
                       p.status !== "pago" &&
-                      (vencimento >= hoje || dias === 0) &&
+                      (vencimento >= hoje || calc.isCongeladoEfetivo || calc.diasJurosCobrados === 0) &&
                       date.startsWith(fluxoFilter)
                     );
                   })
@@ -7745,11 +7759,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     const hoje = new Date();
                     hoje.setHours(0, 0, 0, 0);
                     const date = p.dataVencimento || "";
-                    const dias = getParcelaDiasAtraso(p, hoje);
+                    const vencimento = parseLocalDate(date);
+                    const calc = calculateParcelaDetails(p, {
+                      sim: s,
+                      taxaGlobal: adminSettings.taxaAtrasoDia,
+                      hoje,
+                    });
                     return (
                       !p.paga &&
                       p.status !== "pago" &&
-                      dias > 0 &&
+                      !calc.isCongeladoEfetivo &&
+                      vencimento < hoje &&
+                      calc.diasJurosCobrados > 0 &&
                       date.startsWith(fluxoFilter)
                     );
                   })
@@ -9503,53 +9524,37 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   const sampleParcela = preferredSample?.par || null;
                   const previewCliente =
                     selectedSampleClient?.nomeCompleto || "Patricia";
-                  const sampleAbatTotal = sampleParcela && Array.isArray(sampleParcela.abatimentos)
-                    ? sampleParcela.abatimentos.reduce(
-                        (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
-                        0,
-                      )
+                  const sampleCalc = sampleParcela
+                    ? calculateParcelaDetails(sampleParcela, {
+                        sim: sampleSim,
+                        taxaGlobal: adminSettings.taxaAtrasoDia,
+                        hoje: new Date(),
+                      })
+                    : null;
+                  const sampleDiasAtraso = sampleCalc
+                    ? sampleCalc.diasJurosCobrados
                     : 0;
-                  const sampleDiasAtraso = sampleParcela
-                    ? getParcelaDiasAtraso(sampleParcela, new Date())
-                    : 0;
-                  const sampleHasDaily =
-                    sampleSim?.prazo === "abater"
-                      ? Boolean(sampleSim?.aplicarJurosDiarios) ||
-                        (sampleSim?.aplicarJurosDiarios !== false &&
-                          parseFloat(sampleSim?.taxaAtrasoDia || "0") > 0)
-                      : true;
-                  const sampleTaxaDia = sampleHasDaily
-                    ? parseFloat(sampleSim?.taxaAtrasoDia) ||
-                      parseFloat(adminSettings.taxaAtrasoDia) ||
-                      1
-                    : 0;
-                  let sampleValorComJuros = sampleParcela
-                    ? Number(sampleParcela.valor || 0)
-                    : 0;
-                  if (sampleParcela && sampleDiasAtraso > 0) {
-                    sampleValorComJuros +=
-                      sampleValorComJuros * (sampleTaxaDia / 100) * sampleDiasAtraso;
-                  }
-                  const previewValorDivida = sampleParcela
-                    ? formatCurrency(sampleValorComJuros)
+                  const previewValorDivida = sampleCalc
+                    ? formatCurrency(sampleCalc.valorTotalSemAbatimentos)
                     : isPreviewCongelado
                       ? "R$ 1.186,80"
                       : "R$ 350,00";
-                  const previewValor = sampleParcela
-                    ? formatCurrency(
-                        Math.max(0, sampleValorComJuros - sampleAbatTotal),
-                      )
+                  const previewValor = sampleCalc
+                    ? formatCurrency(sampleCalc.valorAtualizado)
                     : isPreviewCongelado
                       ? "R$ 606,80"
                       : "R$ 350,00";
-                  const previewData = sampleParcela?.dataCongelamento &&
+                  const previewData = sampleCalc?.freezeStartDateISO &&
                     isPreviewCongelado
-                    ? formatDate(sampleParcela.dataCongelamento)
-                    : sampleParcela?.dataVencimento
-                      ? formatDate(sampleParcela.dataVencimento)
-                      : isPreviewCongelado
-                        ? "(07/08/2026) - Sexta-feira"
-                        : "(20/11/2026) - Sexta-Feira";
+                    ? formatDate(sampleCalc.freezeStartDateISO)
+                    : sampleParcela?.dataCongelamento &&
+                        isPreviewCongelado
+                      ? formatDate(sampleParcela.dataCongelamento)
+                      : sampleParcela?.dataVencimento
+                        ? formatDate(sampleParcela.dataVencimento)
+                        : isPreviewCongelado
+                          ? "(07/08/2026) - Sexta-feira"
+                          : "(20/11/2026) - Sexta-Feira";
                   const previewReferencia =
                     sampleSim?.prazo === "abater"
                       ? "seu Lembrete de Pagamento"
@@ -10542,6 +10547,417 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               )}
                             </span>
                           )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Gerenciamento de Feriados Nacionais e Personalizados (5º Dia Útil) */}
+              <div className="mt-6 pt-6 border-t border-slate-200">
+                {(() => {
+                  const feriadosCfg = normalizeFeriadosConfig(
+                    adminSettings.feriadosConfig,
+                  );
+                  const updateFeriadosCfg = (patch: Partial<FeriadosConfig>) => {
+                    const nextCfg = normalizeFeriadosConfig({
+                      ...feriadosCfg,
+                      ...patch,
+                    });
+                    setActiveFeriadosConfig(nextCfg);
+                    setAdminSettings((prev) => ({
+                      ...prev,
+                      feriadosConfig: nextCfg,
+                    }));
+                  };
+
+                  const handleToggleNacional = (id: string) => {
+                    updateFeriadosCfg({
+                      nacionais: feriadosCfg.nacionais.map((n) =>
+                        n.id === id ? { ...n, ativo: !n.ativo } : n,
+                      ),
+                    });
+                  };
+
+                  const handleAddCustomHoliday = () => {
+                    const trimmedName = newHolidayName.trim();
+                    if (!trimmedName) {
+                      toast.error("Informe o nome do feriado.");
+                      return;
+                    }
+                    if (!newHolidayDate) {
+                      toast.error("Selecione a data do feriado.");
+                      return;
+                    }
+                    const newItem: FeriadoPersonalizadoItem = {
+                      id: `feriado-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                      nome: trimmedName,
+                      data: newHolidayDate,
+                      recorrenteAnual: newHolidayRecorrente,
+                      ativo: true,
+                    };
+                    updateFeriadosCfg({
+                      personalizados: [...feriadosCfg.personalizados, newItem],
+                    });
+                    setNewHolidayName("");
+                    setNewHolidayDate("");
+                    toast.success(
+                      "Feriado personalizado adicionado! Clique em Salvar Feriados para confirmar.",
+                    );
+                  };
+
+                  const handleToggleCustomHoliday = (id: string) => {
+                    updateFeriadosCfg({
+                      personalizados: feriadosCfg.personalizados.map((c) =>
+                        c.id === id ? { ...c, ativo: !c.ativo } : c,
+                      ),
+                    });
+                  };
+
+                  const handleDeleteCustomHoliday = (id: string) => {
+                    updateFeriadosCfg({
+                      personalizados: feriadosCfg.personalizados.filter(
+                        (c) => c.id !== id,
+                      ),
+                    });
+                    toast.info(
+                      "Feriado removido. Clique em Salvar Feriados para confirmar.",
+                    );
+                  };
+
+                  const monthNamesShort = [
+                    "Jan",
+                    "Fev",
+                    "Mar",
+                    "Abr",
+                    "Mai",
+                    "Jun",
+                    "Jul",
+                    "Ago",
+                    "Set",
+                    "Out",
+                    "Nov",
+                    "Dez",
+                  ];
+
+                  return (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-5">
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <Calendar size={19} className="text-indigo-600" />
+                            Gerenciamento de Feriados e 5º Dia Útil
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Gerencie os feriados nacionais (fixos e móveis) e cadastre feriados municipais, estaduais ou recessos. A função <strong>5º dia útil</strong> considera todas as datas ativas automaticamente.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5">
+                            <span className="text-[11px] font-medium text-slate-600">
+                              Ano ref.:
+                            </span>
+                            <select
+                              value={holidaysPreviewYear}
+                              onChange={(e) =>
+                                setHolidaysPreviewYear(Number(e.target.value))
+                              }
+                              className="text-xs font-bold text-slate-800 bg-transparent outline-none tabular-nums"
+                            >
+                              {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map(
+                                (yr) => (
+                                  <option key={yr} value={yr}>
+                                    {yr}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateFeriadosCfg({
+                                nacionais: DEFAULT_FERIADOS_CONFIG.nacionais.map(
+                                  (f) => ({ ...f }),
+                                ),
+                              });
+                              toast.info(
+                                "Feriados nacionais restaurados para o padrão.",
+                              );
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors"
+                          >
+                            <RotateCcw size={13} />
+                            Restaurar Nacionais
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isSavingFeriados}
+                            onClick={handleSaveFeriadosSettings}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 rounded-lg transition-colors"
+                          >
+                            <Save size={14} />
+                            {isSavingFeriados ? "Salvando..." : "Salvar Feriados"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                        {/* Coluna 1: Feriados Nacionais */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col">
+                          <div className="flex items-center justify-between gap-2 pb-2.5 mb-3 border-b border-slate-100">
+                            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                              Feriados Nacionais ({feriadosCfg.nacionais.filter((n) => n.ativo).length}/{feriadosCfg.nacionais.length} ativos)
+                            </h4>
+                            <span className="text-[11px] text-slate-500">
+                              Fixos e móveis ({holidaysPreviewYear})
+                            </span>
+                          </div>
+                          <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                            {feriadosCfg.nacionais.map((nat) => {
+                              const resolvedIso = resolveNacionalHolidayISOForYear(
+                                nat,
+                                holidaysPreviewYear,
+                              );
+                              const dateLabel = resolvedIso
+                                ? resolvedIso.split("-").reverse().join("/")
+                                : nat.mmdd || "-";
+                              return (
+                                <label
+                                  key={nat.id}
+                                  className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                    nat.ativo
+                                      ? "bg-indigo-50/50 border-indigo-200 text-slate-800"
+                                      : "bg-slate-50 border-slate-200 text-slate-400"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={nat.ativo}
+                                      onChange={() =>
+                                        handleToggleNacional(nat.id)
+                                      }
+                                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                                    />
+                                    <div className="min-w-0">
+                                      <div className="text-xs font-semibold truncate">
+                                        {nat.nome}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                        nat.tipo === "movel"
+                                          ? "bg-amber-100 text-amber-800"
+                                          : "bg-slate-100 text-slate-600"
+                                      }`}
+                                    >
+                                      {nat.tipo === "movel" ? "Móvel" : "Fixo"}
+                                    </span>
+                                    <span className="text-xs font-bold tabular-nums text-slate-700">
+                                      {dateLabel}
+                                    </span>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Coluna 2: Feriados Personalizados */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between gap-3">
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                Feriados Personalizados ({feriadosCfg.personalizados.length})
+                              </h4>
+                              <span className="text-[11px] text-slate-500">
+                                Municipais, estaduais ou recessos
+                              </span>
+                            </div>
+
+                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <div>
+                                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                                    Nome do Feriado
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={newHolidayName}
+                                    onChange={(e) =>
+                                      setNewHolidayName(e.target.value)
+                                    }
+                                    placeholder="Ex: Aniversário da Cidade"
+                                    className="w-full px-3 py-1.5 text-xs text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                                    Data
+                                  </label>
+                                  <input
+                                    type="date"
+                                    value={newHolidayDate}
+                                    onChange={(e) =>
+                                      setNewHolidayDate(e.target.value)
+                                    }
+                                    className="w-full px-3 py-1.5 text-xs text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none tabular-nums"
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none">
+                                  <input
+                                    type="checkbox"
+                                    checked={newHolidayRecorrente}
+                                    onChange={(e) =>
+                                      setNewHolidayRecorrente(e.target.checked)
+                                    }
+                                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                  />
+                                  Repetir todo ano nesta data
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={handleAddCustomHoliday}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+                                >
+                                  <Plus size={14} />
+                                  Adicionar Feriado
+                                </button>
+                              </div>
+                            </div>
+
+                            {feriadosCfg.personalizados.length > 0 ? (
+                              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                                {feriadosCfg.personalizados.map((cust) => {
+                                  const dateDisplay = cust.recorrenteAnual
+                                    ? cust.data
+                                        .split("-")
+                                        .slice(1)
+                                        .reverse()
+                                        .join("/")
+                                    : cust.data.split("-").reverse().join("/");
+                                  return (
+                                    <div
+                                      key={cust.id}
+                                      className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-colors ${
+                                        cust.ativo
+                                          ? "bg-emerald-50/50 border-emerald-200 text-slate-800"
+                                          : "bg-slate-50 border-slate-200 text-slate-400"
+                                      }`}
+                                    >
+                                      <label className="flex items-center gap-2.5 min-w-0 cursor-pointer flex-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={cust.ativo}
+                                          onChange={() =>
+                                            handleToggleCustomHoliday(cust.id)
+                                          }
+                                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                                        />
+                                        <span className="text-xs font-semibold truncate">
+                                          {cust.nome}
+                                        </span>
+                                      </label>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                            cust.recorrenteAnual
+                                              ? "bg-indigo-100 text-indigo-800"
+                                              : "bg-slate-100 text-slate-600"
+                                          }`}
+                                        >
+                                          {cust.recorrenteAnual
+                                            ? "Anual"
+                                            : "Pontual"}
+                                        </span>
+                                        <span className="text-xs font-bold tabular-nums">
+                                          {dateDisplay}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleDeleteCustomHoliday(cust.id)
+                                          }
+                                          className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                                          title="Excluir feriado"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="p-4 border border-dashed border-slate-200 rounded-xl text-center text-xs text-slate-500">
+                                Nenhum feriado personalizado cadastrado. Utilize os campos acima para adicionar feriados locais ou recessos.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Pré-visualização ao vivo do 5º dia útil por mês */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                            Prévia Automática do 5º Dia Útil em {holidaysPreviewYear}
+                          </h4>
+                          <span className="text-[11px] text-slate-500">
+                            Meses destacados em azul tiveram feriado em dia útil entre o 1º e o 5º dia útil
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                          {monthNamesShort.map((mName, mIdx) => {
+                            const info = calculateQuintoDiaUtilDetails(
+                              holidaysPreviewYear,
+                              mIdx,
+                              feriadosCfg,
+                            );
+                            const hasSkipped = info.skippedHolidays.length > 0;
+                            const shortDay = info.iso.split("-").reverse().slice(0, 2).join("/");
+                            return (
+                              <div
+                                key={mName}
+                                title={
+                                  hasSkipped
+                                    ? `Feriado(s) considerado(s): ${info.skippedHolidays.map((h) => h.nome).join(", ")}`
+                                    : undefined
+                                }
+                                className={`p-2 rounded-lg border text-xs ${
+                                  hasSkipped
+                                    ? "bg-indigo-50/70 border-indigo-200"
+                                    : "bg-slate-50 border-slate-200"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-slate-700">
+                                    {mName}
+                                  </span>
+                                  <span className="font-bold text-slate-900 tabular-nums">
+                                    {shortDay}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                                  {info.diaSemana}
+                                </div>
+                                {hasSkipped && (
+                                  <div className="text-[10px] font-semibold text-indigo-700 truncate mt-0.5">
+                                    ★ {info.skippedHolidays[0].nome}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -11804,11 +12220,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         p.dataVencimento,
                                       );
 
+                                      const calc = calculateParcelaDetails(p, {
+                                        sim,
+                                        taxaGlobal: adminSettings.taxaAtrasoDia,
+                                        hoje,
+                                      });
+                                      const isCongeladaEfetiva = calc.isCongeladoEfetivo;
                                       const isVencida =
-                                        !p.paga && p.status !== "pago" && vencimento < hoje;
+                                        !p.paga &&
+                                        p.status !== "pago" &&
+                                        !isCongeladaEfetiva &&
+                                        vencimento < hoje;
                                       const isVencendoHoje =
                                         !p.paga &&
                                         p.status !== "pago" &&
+                                        !isCongeladaEfetiva &&
                                         vencimento.getTime() === hoje.getTime();
 
                                       const diffParaVencimento =
@@ -11825,44 +12251,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       const isPreVencimento =
                                         !p.paga &&
                                         p.status !== "pago" &&
+                                        !isCongeladaEfetiva &&
                                         diasParaVencimento >= 1 &&
                                         diasParaVencimento <= maxDiasAntecipado;
 
-                                      const diasAtraso = getParcelaDiasAtraso(p, hoje);
-                                      let valorAtualizado = Number(p.valor);
-                                      const abatimentosTotal = p.abatimentos
-                                        ? p.abatimentos.reduce(
-                                            (acc: number, a: any) =>
-                                              acc + a.valor,
-                                            0,
-                                          )
-                                        : 0;
-
-                                      if (isVencida || diasAtraso > 0) {
-                                        const hasDailyInterest =
-                                          sim.prazo === "abater"
-                                            ? Boolean(sim.aplicarJurosDiarios) ||
-                                              (sim.aplicarJurosDiarios !== false &&
-                                                parseFloat(sim.taxaAtrasoDia || "0") > 0)
-                                            : true;
-                                        const taxaDia = hasDailyInterest
-                                          ? parseFloat(sim.taxaAtrasoDia) ||
-                                            parseFloat(adminSettings.taxaAtrasoDia) ||
-                                            1
-                                          : 0;
-                                        valorAtualizado =
-                                          Number(p.valor) +
-                                          Number(p.valor) *
-                                            (taxaDia / 100) *
-                                            diasAtraso;
-                                      }
-
+                                      const diasAtraso = calc.diasJurosCobrados;
+                                      const abatimentosTotal = calc.abatimentosTotal;
+                                      const valorAtualizado = calc.valorAtualizado;
                                       const valorComJurosSemAbatimentos =
-                                        valorAtualizado;
-                                      valorAtualizado = Math.max(
-                                        0,
-                                        valorAtualizado - abatimentosTotal,
-                                      );
+                                        calc.valorTotalSemAbatimentos;
 
                                       const isEditing =
                                         editingParcela?.simIndex === simIndex &&
@@ -11871,10 +12268,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       return (
                                         <div
                                           key={i}
-                                          className={`border rounded-lg p-4 ${p.jurosCongelados ? "border-blue-300 bg-blue-50/40" : isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
+                                          className={`border rounded-lg p-4 ${isCongeladaEfetiva ? "border-blue-300 bg-blue-50/40" : isVencida ? "border-red-300 bg-red-50" : p.paga ? "border-emerald-200 bg-emerald-50" : isVencendoHoje ? "border-yellow-400 bg-yellow-50" : "border-slate-200 bg-white"}`}
                                         >
                                           <div className="flex justify-between items-center mb-2">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex items-center gap-2 flex-wrap">
                                               <span className="font-semibold text-slate-800">
                                                 {sim.prazo === "abater" ? "Lembrete" : `Parcela ${p.numero}`}
                                                 {p.isCongelamento && (
@@ -11882,7 +12279,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                     Apenas Juros
                                                   </span>
                                                 )}
-                                                {p.jurosCongelados && (
+                                                {calc.isCongelado7DiasAtivo && calc.freezeEndDateISO ? (
+                                                  <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                                    ❄️ Congelamento 40% (7d até {formatISOToBR(calc.freezeEndDateISO)})
+                                                  </span>
+                                                ) : p.jurosCongelados ? (
                                                     <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-medium align-middle">
                                                       ❄️ Congeladas{p.dataCongelamento ? ` em ${formatDate(p.dataCongelamento)}` : ""}
                                                       {(() => {
@@ -11911,7 +12312,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                           : "";
                                                       })()}
                                                     </span>
-                                                  )}
+                                                  ) : calc.isPrazo7DiasVencido && calc.freezeEndDateISO ? (
+                                                    <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium align-middle">
+                                                      ⏱️ Prazo 7d encerrou ({formatISOToBR(calc.freezeEndDateISO)})
+                                                    </span>
+                                                  ) : null}
                                               </span>
                                               {!isEditing && (
                                                 <button
@@ -12935,17 +13340,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           )}
 
                                           {(() => {
-                                            const isCongelada =
-                                              !p.paga &&
-                                              p.status !== "pago" &&
-                                              isParcelaCongelada(p);
+                                            const isCongelada = isCongeladaEfetiva;
                                             if (
                                               !(
                                                 isVencida ||
                                                 diasAtraso > 0 ||
-                                                isCongelada
+                                                isCongelada ||
+                                                calc.steps.length > 0
                                               ) ||
-                                              isEditing
+                                              isEditing ||
+                                              p.paga
                                             ) {
                                               return null;
                                             }
@@ -12956,42 +13360,78 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                 <div
                                                   className={`${isCongelada ? "text-blue-700" : "text-red-600"} font-semibold mb-1 text-sm flex items-center gap-1`}
                                                 >
-                                                  {isCongelada
-                                                    ? `❄️ Juros Congelados${p.dataCongelamento ? ` (Até ${formatDate(p.dataCongelamento)})` : ""}`
-                                                    : sim.prazo === "abater"
-                                                      ? "⚠️ Lembrete Vencido"
-                                                      : "⚠️ Parcela Vencida"}
+                                                  {calc.isCongelado7DiasAtivo && calc.freezeEndDateISO
+                                                    ? `❄️ Juros Congelados (Regra 40% - até ${formatISOToBR(calc.freezeEndDateISO)} · ${calc.diasRestantesCongelamento === 0 ? "encerra hoje" : `resta(m) ${calc.diasRestantesCongelamento} dia(s)`})`
+                                                    : isCongelada
+                                                      ? `❄️ Juros Congelados${p.dataCongelamento ? ` (Até ${formatDate(p.dataCongelamento)})` : ""}`
+                                                      : sim.prazo === "abater"
+                                                        ? "⚠️ Lembrete Vencido"
+                                                        : "⚠️ Parcela Vencida"}
                                                 </div>
+
+                                                {calc.steps.length > 0 && (
+                                                  <div className="my-2 p-2 rounded bg-white/80 border border-slate-200 text-xs space-y-1">
+                                                    <div className="font-semibold text-slate-700">
+                                                      Evolução do Saldo e Regra 40% / 7 dias:
+                                                    </div>
+                                                    {calc.steps.map((st, sIdx) => (
+                                                      <div
+                                                        key={sIdx}
+                                                        className="text-slate-600 border-l-2 border-emerald-400 pl-2 py-0.5"
+                                                      >
+                                                        <div>
+                                                          <span className="font-medium text-slate-800">
+                                                            {formatISOToBR(st.dataISO)}
+                                                          </span>
+                                                          {st.diasJurosAteData > 0 && (
+                                                            <span>
+                                                              {" "}
+                                                              (juros de {st.diasJurosAteData}d antes: +{formatCurrency(st.jurosAteData)} → saldo {formatCurrency(st.saldoAntesAbatimento)})
+                                                            </span>
+                                                          )}
+                                                          {" · "}Abatido:{" "}
+                                                          <span className="font-semibold text-emerald-700">
+                                                            {formatCurrency(st.valorAbatido)}
+                                                          </span>{" "}
+                                                          ({st.percentualParcela.toFixed(0)}%) → Restante:{" "}
+                                                          <span className="font-semibold text-slate-900">
+                                                            {formatCurrency(st.saldoAposAbatimento)}
+                                                          </span>
+                                                        </div>
+                                                        {st.qualifica40Porcento && st.dataFimCongelamentoISO ? (
+                                                          <div className="text-blue-700 font-medium">
+                                                            ❄️ Pagou ≥ 40%: juros congelados até {formatISOToBR(st.dataFimCongelamentoISO)} (7 dias corridos).
+                                                          </div>
+                                                        ) : !calc.isManualFrozen && st.saldoAposAbatimento > 0 ? (
+                                                          <div className="text-slate-500">
+                                                            Valor inferior a 40%: abatido do saldo sem pausa de 7 dias.
+                                                          </div>
+                                                        ) : null}
+                                                      </div>
+                                                    ))}
+                                                    {calc.isPrazo7DiasVencido && calc.freezeEndDateISO && (
+                                                      <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1 font-medium">
+                                                        ⏱️ Prazo de 7 dias encerrou em {formatISOToBR(calc.freezeEndDateISO)}. Retomado: +{calc.diasJurosAposCongelamento} {calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} × {calc.taxaDia}% sobre o saldo restante ({formatCurrency(calc.saldoAposUltimoAbatimento)}) = +{formatCurrency(calc.jurosAposCongelamento)}.
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                )}
+
                                                 <div
                                                   className={`grid grid-cols-2 gap-1 text-xs ${isCongelada ? "text-blue-900" : "text-red-800"}`}
                                                 >
                                                   <div>
                                                     {isCongelada
-                                                      ? "Atraso acordado:"
-                                                      : "Atraso:"}{" "}
+                                                      ? "Dias de juros até o congelamento:"
+                                                      : "Dias de juros calculados:"}{" "}
                                                     {diasAtraso}{" "}
                                                     {diasAtraso === 1
                                                       ? "dia"
                                                       : "dias"}
                                                   </div>
                                                   <div>
-                                                    Taxa:{" "}
-                                                    {sim.prazo === "abater" &&
-                                                    !sim.aplicarJurosDiarios &&
-                                                    (!sim.taxaAtrasoDia ||
-                                                      parseFloat(
-                                                        sim.taxaAtrasoDia,
-                                                      ) === 0)
-                                                      ? 0
-                                                      : diasAtraso *
-                                                        (parseFloat(
-                                                          sim.taxaAtrasoDia,
-                                                        ) ||
-                                                          parseFloat(
-                                                            adminSettings.taxaAtrasoDia,
-                                                          ) ||
-                                                          1)}
-                                                    %
+                                                    Juros acumulados:{" "}
+                                                    {formatCurrency(calc.jurosTotal)} ({calc.taxaDia}%/dia)
                                                   </div>
                                                   <div className="col-span-2 font-bold text-sm mt-1">
                                                     Valor Atualizado:{" "}
@@ -13005,10 +13445,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           })()}
 
                                           {(() => {
-                                            const isCongelada =
-                                              !p.paga &&
-                                              p.status !== "pago" &&
-                                              isParcelaCongelada(p);
+                                            const isCongelada = isCongeladaEfetiva;
                                             if (
                                               !(
                                                 isVencida ||
@@ -13041,7 +13478,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   valorComJurosSemAbatimentos,
                                                 dias: diasAtraso,
                                                 dataStr: isCongelada
-                                                  ? p.dataCongelamento ||
+                                                  ? calc.freezeStartDateISO ||
+                                                    p.dataCongelamento ||
                                                     p.dataVencimento
                                                   : p.dataVencimento,
                                               });
@@ -13230,8 +13668,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   dataStr: p.paga
                                                     ? p.dataPagamento ||
                                                       p.dataVencimento
-                                                    : isParcelaCongelada(p)
-                                                      ? p.dataCongelamento ||
+                                                    : isCongeladaEfetiva
+                                                      ? calc.freezeStartDateISO ||
+                                                        p.dataCongelamento ||
                                                         p.dataVencimento
                                                       : p.dataVencimento,
                                                   clientPhoneOverride:
@@ -14110,7 +14549,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                       const allFrozen =
                         parcelas.length > 0 &&
-                        parcelas.every((p: any) => isParcelaCongelada(p));
+                        parcelas.every((p: any) => Boolean(p.isCongeladoEfetivo));
 
                       if (cronogramaStatusFilter === "congeladas" || allFrozen) {
                         dateLabel += " (Congeladas)";
@@ -14181,9 +14620,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       {p.prazo === "abater" ? "Lembrete" : p.numero}
                                     </td>
                                     <td className="py-3 px-6">
-                                      {isParcelaCongelada(p) ? (
+                                      {p.isCongeladoEfetivo ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 border border-blue-200 whitespace-nowrap">
-                                          ❄️ Congeladas{p.dataCongelamento ? ` (${formatDate(p.dataCongelamento)})` : ""}
+                                          {p.isCongelado7DiasAtivo && p.freezeEndDateISO
+                                            ? `❄️ Congelada 40% (até ${formatISOToBR(p.freezeEndDateISO)})`
+                                            : `❄️ Congeladas${p.dataCongelamento ? ` (${formatDate(p.dataCongelamento)})` : ""}`}
                                         </span>
                                       ) : isVencendoHoje ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200 whitespace-nowrap">
@@ -14191,7 +14632,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         </span>
                                       ) : isVencida ? (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200 whitespace-nowrap">
-                                          Vencida ({getParcelaDiasAtraso(p, hoje)}d)
+                                          Vencida ({p.diasAtraso}d{p.isPrazo7DiasVencido ? " · Pós-7d" : ""})
                                         </span>
                                       ) : (
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
@@ -14206,7 +14647,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       <div className="flex items-center justify-end gap-2">
                                         {(() => {
                                           const cronoWa = (() => {
-                                            if (isParcelaCongelada(p)) {
+                                            if (p.isCongeladoEfetivo) {
                                               return {
                                                 phone: resolveWhatsAppTargetPhone(p.clientPhone, "congelado"),
                                                 msg: buildWhatsAppPaymentMessage({
@@ -14218,7 +14659,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   prazo: p.prazo,
                                                   valor: p.valorRestante,
                                                   valorDivida: p.valorComJuros,
-                                                  dataStr: p.dataCongelamento || p.dataVencimento,
+                                                  dataStr: p.freezeStartDateISO || p.dataCongelamento || p.dataVencimento,
                                                 }),
                                               };
                                             }
@@ -14254,25 +14695,6 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               };
                                             }
                                             if (isVencida) {
-                                              const diasAtraso = getParcelaDiasAtraso(p, hoje);
-                                              const hasDailyInterest =
-                                                p.prazo === "abater"
-                                                  ? Boolean(p.aplicarJurosDiarios) ||
-                                                    (p.aplicarJurosDiarios !== false &&
-                                                      parseFloat(p.taxaAtrasoDia || "0") > 0)
-                                                  : true;
-                                              const taxaDia = hasDailyInterest
-                                                ? parseFloat(p.taxaAtrasoDia) ||
-                                                  parseFloat(adminSettings.taxaAtrasoDia) ||
-                                                  1
-                                                : 0;
-                                              const abatimentosTotal = p.abatimentos
-                                                ? p.abatimentos.reduce((acc: number, a: any) => acc + a.valor, 0)
-                                                : 0;
-                                              let valorAtualizado =
-                                                Number(p.valor) +
-                                                Number(p.valor) * (taxaDia / 100) * diasAtraso;
-                                              valorAtualizado = Math.max(0, valorAtualizado - abatimentosTotal);
                                               return {
                                                 phone: resolveWhatsAppTargetPhone(p.clientPhone, "vencido"),
                                                 msg: buildWhatsAppPaymentMessage({
@@ -14282,8 +14704,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                                   sim: p.sim,
                                                   client: p.client,
                                                   prazo: p.prazo,
-                                                  valor: valorAtualizado,
-                                                  dias: diasAtraso,
+                                                  valor: p.valorRestante,
+                                                  valorDivida: p.valorComJuros,
+                                                  dias: p.diasAtraso,
                                                   dataStr: p.dataVencimento,
                                                 }),
                                               };
@@ -14348,13 +14771,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               valor: p.valorRestante,
                                               valorDivida: p.valorComJuros,
                                               dias: isVencida
-                                                ? getParcelaDiasAtraso(p, hoje)
+                                                ? p.diasAtraso
                                                 : Math.max(
                                                     0,
                                                     diasParaVencimento,
                                                   ),
-                                              dataStr: isParcelaCongelada(p)
-                                                ? p.dataCongelamento ||
+                                              dataStr: p.isCongeladoEfetivo
+                                                ? p.freezeStartDateISO ||
+                                                  p.dataCongelamento ||
                                                   p.dataVencimento
                                                 : p.dataVencimento,
                                               clientPhoneOverride:
@@ -15306,7 +15730,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 prazo: item.prazo,
                                 valor: item.valorRestante,
                                 valorDivida: item.valorComJuros,
-                                dataStr: item.dataCongelamento || item.dataVencimento,
+                                dataStr:
+                                  item.freezeStartDateISO ||
+                                  item.dataCongelamento ||
+                                  item.dataVencimento,
                               })
                             : item.isVencendoHoje
                               ? buildWhatsAppPaymentMessage({
@@ -15340,6 +15767,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       client: item.client,
                                       prazo: item.prazo,
                                       valor: item.valorAtualizado,
+                                      valorDivida: item.valorComJuros,
                                       dias: item.diasAtraso,
                                       dataStr: item.dataVencimento,
                                     })
@@ -15400,11 +15828,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               ) : item.statusKey === "congelado" ? (
                                 <div>
                                   <span className="text-xs font-semibold text-blue-700">
-                                    Congelado
+                                    {item.isCongelado7DiasAtivo
+                                      ? "Congelado (40% · 7d)"
+                                      : "Congelado"}
                                   </span>
-                                  {item.dataCongelamento && (
+                                  {(item.freezeEndDateISO || item.dataCongelamento) && (
                                     <div className="text-xs text-slate-500 tabular-nums">
-                                      até {formatDate(item.dataCongelamento)}
+                                      até{" "}
+                                      {item.isCongelado7DiasAtivo && item.freezeEndDateISO
+                                        ? formatISOToBR(item.freezeEndDateISO)
+                                        : formatDate(item.dataCongelamento)}
                                     </div>
                                   )}
                                 </div>
@@ -15413,10 +15846,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                   Vence Hoje
                                 </span>
                               ) : item.statusKey === "vencido" ? (
-                                <span className="text-xs font-semibold text-red-700 tabular-nums">
-                                  Vencido ({item.diasAtraso}{" "}
-                                  {item.diasAtraso === 1 ? "dia" : "dias"})
-                                </span>
+                                <div>
+                                  <span className="text-xs font-semibold text-red-700 tabular-nums">
+                                    Vencido ({item.diasAtraso}{" "}
+                                    {item.diasAtraso === 1 ? "dia" : "dias"})
+                                  </span>
+                                  {item.isPrazo7DiasVencido && item.freezeEndDateISO && (
+                                    <div className="text-[11px] text-amber-700">
+                                      Pós-7d (encerrou {formatISOToBR(item.freezeEndDateISO)})
+                                    </div>
+                                  )}
+                                </div>
                               ) : item.isPreVencimento ? (
                                 <span className="text-xs font-semibold text-blue-700 tabular-nums">
                                   Vence em {item.diasParaVencimento}{" "}
@@ -15523,6 +15963,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         : item.isVencido
                                           ? item.valorAtualizado
                                           : item.valorRestante,
+                                      valorDivida: item.isPago
+                                        ? Number(item.valor || 0)
+                                        : item.valorComJuros,
                                       dias: item.isVencido
                                         ? item.diasAtraso
                                         : Math.max(
@@ -15533,7 +15976,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         ? item.dataPagamento ||
                                           item.dataVencimento
                                         : item.isCongelado
-                                          ? item.dataCongelamento ||
+                                          ? item.freezeStartDateISO ||
+                                            item.dataCongelamento ||
                                             item.dataVencimento
                                           : item.dataVencimento,
                                       clientPhoneOverride: item.clientPhone,
