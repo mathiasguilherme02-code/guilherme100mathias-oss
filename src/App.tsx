@@ -85,6 +85,10 @@ import {
 import { PWAInstallButton } from "./components/PWAInstallButton";
 import { PushNotificationPanel } from "./components/PushNotificationPanel";
 import {
+  WhatsAppTemplatesControlPanel,
+  WaDynamicTagItem,
+} from "./components/WhatsAppTemplatesControlPanel";
+import {
   DEFAULT_PUSH_CONFIG,
   normalizePushConfig,
   PushNotificationConfig,
@@ -155,14 +159,15 @@ const WA_TEMPLATE_OPTIONS: Array<{
   },
 ];
 
-const WA_DYNAMIC_TAGS: Array<{ tag: string; desc: string }> = [
-  { tag: "{cliente}", desc: "Primeiro nome do cliente (também aceita {nome})" },
-  { tag: "{valor_divida}", desc: "Valor da dívida antes dos abatimentos (ex: R$ 1.186,80)" },
-  { tag: "{valor}", desc: "Saldo devedor / valor final (ex: R$ 606,80)" },
-  { tag: "{data}", desc: "Data e dia da semana" },
+const WA_DYNAMIC_TAGS: WaDynamicTagItem[] = [
+  { tag: "{cliente}", desc: "Primeiro nome do cliente (também aceita {nome})", primary: true },
+  { tag: "{valor}", desc: "Valor da parcela / saldo devedor (ex: R$ 606,80)", primary: true },
+  { tag: "{data}", desc: "Data e dia da semana (ex: (20/11/2026) - Sexta-Feira)", primary: true },
   { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
   { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
+  { tag: "{valor_divida}", desc: "Valor da dívida antes dos abatimentos (ex: R$ 1.186,80)" },
   { tag: "{abatimentos}", desc: "Lista de abatimentos com datas e valores" },
+  { tag: "{prazo_congelamento}", desc: "Data limite de 7 dias do congelamento (regra 40%)" },
 ];
 
 const initialFormData = {
@@ -9776,137 +9781,48 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 </div>
               </div>
 
-              <div className="mt-6 pt-6 border-t border-slate-200">
-                {(() => {
-                  const customTemplates =
-                    adminSettings.customWhatsAppTemplates || [];
-                  const builtInOption = WA_TEMPLATE_OPTIONS.find(
-                    (o) => o.key === activeWaTemplateKey,
-                  );
-                  const activeCustomTemplate = !builtInOption
-                    ? customTemplates.find((c) => c.id === activeWaTemplateKey)
-                    : undefined;
-                  const resolvedBuiltIn =
-                    builtInOption ||
-                    (!activeCustomTemplate ? WA_TEMPLATE_OPTIONS[0] : undefined);
-                  const effectiveKey = activeCustomTemplate
-                    ? activeCustomTemplate.id
-                    : resolvedBuiltIn!.key;
+              {(() => {
+                const customTemplates =
+                  adminSettings.customWhatsAppTemplates || [];
+                const builtInOption = WA_TEMPLATE_OPTIONS.find(
+                  (o) => o.key === activeWaTemplateKey,
+                );
+                const activeCustomTemplate = !builtInOption
+                  ? customTemplates.find((c) => c.id === activeWaTemplateKey)
+                  : undefined;
+                const resolvedBuiltIn =
+                  builtInOption ||
+                  (!activeCustomTemplate ? WA_TEMPLATE_OPTIONS[0] : undefined);
 
-                  const currentTemplateValue = activeCustomTemplate
-                    ? activeCustomTemplate.text
-                    : adminSettings[resolvedBuiltIn!.key] ?? "";
+                const currentTemplateValue = activeCustomTemplate
+                  ? activeCustomTemplate.text
+                  : adminSettings[resolvedBuiltIn!.key] ?? "";
 
-                  const handleAddCustomTemplate = () => {
-                    const nextNum = customTemplates.length + 1;
-                    const newId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-                    const newTemplate: CustomWhatsAppTemplate = {
-                      id: newId,
-                      label: `Mensagem ${nextNum}`,
-                      situacao: "personalizado",
-                      text: "Olá {cliente}, a GM-Empréstimo informa sobre {referencia} no valor de {valor} com data {data}.",
-                      telefone: "",
-                    };
-                    setAdminSettings((prev) => ({
-                      ...prev,
-                      customWhatsAppTemplates: [
-                        ...(prev.customWhatsAppTemplates || []),
-                        newTemplate,
-                      ],
-                    }));
-                    setActiveWaTemplateKey(newId);
-                    toast.success(
-                      "Novo campo de mensagem adicionado! Edite e clique em Salvar Mensagens.",
-                    );
-                  };
+                const selectedSampleClient = waPreviewClientId
+                  ? clients.find((c: any) => String(c.id) === waPreviewClientId)
+                  : null;
+                const sampleSimList = selectedSampleClient
+                  ? selectedSampleClient.simulacoes ||
+                    (selectedSampleClient.simulacao
+                      ? [selectedSampleClient.simulacao]
+                      : [])
+                  : [];
+                const sampleParcelasWithSim = sampleSimList.flatMap(
+                  (s: any) =>
+                    (Array.isArray(s?.parcelas) ? s.parcelas : []).map(
+                      (par: any) => ({ s, par }),
+                    ),
+                );
 
-                  const handleUpdateCustomTemplate = (
-                    id: string,
-                    patch: Partial<CustomWhatsAppTemplate>,
-                  ) => {
-                    setAdminSettings((prev) => ({
-                      ...prev,
-                      customWhatsAppTemplates: (
-                        prev.customWhatsAppTemplates || []
-                      ).map((t) => (t.id === id ? { ...t, ...patch } : t)),
-                    }));
-                  };
-
-                  const handleDeleteCustomTemplate = (id: string) => {
-                    setAdminSettings((prev) => ({
-                      ...prev,
-                      customWhatsAppTemplates: (
-                        prev.customWhatsAppTemplates || []
-                      ).filter((t) => t.id !== id),
-                    }));
-                    setActiveWaTemplateKey("msgLembreteAVencer");
-                    toast.info(
-                      "Campo removido. Clique em Salvar Mensagens para confirmar.",
-                    );
-                  };
-
-                  const insertTagAtCursor = (tag: string) => {
-                    const el = waTemplateRef.current;
-                    const updateText = (nextVal: string) => {
-                      if (activeCustomTemplate) {
-                        handleUpdateCustomTemplate(activeCustomTemplate.id, {
-                          text: nextVal,
-                        });
-                      } else if (resolvedBuiltIn) {
-                        setAdminSettings((prev) => ({
-                          ...prev,
-                          [resolvedBuiltIn.key]: nextVal,
-                        }));
-                      }
-                    };
-                    if (!el) {
-                      updateText(currentTemplateValue + tag);
-                      return;
-                    }
-                    const start =
-                      el.selectionStart ?? currentTemplateValue.length;
-                    const end = el.selectionEnd ?? currentTemplateValue.length;
-                    const nextVal =
-                      currentTemplateValue.slice(0, start) +
-                      tag +
-                      currentTemplateValue.slice(end);
-                    updateText(nextVal);
-                    setTimeout(() => {
-                      el.focus();
-                      const pos = start + tag.length;
-                      el.setSelectionRange(pos, pos);
-                    }, 0);
-                  };
-
-                  const activeLabel = activeCustomTemplate
-                    ? activeCustomTemplate.label || "Campo Personalizado"
-                    : resolvedBuiltIn!.label;
-                  const activeHint = activeCustomTemplate
-                    ? activeCustomTemplate.situacao === "personalizado"
-                      ? "Campo adicional disponível no menu rápido de envio via WhatsApp (Ficha do Cliente, Cronograma e Lembretes)."
-                      : "Este campo personalizado será usado automaticamente na situação vinculada e também ficará disponível no menu rápido."
-                    : resolvedBuiltIn!.hint;
-
-                  const selectedSampleClient = waPreviewClientId
-                    ? clients.find((c: any) => String(c.id) === waPreviewClientId)
-                    : null;
-                  const sampleSimList = selectedSampleClient
-                    ? selectedSampleClient.simulacoes ||
-                      (selectedSampleClient.simulacao
-                        ? [selectedSampleClient.simulacao]
-                        : [])
-                    : [];
-                  const sampleParcelasWithSim = sampleSimList.flatMap(
-                    (s: any) =>
-                      (Array.isArray(s?.parcelas) ? s.parcelas : []).map(
-                        (par: any) => ({ s, par }),
-                      ),
-                  );
-                  const isPreviewCongelado =
-                    resolvedBuiltIn?.key === "msgLembreteCongelado" ||
-                    activeCustomTemplate?.situacao === "congelado";
+                const renderPreviewFor = (
+                  keyOrSituacao: string,
+                  templateText: string,
+                ) => {
+                  const isCongelado =
+                    keyOrSituacao === "msgLembreteCongelado" ||
+                    keyOrSituacao === "congelado";
                   const preferredSample =
-                    (isPreviewCongelado
+                    (isCongelado
                       ? sampleParcelasWithSim.find(
                           (entry: any) =>
                             isParcelaCongelada(entry.par) &&
@@ -9927,7 +9843,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     ) ||
                     sampleParcelasWithSim[0] ||
                     null;
-                  const sampleSim = preferredSample?.s || sampleSimList[0] || null;
+
+                  const sampleSim =
+                    preferredSample?.s || sampleSimList[0] || null;
                   const sampleParcela = preferredSample?.par || null;
                   const previewCliente =
                     selectedSampleClient?.nomeCompleto || "Patricia";
@@ -9938,669 +9856,273 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         hoje: new Date(),
                       })
                     : null;
-                  const sampleDiasAtraso = sampleCalc
-                    ? sampleCalc.diasJurosCobrados
-                    : 0;
                   const previewValorDivida = sampleCalc
                     ? formatCurrency(sampleCalc.valorTotalSemAbatimentos)
-                    : isPreviewCongelado
+                    : isCongelado
                       ? "R$ 1.186,80"
                       : "R$ 350,00";
                   const previewValor = sampleCalc
                     ? formatCurrency(sampleCalc.valorAtualizado)
-                    : isPreviewCongelado
+                    : isCongelado
                       ? "R$ 606,80"
                       : "R$ 350,00";
-                  const previewData = sampleCalc?.freezeStartDateISO &&
-                    isPreviewCongelado
-                    ? formatDate(sampleCalc.freezeStartDateISO)
-                    : sampleParcela?.dataCongelamento &&
-                        isPreviewCongelado
-                      ? formatDate(sampleParcela.dataCongelamento)
-                      : sampleParcela?.dataVencimento
-                        ? formatDate(sampleParcela.dataVencimento)
-                        : isPreviewCongelado
-                          ? "(07/08/2026) - Sexta-feira"
-                          : "(20/11/2026) - Sexta-Feira";
+                  const previewData =
+                    sampleCalc?.freezeStartDateISO && isCongelado
+                      ? formatDate(sampleCalc.freezeStartDateISO)
+                      : sampleParcela?.dataCongelamento && isCongelado
+                        ? formatDate(sampleParcela.dataCongelamento)
+                        : sampleParcela?.dataVencimento
+                          ? formatDate(sampleParcela.dataVencimento)
+                          : isCongelado
+                            ? "(07/08/2026) - Sexta-feira"
+                            : "(20/11/2026) - Sexta-Feira";
                   const previewReferencia =
                     sampleSim?.prazo === "abater"
                       ? "seu Lembrete de Pagamento"
                       : sampleParcela?.numero
                         ? `sua Parcela ${sampleParcela.numero}`
                         : "seu Lembrete de Pagamento";
-                  const previewAbatimentos = sampleParcela || selectedSampleClient
-                    ? formatAbatimentosWhatsApp(
-                        sampleParcela,
-                        sampleSim,
-                        selectedSampleClient,
-                      )
-                    : isPreviewCongelado
-                      ? "Abatimentos registrados na ficha:\n* (18/09/2026) - Sexta-feira: R$ 130,00\n* (30/09/2026) - Quarta-feira: R$ 200,00\n* (01/10/2026) - Quinta-feira: R$ 100,00\n* (07/11/2026) - Sábado: R$ 150,00\nTotal abatido: R$ 580,00"
-                      : "";
+                  const previewAbatimentos =
+                    sampleParcela || selectedSampleClient
+                      ? formatAbatimentosWhatsApp(
+                          sampleParcela,
+                          sampleSim,
+                          selectedSampleClient,
+                        )
+                      : isCongelado
+                        ? "Abatimentos registrados na ficha:\n* (18/09/2026) - Sexta-feira: R$ 130,00\n* (30/09/2026) - Quarta-feira: R$ 200,00\n* (01/10/2026) - Quinta-feira: R$ 100,00\n* (07/11/2026) - Sábado: R$ 150,00\nTotal abatido: R$ 580,00"
+                        : "";
+                  const previewPrazoCongelamento =
+                    sampleCalc?.freezeEndDateISO
+                      ? formatISOToBR(sampleCalc.freezeEndDateISO)
+                      : "14/08/2026";
 
-                  const renderedPreviewBase =
-                    !activeCustomTemplate &&
-                    resolvedBuiltIn?.key === "msgLembreteVencido" &&
-                    !currentTemplateValue.trim()
-                      ? `Olá, ${previewCliente.split(" ")[0]}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida (${previewReferencia}), referente à data ${previewData}.\n\nO valor é de ${previewValor}.\n\nPor favor, regularize o quanto antes para evitar maiores encargos.`
-                      : renderWhatsAppTemplate(currentTemplateValue, {
-                          cliente: previewCliente,
-                          valor: previewValor,
-                          valorDivida: previewValorDivida,
-                          data: previewData,
-                          referencia: previewReferencia,
-                          dias:
-                            resolvedBuiltIn?.key === "msgLembreteVencido" ||
-                            activeCustomTemplate?.situacao === "vencido"
-                              ? 5
-                              : adminSettings.diasLembreteAntecipado || "3",
-                          abatimentos: previewAbatimentos,
-                        });
-                  const previewText =
-                    isPreviewCongelado &&
+                  if (
+                    keyOrSituacao === "msgLembreteVencido" &&
+                    !templateText.trim()
+                  ) {
+                    return `Olá, ${previewCliente.split(" ")[0]}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida (${previewReferencia}), referente à data ${previewData}.\n\nO valor é de ${previewValor}.\n\nPor favor, regularize o quanto antes para evitar maiores encargos.`;
+                  }
+
+                  const renderedBase = renderWhatsAppTemplate(templateText, {
+                    cliente: previewCliente,
+                    valor: previewValor,
+                    valorDivida: previewValorDivida,
+                    data: previewData,
+                    referencia: previewReferencia,
+                    dias:
+                      keyOrSituacao === "msgLembreteVencido" ||
+                      keyOrSituacao === "vencido"
+                        ? 5
+                        : adminSettings.diasLembreteAntecipado || "3",
+                    abatimentos: previewAbatimentos,
+                    prazoCongelamento: previewPrazoCongelamento,
+                  });
+                  return isCongelado &&
                     previewAbatimentos &&
-                    !/\{abatimentos\}/i.test(currentTemplateValue)
-                      ? `${renderedPreviewBase}\n\n${previewAbatimentos}`
-                      : renderedPreviewBase;
+                    !/\{abatimentos\}/i.test(templateText)
+                    ? `${renderedBase}\n\n${previewAbatimentos}`
+                    : renderedBase;
+                };
 
-                  return (
-                    <>
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
-                        <div>
-                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                            <MessageSquare
-                              size={18}
-                              className="text-emerald-600"
-                            />
-                            Personalização de Mensagens do WhatsApp
-                          </h3>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Personalize os modelos padrão por situação ou crie novos campos de mensagens usando tags dinâmicas.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                            <label className="text-xs font-medium text-slate-600 whitespace-nowrap">
-                              App de envio:
-                            </label>
-                            <select
-                              value={adminSettings.whatsappAppMode || "business"}
-                              onChange={(e) =>
-                                setAdminSettings({
-                                  ...adminSettings,
-                                  whatsappAppMode:
-                                    e.target.value === "padrao"
-                                      ? "padrao"
-                                      : "business",
-                                })
-                              }
-                              className="px-2 py-0.5 text-xs font-semibold text-emerald-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500"
-                            >
-                              <option value="business">WhatsApp Business</option>
-                              <option value="padrao">WhatsApp Padrão / Web</option>
-                            </select>
-                          </div>
-                          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                            <label className="text-xs font-medium text-slate-600 whitespace-nowrap">
-                              Pré-notificar com:
-                            </label>
-                            <input
-                              type="number"
-                              min="1"
-                              max="30"
-                              value={
-                                adminSettings.diasLembreteAntecipado || "3"
-                              }
-                              onChange={(e) =>
-                                setAdminSettings({
-                                  ...adminSettings,
-                                  diasLembreteAntecipado: e.target.value,
-                                })
-                              }
-                              className="w-14 px-2 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500 tabular-nums"
-                            />
-                            <span className="text-xs text-slate-500">
-                              dia(s)
-                            </span>
-                          </div>
-                          {activeCustomTemplate ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleDeleteCustomTemplate(
-                                  activeCustomTemplate.id,
-                                )
-                              }
-                              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors"
-                            >
-                              <Trash2 size={14} />
-                              Excluir Campo
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!resolvedBuiltIn) return;
-                                setAdminSettings((prev) => ({
-                                  ...prev,
-                                  [resolvedBuiltIn.key]:
-                                    DEFAULT_WHATSAPP_TEMPLATES[
-                                      resolvedBuiltIn.key
-                                    ],
-                                }));
-                                toast.info(
-                                  "Modelo restaurado para o texto padrão.",
-                                );
-                              }}
-                              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                            >
-                              <RotateCcw size={14} />
-                              Restaurar Padrão
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            disabled={isSavingWaSettings}
-                            onClick={async () => {
-                              setIsSavingWaSettings(true);
-                              try {
-                                const res = await fetch("/api/settings", {
-                                  method: "PUT",
-                                  headers: {
-                                    "Content-Type": "application/json",
-                                    Authorization: `Bearer ${adminToken}`,
-                                  },
-                                  body: JSON.stringify(adminSettings),
-                                });
-                                if (res.ok) {
-                                  toast.success(
-                                    "Modelos de mensagem salvos com sucesso!",
-                                  );
-                                } else {
-                                  toast.error(
-                                    "Erro ao salvar modelos de mensagem.",
-                                  );
-                                }
-                              } catch (error) {
-                                toast.error(
-                                  "Erro ao salvar modelos de mensagem.",
-                                );
-                              } finally {
-                                setIsSavingWaSettings(false);
-                              }
-                            }}
-                            className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-lg transition-colors"
-                          >
-                            <Save size={14} />
-                            {isSavingWaSettings
-                              ? "Salvando..."
-                              : "Salvar Mensagens"}
-                          </button>
-                        </div>
-                      </div>
+                const previewClienteName =
+                  selectedSampleClient?.nomeCompleto || "Patricia";
+                const activePreviewText = renderPreviewFor(
+                  activeCustomTemplate
+                    ? activeCustomTemplate.situacao
+                    : resolvedBuiltIn!.key,
+                  currentTemplateValue,
+                );
 
-                      <div className="flex flex-wrap items-center gap-2 mb-4">
-                        {WA_TEMPLATE_OPTIONS.map((opt) => {
-                          const isActive = effectiveKey === opt.key;
-                          return (
-                            <button
-                              key={opt.key}
-                              type="button"
-                              onClick={() => setActiveWaTemplateKey(opt.key)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                                isActive
-                                  ? "bg-slate-800 text-white border-slate-800"
-                                  : "bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50"
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
+                return (
+                  <WhatsAppTemplatesControlPanel
+                    templateOptions={WA_TEMPLATE_OPTIONS}
+                    dynamicTags={WA_DYNAMIC_TAGS}
+                    activeKey={activeWaTemplateKey}
+                    onSelectKey={(k) => setActiveWaTemplateKey(k)}
+                    templateRef={waTemplateRef}
+                    values={{
+                      msgLembreteAVencer: adminSettings.msgLembreteAVencer || "",
+                      msgLembretePreVencimento:
+                        adminSettings.msgLembretePreVencimento || "",
+                      msgLembreteVenceHoje:
+                        adminSettings.msgLembreteVenceHoje || "",
+                      msgLembreteCongelado:
+                        adminSettings.msgLembreteCongelado || "",
+                      msgLembreteVencido:
+                        adminSettings.msgLembreteVencido || "",
+                      msgLembreteConfirmacao:
+                        adminSettings.msgLembreteConfirmacao || "",
+                    }}
+                    telefones={adminSettings.msgTelefones || {}}
+                    customTemplates={customTemplates}
+                    whatsappAppMode={
+                      adminSettings.whatsappAppMode === "padrao"
+                        ? "padrao"
+                        : "business"
+                    }
+                    diasLembreteAntecipado={
+                      adminSettings.diasLembreteAntecipado || "3"
+                    }
+                    onChangeWhatsappAppMode={(mode) =>
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        whatsappAppMode: mode,
+                      }))
+                    }
+                    onChangeDiasAntecipado={(dias) =>
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        diasLembreteAntecipado: dias,
+                      }))
+                    }
+                    onChangeBuiltInText={(key, text) =>
+                      setAdminSettings((prev) => ({ ...prev, [key]: text }))
+                    }
+                    onChangeBuiltInPhone={(key, phone) =>
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        msgTelefones: {
+                          ...(prev.msgTelefones || {}),
+                          [key]: phone,
+                        },
+                      }))
+                    }
+                    onRestoreBuiltInDefault={(key) => {
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        [key]: DEFAULT_WHATSAPP_TEMPLATES[key],
+                      }));
+                      toast.info("Modelo restaurado para o texto padrão.");
+                    }}
+                    onRestoreAllDefaults={() => {
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        ...DEFAULT_WHATSAPP_TEMPLATES,
+                      }));
+                      toast.info(
+                        "Todos os modelos padrão restaurados! Clique em Salvar Mensagens para confirmar.",
+                      );
+                    }}
+                    onAddCustomTemplate={() => {
+                      const nextNum = customTemplates.length + 1;
+                      const newId = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                      const newTemplate: CustomWhatsAppTemplate = {
+                        id: newId,
+                        label: `Mensagem ${nextNum}`,
+                        situacao: "personalizado",
+                        text: "Olá {cliente}, a GM-Empréstimo informa sobre {referencia} no valor de {valor} com data {data}.",
+                        telefone: "",
+                      };
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        customWhatsAppTemplates: [
+                          ...(prev.customWhatsAppTemplates || []),
+                          newTemplate,
+                        ],
+                      }));
+                      setActiveWaTemplateKey(newId);
+                      toast.success(
+                        "Novo campo de mensagem adicionado! Edite e clique em Salvar Mensagens.",
+                      );
+                    }}
+                    onUpdateCustomTemplate={(id, patch) =>
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        customWhatsAppTemplates: (
+                          prev.customWhatsAppTemplates || []
+                        ).map((t) => (t.id === id ? { ...t, ...patch } : t)),
+                      }))
+                    }
+                    onDeleteCustomTemplate={(id) => {
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        customWhatsAppTemplates: (
+                          prev.customWhatsAppTemplates || []
+                        ).filter((t) => t.id !== id),
+                      }));
+                      setActiveWaTemplateKey("msgLembreteAVencer");
+                      toast.info(
+                        "Campo removido. Clique em Salvar Mensagens para confirmar.",
+                      );
+                    }}
+                    onSaveAll={async () => {
+                      setIsSavingWaSettings(true);
+                      try {
+                        const res = await fetch("/api/settings", {
+                          method: "PUT",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${adminToken}`,
+                          },
+                          body: JSON.stringify(adminSettings),
+                        });
+                        if (res.ok) {
+                          toast.success(
+                            "Modelos padrão de WhatsApp salvos com sucesso!",
                           );
-                        })}
-                        {customTemplates.map((ct) => {
-                          const isActive = effectiveKey === ct.id;
-                          return (
-                            <button
-                              key={ct.id}
-                              type="button"
-                              onClick={() => setActiveWaTemplateKey(ct.id)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                                isActive
-                                  ? "bg-emerald-700 text-white border-emerald-700"
-                                  : "bg-emerald-50/70 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
-                              }`}
-                            >
-                              {ct.label || "Campo Personalizado"}
-                            </button>
-                          );
-                        })}
-                        <button
-                          type="button"
-                          onClick={handleAddCustomTemplate}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-dashed border-emerald-400 text-emerald-700 bg-white hover:bg-emerald-50 transition-colors"
-                        >
-                          <Plus size={14} />
-                          Novo Campo
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                        <div className="space-y-2.5">
-                          {activeCustomTemplate && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                              <div>
-                                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                                  Nome do Campo de Mensagem
-                                </label>
-                                <input
-                                  type="text"
-                                  value={activeCustomTemplate.label}
-                                  onChange={(e) =>
-                                    handleUpdateCustomTemplate(
-                                      activeCustomTemplate.id,
-                                      { label: e.target.value },
-                                    )
-                                  }
-                                  placeholder="Ex: Cobrança Amigável, Aviso Feriado..."
-                                  className="w-full px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                                  Onde usar este campo
-                                </label>
-                                <select
-                                  value={activeCustomTemplate.situacao}
-                                  onChange={(e) =>
-                                    handleUpdateCustomTemplate(
-                                      activeCustomTemplate.id,
-                                      {
-                                        situacao: e.target
-                                          .value as WaSituacaoType,
-                                      },
-                                    )
-                                  }
-                                  className="w-full px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none"
-                                >
-                                  <option value="personalizado">
-                                    Menu rápido (Envio manual)
-                                  </option>
-                                  <option value="a_vencer">
-                                    Padrão para: A Vencer
-                                  </option>
-                                  <option value="pre_vencimento">
-                                    Padrão para: Pré-Vencimento
-                                  </option>
-                                  <option value="vence_hoje">
-                                    Padrão para: Vence Hoje
-                                  </option>
-                                  <option value="congelado">
-                                    Padrão para: Juros Congelados
-                                  </option>
-                                  <option value="vencido">
-                                    Padrão para: Vencido (Em Atraso)
-                                  </option>
-                                  <option value="confirmacao">
-                                    Padrão para: Confirmação de Pagamento
-                                  </option>
-                                </select>
-                              </div>
-                            </div>
-                          )}
-
-                          {(() => {
-                            const currentPhoneVal = activeCustomTemplate
-                              ? activeCustomTemplate.telefone || ""
-                              : adminSettings.msgTelefones?.[
-                                  resolvedBuiltIn!.key
-                                ] || "";
-                            const currentPhoneDigits = currentPhoneVal.replace(
-                              /\D/g,
-                              "",
-                            );
-                            const isManualPhoneValid =
-                              currentPhoneDigits.length >= 10;
-                            const updateTemplatePhone = (rawVal: string) => {
-                              if (activeCustomTemplate) {
-                                handleUpdateCustomTemplate(
-                                  activeCustomTemplate.id,
-                                  { telefone: rawVal },
-                                );
-                              } else if (resolvedBuiltIn) {
-                                setAdminSettings((prev) => ({
-                                  ...prev,
-                                  msgTelefones: {
-                                    ...(prev.msgTelefones || {}),
-                                    [resolvedBuiltIn.key]: rawVal,
-                                  },
-                                }));
-                              }
-                            };
-                            return (
-                              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                  <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
-                                    <Phone size={12} className="text-emerald-600" />
-                                    Celular de Destino para esta Mensagem (Manual / Opcional)
-                                  </label>
-                                  {isManualPhoneValid && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                                      <Check size={11} />
-                                      Número manual pronto
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                  <input
-                                    type="tel"
-                                    value={currentPhoneVal}
-                                    onChange={(e) => {
-                                      const rawVal = e.target.value;
-                                      const prevVal = currentPhoneVal;
-                                      updateTemplatePhone(rawVal);
-                                      const nextDigits = rawVal.replace(
-                                        /\D/g,
-                                        "",
-                                      );
-                                      if (
-                                        autoOpenWaOnPhone &&
-                                        shouldAutoOpenOnPhoneEntry(
-                                          prevVal,
-                                          rawVal,
-                                        ) &&
-                                        lastAutoOpenedWaPhoneRef.current !==
-                                          `${effectiveKey}:${nextDigits}`
-                                      ) {
-                                        lastAutoOpenedWaPhoneRef.current = `${effectiveKey}:${nextDigits}`;
-                                        launchWhatsAppBusiness(
-                                          rawVal,
-                                          previewText || "",
-                                        );
-                                      }
-                                    }}
-                                    onPaste={(e) => {
-                                      if (!autoOpenWaOnPhone) return;
-                                      const pasted =
-                                        e.clipboardData.getData("text");
-                                      const digits = pasted.replace(/\D/g, "");
-                                      if (
-                                        digits.length >= 10 &&
-                                        lastAutoOpenedWaPhoneRef.current !==
-                                          `${effectiveKey}:${digits}`
-                                      ) {
-                                        lastAutoOpenedWaPhoneRef.current = `${effectiveKey}:${digits}`;
-                                        setTimeout(() => {
-                                          launchWhatsAppBusiness(
-                                            pasted,
-                                            previewText || "",
-                                          );
-                                        }, 0);
-                                      }
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" &&
-                                        isManualPhoneValid
-                                      ) {
-                                        e.preventDefault();
-                                        launchWhatsAppBusiness(
-                                          currentPhoneVal,
-                                          previewText || "",
-                                        );
-                                      }
-                                    }}
-                                    placeholder="(31) 99999-9999 — deixe em branco para usar o celular do cliente"
-                                    className="flex-1 px-3 py-1.5 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none tabular-nums"
-                                  />
-                                  {isManualPhoneValid ? (
-                                    <a
-                                      href={formatWhatsAppHref(
-                                        currentPhoneVal,
-                                        previewText || "",
-                                      )}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shrink-0 shadow-sm"
-                                    >
-                                      <Send size={13} />
-                                      Enviar Mensagem
-                                    </a>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      disabled
-                                      title="Digite o DDD + número do celular (mínimo 10 dígitos) para enviar"
-                                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-300 rounded-lg cursor-not-allowed shrink-0"
-                                    >
-                                      <Send size={13} />
-                                      Enviar Mensagem
-                                    </button>
-                                  )}
-                                  {currentPhoneVal && (
-                                    <button
-                                      type="button"
-                                      onClick={() => updateTemplatePhone("")}
-                                      className="px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg transition-colors shrink-0"
-                                    >
-                                      Limpar
-                                    </button>
-                                  )}
-                                </div>
-
-                                <div className="flex flex-col sm:flex-row sm:items-center gap-2 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5">
-                                  <label className="text-[11px] font-medium text-slate-700 whitespace-nowrap">
-                                    Usar dados do cliente na mensagem:
-                                  </label>
-                                  <select
-                                    value={waPreviewClientId}
-                                    onChange={(e) =>
-                                      setWaPreviewClientId(e.target.value)
-                                    }
-                                    className="flex-1 px-2.5 py-1 text-xs text-slate-800 bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500"
-                                  >
-                                    <option value="">
-                                      Exemplo padrão (Maria Silva — R$ 350,00)
-                                    </option>
-                                    {clients
-                                      .filter(
-                                        (c: any) =>
-                                          c.id !== "admin-transactions",
-                                      )
-                                      .map((c: any) => (
-                                        <option key={c.id} value={String(c.id)}>
-                                          {c.nomeCompleto}
-                                          {c.telefone ? ` (${c.telefone})` : ""}
-                                        </option>
-                                      ))}
-                                  </select>
-                                </div>
-
-                                {isManualPhoneValid && (
-                                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex flex-col gap-2">
-                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                      <span className="text-[11px] font-semibold text-emerald-900">
-                                        Envio direto para o número manual:{" "}
-                                        <span className="tabular-nums underline">
-                                          {currentPhoneVal}
-                                        </span>
-                                      </span>
-                                      <div className="flex items-center gap-1.5">
-                                        <a
-                                          href={formatWhatsAppHref(
-                                            currentPhoneVal,
-                                            previewText || "",
-                                          )}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors"
-                                        >
-                                          <Send size={12} />
-                                          Enviar no WhatsApp Business
-                                        </a>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            navigator.clipboard
-                                              ?.writeText(previewText || "")
-                                              .then(() =>
-                                                toast.success(
-                                                  "Mensagem copiada!",
-                                                ),
-                                              )
-                                              .catch(() => {});
-                                          }}
-                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
-                                        >
-                                          <Copy size={12} />
-                                          Copiar
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                  <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
-                                    <input
-                                      type="checkbox"
-                                      checked={autoOpenWaOnPhone}
-                                      onChange={(e) =>
-                                        setAutoOpenWaOnPhone(e.target.checked)
-                                      }
-                                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                                    />
-                                    Abrir o WhatsApp Business automaticamente após digitar o celular (ou Enter)
-                                  </label>
-                                </div>
-                                <p className="text-[11px] text-slate-500">
-                                  Se preenchido, o botão <strong>Enviar Mensagem</strong> envia diretamente para o número adicionado manualmente; caso contrário, utiliza o celular cadastrado na ficha do cliente.
-                                </p>
-                              </div>
-                            );
-                          })()}
-
-                          <p className="text-xs text-slate-600">{activeHint}</p>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mr-1">
-                              Inserir tag:
-                            </span>
-                            {WA_DYNAMIC_TAGS.map((item) => (
-                              <button
-                                key={item.tag}
-                                type="button"
-                                title={item.desc}
-                                onClick={() => insertTagAtCursor(item.tag)}
-                                className="px-2 py-1 text-xs font-mono font-medium bg-slate-100 hover:bg-yellow-100 text-slate-700 hover:text-yellow-900 border border-slate-200 rounded transition-colors"
-                              >
-                                + {item.tag}
-                              </button>
-                            ))}
-                          </div>
-                          <textarea
-                            ref={waTemplateRef}
-                            rows={5}
-                            value={currentTemplateValue}
-                            placeholder={
-                              !activeCustomTemplate &&
-                              resolvedBuiltIn?.key === "msgLembreteVencido"
-                                ? "Em branco = usa o detalhamento automático de juros, 40% e abatimentos. Digite aqui caso deseje substituir pelo seu texto personalizado..."
-                                : "Digite o modelo da mensagem usando as tags acima..."
-                            }
-                            onChange={(e) => {
-                              if (activeCustomTemplate) {
-                                handleUpdateCustomTemplate(
-                                  activeCustomTemplate.id,
-                                  { text: e.target.value },
-                                );
-                              } else if (resolvedBuiltIn) {
-                                setAdminSettings((prev) => ({
-                                  ...prev,
-                                  [resolvedBuiltIn.key]: e.target.value,
-                                }));
-                              }
-                            }}
-                            className="w-full px-3.5 py-2.5 text-sm text-slate-800 border border-slate-300 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-white"
-                          />
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-500 pt-0.5">
-                            {WA_DYNAMIC_TAGS.map((item) => (
-                              <div key={item.tag} className="truncate">
-                                <span className="font-mono font-semibold text-slate-700">
-                                  {item.tag}
-                                </span>{" "}
-                                — {item.desc}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
-                          <div>
-                            <div className="flex items-center justify-between gap-2 pb-2.5 mb-3 border-b border-slate-200">
-                              <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                                <Eye size={14} className="text-slate-500" />
-                                Pré-visualização no WhatsApp
-                              </span>
-                              <span className="text-[11px] text-slate-500 font-medium">
-                                {activeLabel}
-                              </span>
-                            </div>
-                            {(() => {
-                              const configuredTargetPhone = activeCustomTemplate
-                                ? (activeCustomTemplate.telefone || "").trim()
-                                : (
-                                    adminSettings.msgTelefones?.[
-                                      resolvedBuiltIn!.key
-                                    ] || ""
-                                  ).trim();
-                              const cleanTargetDigits =
-                                configuredTargetPhone.replace(/\D/g, "");
-                              return (
-                                <>
-                                  <div className="mb-2.5 flex items-center justify-between gap-2 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
-                                    <span className="font-medium">
-                                      Destino do envio:
-                                    </span>
-                                    <span className="font-semibold text-slate-800 tabular-nums">
-                                      {configuredTargetPhone ||
-                                        "Celular cadastrado do cliente"}
-                                    </span>
-                                  </div>
-                                  <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-line leading-relaxed">
-                                    {previewText || (
-                                      <span className="text-slate-400 italic">
-                                        Nenhuma mensagem digitada.
-                                      </span>
-                                    )}
-                                  </div>
-                                  {cleanTargetDigits.length >= 10 && (
-                                    <a
-                                      href={formatWhatsAppHref(
-                                        configuredTargetPhone,
-                                        previewText || "",
-                                      )}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="mt-3 inline-flex items-center justify-center gap-2 w-full bg-[#25D366] hover:bg-[#128C7E] text-white text-xs font-semibold py-2 px-3 rounded-lg transition-colors"
-                                    >
-                                      <Send size={14} />
-                                      Enviar Mensagem para {configuredTargetPhone}
-                                    </a>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </div>
-                          <p className="text-[11px] text-slate-500 mt-3">
-                            {waPreviewClientId
-                              ? `Pré-visualização preenchida com os dados de ${previewCliente}.`
-                              : "Exemplo exibido com dados fictícios: Maria Silva, R$ 350,00, (20/11/2026) - Sexta-Feira."} As alterações nos modelos passam a valer na Ficha do Cliente, Cronograma e Lembretes Agendados após clicar em &ldquo;Salvar Mensagens&rdquo;.
-                          </p>
-                        </div>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
+                        } else {
+                          toast.error("Erro ao salvar modelos de mensagem.");
+                        }
+                      } catch {
+                        toast.error("Erro ao salvar modelos de mensagem.");
+                      } finally {
+                        setIsSavingWaSettings(false);
+                      }
+                    }}
+                    isSaving={isSavingWaSettings}
+                    previewClientId={waPreviewClientId}
+                    onChangePreviewClientId={(cid) =>
+                      setWaPreviewClientId(cid)
+                    }
+                    clients={clients}
+                    previewClienteName={previewClienteName}
+                    previewText={activePreviewText}
+                    renderTemplatePreview={(key, text) =>
+                      renderPreviewFor(key, text)
+                    }
+                    autoOpenWaOnPhone={autoOpenWaOnPhone}
+                    onChangeAutoOpenWaOnPhone={(chk) =>
+                      setAutoOpenWaOnPhone(chk)
+                    }
+                    onTriggerPhoneEntryOpen={(
+                      prevVal,
+                      nextVal,
+                      effKey,
+                      textToSend,
+                    ) => {
+                      const nextDigits = nextVal.replace(/\D/g, "");
+                      if (
+                        autoOpenWaOnPhone &&
+                        shouldAutoOpenOnPhoneEntry(prevVal, nextVal) &&
+                        lastAutoOpenedWaPhoneRef.current !==
+                          `${effKey}:${nextDigits}`
+                      ) {
+                        lastAutoOpenedWaPhoneRef.current = `${effKey}:${nextDigits}`;
+                        launchWhatsAppBusiness(nextVal, textToSend);
+                      }
+                    }}
+                    onTriggerPhonePasteOpen={(pasted, effKey, textToSend) => {
+                      if (!autoOpenWaOnPhone) return;
+                      const digits = pasted.replace(/\D/g, "");
+                      if (
+                        digits.length >= 10 &&
+                        lastAutoOpenedWaPhoneRef.current !==
+                          `${effKey}:${digits}`
+                      ) {
+                        lastAutoOpenedWaPhoneRef.current = `${effKey}:${digits}`;
+                        setTimeout(() => {
+                          launchWhatsAppBusiness(pasted, textToSend);
+                        }, 0);
+                      }
+                    }}
+                    onLaunchWhatsApp={(phone, text) =>
+                      launchWhatsAppBusiness(phone, text)
+                    }
+                    formatWhatsAppHref={formatWhatsAppHref}
+                  />
+                );
+              })()}
 
               {/* Agendamento Automático de Lembretes via WhatsApp */}
               <div className="mt-6 pt-6 border-t border-slate-200">
