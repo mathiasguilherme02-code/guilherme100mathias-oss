@@ -82,6 +82,19 @@ import {
   calculateParcelaDetails,
   formatISOToBR,
 } from "./utils/installmentMath";
+import { PWAInstallButton } from "./components/PWAInstallButton";
+import { PushNotificationPanel } from "./components/PushNotificationPanel";
+import {
+  DEFAULT_PUSH_CONFIG,
+  normalizePushConfig,
+  PushNotificationConfig,
+  PushDeviceSummary,
+  isPushSupportedInBrowser,
+  getBrowserDeviceLabel,
+  getCurrentPushSubscription,
+  subscribeBrowserPush,
+  unsubscribeBrowserPush,
+} from "./utils/pushNotifications";
 
 export interface AdminNotification {
   id: string;
@@ -1269,6 +1282,284 @@ export default function App() {
     }
   };
 
+  // Web Push Notifications State & Handlers
+  const [pushSupported] = useState<boolean>(() => isPushSupportedInBrowser());
+  const [pushPermissionState, setPushPermissionState] = useState<
+    NotificationPermission | "unsupported"
+  >(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      return "unsupported";
+    }
+    return Notification.permission;
+  });
+  const [pushVapidPublicKey, setPushVapidPublicKey] = useState<string>("");
+  const [pushConfig, setPushConfig] = useState<PushNotificationConfig>(() => ({
+    ...DEFAULT_PUSH_CONFIG,
+  }));
+  const [pushDevices, setPushDevices] = useState<PushDeviceSummary[]>([]);
+  const [currentPushEndpoint, setCurrentPushEndpoint] = useState<string | null>(
+    null,
+  );
+  const currentPushEndpointRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentPushEndpointRef.current = currentPushEndpoint;
+  }, [currentPushEndpoint]);
+
+  const [isPushBusy, setIsPushBusy] = useState(false);
+  const [isSavingPushConfig, setIsSavingPushConfig] = useState(false);
+  const [isSendingTestPush, setIsSendingTestPush] = useState(false);
+  const [isSendingPushReminders, setIsSendingPushReminders] = useState(false);
+
+  const fetchPushStatus = async (tokenOverride?: string) => {
+    const tokenToUse = tokenOverride || adminToken;
+    if (!tokenToUse) return;
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setPushPermissionState(Notification.permission);
+    }
+    try {
+      const [res, localSub] = await Promise.all([
+        fetch("/api/push/status", {
+          headers: { Authorization: `Bearer ${tokenToUse}` },
+        }),
+        getCurrentPushSubscription(),
+      ]);
+
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.publicKey) setPushVapidPublicKey(data.publicKey);
+      if (data.config) setPushConfig(normalizePushConfig(data.config));
+      const serverSubs: PushDeviceSummary[] = Array.isArray(data.subscriptions)
+        ? data.subscriptions
+        : [];
+      setPushDevices(serverSubs);
+
+      if (localSub) {
+        setCurrentPushEndpoint(localSub.endpoint);
+        const isRegisteredOnServer = serverSubs.some(
+          (d) => d.endpoint === localSub.endpoint,
+        );
+        if (!isRegisteredOnServer) {
+          const syncRes = await fetch("/api/push/subscribe", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${tokenToUse}`,
+            },
+            body: JSON.stringify({
+              subscription: localSub.toJSON(),
+              deviceLabel: getBrowserDeviceLabel(),
+            }),
+          });
+          if (syncRes.ok) {
+            const syncData = await syncRes.json();
+            if (syncData.subscription) {
+              setPushDevices((prev) => [
+                syncData.subscription,
+                ...prev.filter((d) => d.id !== syncData.subscription.id),
+              ]);
+            }
+          }
+        }
+      } else {
+        setCurrentPushEndpoint(null);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar status de push:", err);
+    }
+  };
+
+  const handleSubscribePushDevice = async () => {
+    if (!adminToken) return;
+    setIsPushBusy(true);
+    try {
+      let vapidKey = pushVapidPublicKey;
+      if (!vapidKey) {
+        const res = await fetch("/api/push/status", {
+          headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          vapidKey = data.publicKey || "";
+          setPushVapidPublicKey(vapidKey);
+        }
+      }
+      if (!vapidKey) {
+        throw new Error("Chave pública VAPID indisponível no servidor.");
+      }
+      const sub = await subscribeBrowserPush(vapidKey);
+      if (typeof window !== "undefined" && "Notification" in window) {
+        setPushPermissionState(Notification.permission);
+      }
+      const saveRes = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          subscription: sub.toJSON(),
+          deviceLabel: getBrowserDeviceLabel(),
+        }),
+      });
+      if (!saveRes.ok) {
+        const errJson = await saveRes.json().catch(() => ({}));
+        throw new Error(errJson.error || "Falha ao registrar dispositivo.");
+      }
+      setCurrentPushEndpoint(sub.endpoint);
+      await fetchPushStatus(adminToken);
+      toast.success("Notificações Push ativadas neste navegador!");
+    } catch (err: any) {
+      if (typeof window !== "undefined" && "Notification" in window) {
+        setPushPermissionState(Notification.permission);
+      }
+      toast.error(err?.message || "Não foi possível ativar as notificações push.");
+    } finally {
+      setIsPushBusy(false);
+    }
+  };
+
+  const handleUnsubscribePushDevice = async () => {
+    if (!adminToken) return;
+    setIsPushBusy(true);
+    try {
+      const removedEndpoint = await unsubscribeBrowserPush();
+      const endpointToDelete = removedEndpoint || currentPushEndpoint;
+      if (endpointToDelete) {
+        await fetch("/api/push/subscribe", {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${adminToken}`,
+          },
+          body: JSON.stringify({ endpoint: endpointToDelete }),
+        });
+      }
+      setCurrentPushEndpoint(null);
+      await fetchPushStatus(adminToken);
+      toast.info("Notificações Push desativadas neste navegador.");
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao desativar notificações push.");
+    } finally {
+      setIsPushBusy(false);
+    }
+  };
+
+  const handleSavePushConfig = async () => {
+    if (!adminToken) return;
+    setIsSavingPushConfig(true);
+    try {
+      const res = await fetch("/api/push/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(pushConfig),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.config) setPushConfig(normalizePushConfig(data.config));
+        toast.success("Preferências de Notificação Push salvas!");
+      } else {
+        toast.error(data.error || "Erro ao salvar preferências push.");
+      }
+    } catch (err) {
+      toast.error("Erro de conexão ao salvar preferências push.");
+    } finally {
+      setIsSavingPushConfig(false);
+    }
+  };
+
+  const handleSendTestPush = async () => {
+    if (!adminToken) return;
+    setIsSendingTestPush(true);
+    try {
+      const res = await fetch("/api/push/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.sent > 0) {
+          toast.success(
+            `Notificação de teste enviada para ${data.sent} dispositivo(s)!`,
+          );
+        } else {
+          toast.warning(
+            "Nenhum dispositivo ativo recebeu o teste. Reative o push neste navegador.",
+          );
+        }
+        await fetchPushStatus(adminToken);
+      } else {
+        toast.error(data.error || "Falha ao enviar teste push.");
+      }
+    } catch (err) {
+      toast.error("Erro ao conectar para testar push.");
+    } finally {
+      setIsSendingTestPush(false);
+    }
+  };
+
+  const handleSendPushRemindersNow = async () => {
+    if (!adminToken) return;
+    setIsSendingPushReminders(true);
+    try {
+      const res = await fetch("/api/push/send-reminders-now", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ force: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.dispatched > 0) {
+          toast.success(
+            `Push enviado para ${data.dispatched} lembrete(s) de pagamento pendentes!`,
+          );
+        } else {
+          toast.info("Nenhum lembrete de pagamento pendente para hoje.");
+        }
+        await fetchPushStatus(adminToken);
+      } else {
+        toast.error(data.error || "Falha ao disparar lembretes push.");
+      }
+    } catch (err) {
+      toast.error("Erro de conexão ao disparar lembretes push.");
+    } finally {
+      setIsSendingPushReminders(false);
+    }
+  };
+
+  const handleRemovePushDevice = async (device: PushDeviceSummary) => {
+    if (!adminToken) return;
+    try {
+      const res = await fetch("/api/push/subscribe", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ id: device.id, endpoint: device.endpoint }),
+      });
+      if (res.ok) {
+        if (currentPushEndpoint === device.endpoint) {
+          await unsubscribeBrowserPush().catch(() => {});
+          setCurrentPushEndpoint(null);
+        }
+        await fetchPushStatus(adminToken);
+        toast.success("Dispositivo removido.");
+      }
+    } catch (err) {
+      toast.error("Erro ao remover dispositivo.");
+    }
+  };
+
   const startBatchWaDispatcher = (items?: ScheduledWhatsAppNotification[]) => {
     const source =
       items ||
@@ -1548,6 +1839,7 @@ export default function App() {
           }
           fetchChats();
           fetchWaSchedule(adminToken);
+          fetchPushStatus(adminToken);
         }
       } catch (error) {
         console.error("Erro ao buscar dados:", error);
@@ -1571,12 +1863,17 @@ export default function App() {
           if (adminToken) {
             playNotificationSound();
 
-            // Native Desktop Browser Notification
-            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            // Native Desktop Browser Notification fallback (skip when Service Worker Web Push is already subscribed here)
+            if (
+              !currentPushEndpointRef.current &&
+              typeof window !== "undefined" &&
+              "Notification" in window &&
+              Notification.permission === "granted"
+            ) {
               try {
                 const n = new Notification("📋 Nova Ficha Cadastral Recebida!", {
                   body: `O cliente ${data.payload?.nomeCompleto || "Novo Cliente"}${data.payload?.cpf ? ` (CPF: ${data.payload.cpf})` : ""} acabou de preencher a ficha cadastral.`,
-                  icon: "/favicon.ico",
+                  icon: "/pwa-192x192.png",
                 });
                 n.onclick = () => {
                   window.focus();
@@ -1709,6 +2006,7 @@ export default function App() {
                   ? `${sCount} lembrete(s) enviado(s) automaticamente via API${eCount > 0 ? ` (${eCount} erro(s))` : ""}.`
                   : `${pCount} lembrete(s) de vencimento agendado(s) pronto(s) para envio no WhatsApp.`;
               if (
+                !currentPushEndpointRef.current &&
                 typeof window !== "undefined" &&
                 "Notification" in window &&
                 Notification.permission === "granted"
@@ -1716,7 +2014,7 @@ export default function App() {
                 try {
                   const n = new Notification("⏰ Lembretes WhatsApp Agendados", {
                     body: summaryMsg,
-                    icon: "/favicon.ico",
+                    icon: "/pwa-192x192.png",
                   });
                   n.onclick = () => {
                     window.focus();
@@ -1778,6 +2076,83 @@ export default function App() {
 
     return () => {
       eventSource.close();
+    };
+  }, [adminToken]);
+
+  // Handle Service Worker Push click navigation & URL query deep-links
+  useEffect(() => {
+    const navigateFromPushData = (navData: {
+      tab?: string;
+      clientId?: string;
+      view?: string;
+    }) => {
+      if (!adminToken) return;
+      setView("admin");
+      const targetTab = navData.tab || "clientes";
+      if (
+        targetTab === "clientes" ||
+        targetTab === "cronograma" ||
+        targetTab === "lembretes" ||
+        targetTab === "fluxo_caixa" ||
+        targetTab === "mensagens" ||
+        targetTab === "produtos" ||
+        targetTab === "configuracoes"
+      ) {
+        setAdminTab(targetTab);
+      }
+      if (targetTab === "lembretes") {
+        setShowWaSchedulePanel(true);
+      }
+      if (navData.clientId) {
+        markFichaAsViewed(navData.clientId);
+        const existing = clientsRef.current.find(
+          (c) => c.id === navData.clientId,
+        );
+        if (existing) {
+          handleSelectClient(existing);
+        } else {
+          fetch(`/api/clients/${encodeURIComponent(navData.clientId)}`, {
+            headers: { Authorization: `Bearer ${adminToken}` },
+          })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((fullClient) => {
+              if (fullClient) handleSelectClient(fullClient);
+            })
+            .catch(() => {});
+        }
+      }
+    };
+
+    if (adminToken && typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const qView = params.get("view");
+      const qTab = params.get("tab") || undefined;
+      const qClientId = params.get("clientId") || undefined;
+      if (qView === "admin" || qTab || qClientId) {
+        navigateFromPushData({ view: qView || "admin", tab: qTab, clientId: qClientId });
+        try {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } catch {}
+      }
+    }
+
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+
+    const handleSwMessage = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "PUSH_NOTIFICATION_CLICK" && msg.data) {
+        navigateFromPushData(msg.data);
+      } else if (msg.type === "PUSH_SUBSCRIPTION_CHANGED" && adminToken) {
+        fetchPushStatus(adminToken);
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleSwMessage);
     };
   }, [adminToken]);
 
@@ -8916,6 +9291,36 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       )}
                     </div>
 
+                    <div className="px-3.5 py-2.5 bg-yellow-50/70 border-b border-yellow-200/80 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-slate-700">
+                        {currentPushEndpoint
+                          ? "Push em segundo plano ativo neste dispositivo"
+                          : "Receba alertas mesmo com a aba fechada"}
+                      </span>
+                      {currentPushEndpoint ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsNotificationOpen(false);
+                            setAdminTab("configuracoes");
+                            setSelectedClient(null);
+                          }}
+                          className="text-[11px] font-bold text-emerald-700 hover:underline whitespace-nowrap"
+                        >
+                          Configurar
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleSubscribePushDevice}
+                          disabled={isPushBusy}
+                          className="text-[11px] font-bold bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-2.5 py-1 rounded-md transition-colors whitespace-nowrap"
+                        >
+                          {isPushBusy ? "Ativando..." : "Ativar Push"}
+                        </button>
+                      )}
+                    </div>
+
                     <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
                       {adminNotifications.length === 0 ? (
                         <div className="p-8 text-center text-slate-400 text-sm">
@@ -8982,6 +9387,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </div>
                 )}
               </div>
+
+              <PWAInstallButton />
 
               <button
                 onClick={() => {
@@ -10964,6 +11371,29 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   );
                 })()}
               </div>
+
+              <PushNotificationPanel
+                pushSupported={pushSupported}
+                permissionState={pushPermissionState}
+                isSubscribedThisDevice={Boolean(currentPushEndpoint)}
+                isBusy={isPushBusy}
+                isSavingConfig={isSavingPushConfig}
+                isSendingTest={isSendingTestPush}
+                isSendingReminders={isSendingPushReminders}
+                pushConfig={pushConfig}
+                devices={pushDevices}
+                currentEndpoint={currentPushEndpoint}
+                onUpdateConfig={(patch) =>
+                  setPushConfig((prev) => ({ ...prev, ...patch }))
+                }
+                onSaveConfig={handleSavePushConfig}
+                onSubscribeDevice={handleSubscribePushDevice}
+                onUnsubscribeDevice={handleUnsubscribePushDevice}
+                onSendTestPush={handleSendTestPush}
+                onSendRemindersNow={handleSendPushRemindersNow}
+                onRemoveDevice={handleRemovePushDevice}
+                onRefreshStatus={() => fetchPushStatus()}
+              />
 
               <div className="mt-4 pt-4 border-t border-slate-200 bg-amber-50/70 p-4 rounded-xl border border-amber-200 shadow-sm">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">

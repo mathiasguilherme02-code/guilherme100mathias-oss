@@ -4,7 +4,9 @@ import path from "path";
 import admin from "firebase-admin";
 import { ZipArchive } from "archiver";
 import fs, { readFileSync, existsSync } from "fs";
+import crypto from "crypto";
 import dotenv from 'dotenv';
+import * as webpush from "web-push";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
   DEFAULT_AUTO_SCHEDULE_CONFIG,
@@ -18,6 +20,11 @@ import {
   DEFAULT_FERIADOS_CONFIG,
   normalizeFeriadosConfig,
 } from './src/utils/holidays';
+import {
+  DEFAULT_PUSH_CONFIG,
+  normalizePushConfig,
+  PushNotificationConfig,
+} from './src/utils/pushNotifications';
 
 dotenv.config();
 
@@ -75,7 +82,10 @@ const loadData = () => {
     ],
     mockClients: [],
     mockSettings: null,
-    mockScheduleLogs: []
+    mockScheduleLogs: [],
+    mockPushSubscriptions: [],
+    mockPushSentKeys: [],
+    mockVapidKeys: null
   };
 };
 
@@ -90,9 +100,25 @@ let mockSettings: any = appData.mockSettings || null;
 let mockScheduleLogs: ScheduledWhatsAppNotification[] = Array.isArray(appData.mockScheduleLogs)
   ? appData.mockScheduleLogs
   : [];
+let mockPushSubscriptions: any[] = Array.isArray(appData.mockPushSubscriptions)
+  ? appData.mockPushSubscriptions
+  : [];
+let mockPushSentKeys: Array<{ id: string; dateISO: string; sentAt: string }> = Array.isArray(appData.mockPushSentKeys)
+  ? appData.mockPushSentKeys
+  : [];
+let mockVapidKeys: { publicKey: string; privateKey: string; subject: string } | null =
+  appData.mockVapidKeys || null;
 
 const syncData = () => {
-  saveData({ mockProdutos, mockClients, mockSettings, mockScheduleLogs });
+  saveData({
+    mockProdutos,
+    mockClients,
+    mockSettings,
+    mockScheduleLogs,
+    mockPushSubscriptions,
+    mockPushSentKeys,
+    mockVapidKeys,
+  });
 };
 
 
@@ -373,6 +399,7 @@ const buildDefaultSettings = () => ({
   whatsappAppMode: 'business',
   autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG },
   feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
+  pushConfig: { ...DEFAULT_PUSH_CONFIG },
 });
 
 const normalizeLoadedSettings = (raw: any) => {
@@ -403,6 +430,7 @@ const normalizeLoadedSettings = (raw: any) => {
   }
   data.autoScheduleConfig = normalizeAutoScheduleConfig(data.autoScheduleConfig);
   data.feriadosConfig = normalizeFeriadosConfig(data.feriadosConfig);
+  data.pushConfig = normalizePushConfig(data.pushConfig);
   return data;
 };
 
@@ -448,6 +476,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       whatsappAppMode,
       autoScheduleConfig,
       feriadosConfig,
+      pushConfig,
     } = req.body;
 
     const currentSettings = await loadServerSettings();
@@ -465,6 +494,21 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
               : currentSettings.autoScheduleConfig?.lastRunAt || "",
         })
       : currentSettings.autoScheduleConfig;
+
+    const mergedPushConfig = pushConfig
+      ? normalizePushConfig({
+          ...currentSettings.pushConfig,
+          ...pushConfig,
+          lastReminderPushDate:
+            pushConfig.lastReminderPushDate !== undefined
+              ? pushConfig.lastReminderPushDate
+              : currentSettings.pushConfig?.lastReminderPushDate || "",
+          lastReminderPushAt:
+            pushConfig.lastReminderPushAt !== undefined
+              ? pushConfig.lastReminderPushAt
+              : currentSettings.pushConfig?.lastReminderPushAt || "",
+        })
+      : currentSettings.pushConfig;
 
     const payloadToSave: any = {
       taxaJuros,
@@ -502,6 +546,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       ...(feriadosConfig !== undefined
         ? { feriadosConfig: normalizeFeriadosConfig(feriadosConfig) }
         : {}),
+      ...(pushConfig !== undefined ? { pushConfig: mergedPushConfig } : {}),
     };
 
     if (!db) {
@@ -685,6 +730,12 @@ app.post("/api/clients", async (req, res) => {
         dataCadastro: client.dataCadastro || new Date().toISOString(),
         timestamp: new Date().toISOString(),
       });
+      void notifyNewClientPush({
+        id: client.id,
+        nomeCompleto: client.nomeCompleto,
+        cpf: client.cpf,
+        valorSolicitado: valorSol,
+      });
       return res.json(client);
     }
     const client = req.body;
@@ -739,6 +790,12 @@ app.post("/api/clients", async (req, res) => {
       valorSolicitado: valorSol,
       dataCadastro: pgDate,
       timestamp: new Date().toISOString(),
+    });
+    void notifyNewClientPush({
+      id: client.id,
+      nomeCompleto: client.nomeCompleto,
+      cpf: formattedCpf,
+      valorSolicitado: valorSol,
     });
     res.status(201).json({ success: true });
   } catch (error: any) {
@@ -1582,6 +1639,13 @@ const runAutoWhatsAppSchedule = async (options: {
       timestamp: updatedAutoConfig.lastRunAt,
     });
 
+    if (candidates.length > 0) {
+      void runPaymentReminderPushCheck({
+        trigger: "schedule",
+        dateISO: targetDateISO,
+      });
+    }
+
     return {
       alreadyRunning: false,
       dateISO: targetDateISO,
@@ -1596,6 +1660,586 @@ const runAutoWhatsAppSchedule = async (options: {
     isSchedulerRunning = false;
   }
 };
+
+// --- WEB PUSH NOTIFICATIONS ENGINE (SERVICE WORKERS + VAPID) ---
+
+interface StoredPushSubscription {
+  id: string;
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  deviceLabel: string;
+  createdAt: string;
+  lastSuccessAt?: string;
+}
+
+let cachedVapidKeys: { publicKey: string; privateKey: string; subject: string } | null = null;
+
+const getEndpointHashId = (endpoint: string) =>
+  crypto.createHash("sha256").update(String(endpoint || "")).digest("hex").slice(0, 32);
+
+const ensureVapidKeys = async (): Promise<{ publicKey: string; privateKey: string; subject: string }> => {
+  if (cachedVapidKeys) {
+    return cachedVapidKeys;
+  }
+
+  const subject = process.env.VAPID_SUBJECT || "mailto:gmprestadoradeservicos.10@gmail.com";
+
+  if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    cachedVapidKeys = {
+      publicKey: process.env.VAPID_PUBLIC_KEY.trim(),
+      privateKey: process.env.VAPID_PRIVATE_KEY.trim(),
+      subject,
+    };
+    webpush.setVapidDetails(cachedVapidKeys.subject, cachedVapidKeys.publicKey, cachedVapidKeys.privateKey);
+    return cachedVapidKeys;
+  }
+
+  if (!db) {
+    if (mockVapidKeys?.publicKey && mockVapidKeys?.privateKey) {
+      cachedVapidKeys = { ...mockVapidKeys, subject: mockVapidKeys.subject || subject };
+    } else {
+      const generated = webpush.generateVAPIDKeys();
+      cachedVapidKeys = {
+        publicKey: generated.publicKey,
+        privateKey: generated.privateKey,
+        subject,
+      };
+      mockVapidKeys = cachedVapidKeys;
+      syncData();
+    }
+    webpush.setVapidDetails(cachedVapidKeys.subject, cachedVapidKeys.publicKey, cachedVapidKeys.privateKey);
+    return cachedVapidKeys;
+  }
+
+  const vapidDocRef = doc(db, "admin_settings", "push_vapid");
+  const vapidSnap = await getDoc(vapidDocRef);
+  if (vapidSnap.exists()) {
+    const existing = vapidSnap.data();
+    if (existing?.publicKey && existing?.privateKey) {
+      cachedVapidKeys = {
+        publicKey: String(existing.publicKey),
+        privateKey: String(existing.privateKey),
+        subject: String(existing.subject || subject),
+      };
+      webpush.setVapidDetails(cachedVapidKeys.subject, cachedVapidKeys.publicKey, cachedVapidKeys.privateKey);
+      return cachedVapidKeys;
+    }
+  }
+
+  const generated = webpush.generateVAPIDKeys();
+  cachedVapidKeys = {
+    publicKey: generated.publicKey,
+    privateKey: generated.privateKey,
+    subject,
+  };
+  await setDoc(vapidDocRef, {
+    ...cachedVapidKeys,
+    createdAt: new Date().toISOString(),
+  });
+  webpush.setVapidDetails(cachedVapidKeys.subject, cachedVapidKeys.publicKey, cachedVapidKeys.privateKey);
+  return cachedVapidKeys;
+};
+
+const loadPushSubscriptionsFromStore = async (): Promise<StoredPushSubscription[]> => {
+  if (!db) {
+    return [...mockPushSubscriptions];
+  }
+  const snap = await db.collection("push_subscriptions").get();
+  return snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as StoredPushSubscription));
+};
+
+const upsertPushSubscriptionToStore = async (
+  subscription: { endpoint: string; expirationTime?: number | null; keys: { p256dh: string; auth: string } },
+  deviceLabel: string,
+): Promise<StoredPushSubscription> => {
+  const id = getEndpointHashId(subscription.endpoint);
+  const nowISO = new Date().toISOString();
+  const record: StoredPushSubscription = {
+    id,
+    endpoint: subscription.endpoint,
+    expirationTime: subscription.expirationTime ?? null,
+    keys: {
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+    },
+    deviceLabel: deviceLabel || "Navegador",
+    createdAt: nowISO,
+    lastSuccessAt: nowISO,
+  };
+
+  if (!db) {
+    const idx = mockPushSubscriptions.findIndex((s) => s.id === id || s.endpoint === record.endpoint);
+    if (idx >= 0) {
+      record.createdAt = mockPushSubscriptions[idx].createdAt || nowISO;
+      mockPushSubscriptions[idx] = record;
+    } else {
+      mockPushSubscriptions.push(record);
+    }
+    syncData();
+    return record;
+  }
+
+  const existingSnap = await getDoc(doc(db, "push_subscriptions", id));
+  if (existingSnap.exists()) {
+    record.createdAt = existingSnap.data()?.createdAt || nowISO;
+  }
+  await setDoc(doc(db, "push_subscriptions", id), sanitizeForFirestore(record), { merge: true });
+  return record;
+};
+
+const deletePushSubscriptionFromStore = async (criteria: { id?: string; endpoint?: string }) => {
+  const targetId = criteria.id || (criteria.endpoint ? getEndpointHashId(criteria.endpoint) : "");
+  if (!targetId && !criteria.endpoint) return;
+
+  if (!db) {
+    mockPushSubscriptions = mockPushSubscriptions.filter(
+      (s) => s.id !== targetId && (!criteria.endpoint || s.endpoint !== criteria.endpoint),
+    );
+    syncData();
+    return;
+  }
+
+  if (targetId) {
+    await deleteDoc(doc(db, "push_subscriptions", targetId));
+  }
+};
+
+const loadPushSentKeysForDate = async (dateISO: string): Promise<Set<string>> => {
+  if (!db) {
+    return new Set(mockPushSentKeys.filter((k) => k.dateISO === dateISO).map((k) => k.id));
+  }
+  const snap = await db
+    .collection("push_sent_logs")
+    .where("dateISO", "==", dateISO)
+    .get();
+  return new Set(snap.docs.map((d: any) => d.id));
+};
+
+const markPushKeysAsSent = async (keys: string[], dateISO: string) => {
+  if (keys.length === 0) return;
+  const sentAt = new Date().toISOString();
+  if (!db) {
+    const existingSet = new Set(mockPushSentKeys.map((k) => k.id));
+    for (const id of keys) {
+      if (!existingSet.has(id)) {
+        mockPushSentKeys.unshift({ id, dateISO, sentAt });
+      }
+    }
+    if (mockPushSentKeys.length > 1000) {
+      mockPushSentKeys = mockPushSentKeys.slice(0, 1000);
+    }
+    syncData();
+    return;
+  }
+  const batch = writeBatch(db);
+  for (const id of keys) {
+    batch.set(doc(db, "push_sent_logs", id), { id, dateISO, sentAt }, { merge: true });
+  }
+  await batch.commit();
+};
+
+const sendAdminWebPushNotification = async (
+  payload: {
+    title: string;
+    body: string;
+    tag?: string;
+    url?: string;
+    type?: "new_client" | "payment_reminder" | "test" | "info";
+    clientId?: string;
+    tab?: string;
+    requireInteraction?: boolean;
+    data?: Record<string, any>;
+  },
+  onlyEndpoint?: string,
+): Promise<{ total: number; sent: number; failed: number; removed: number }> => {
+  await ensureVapidKeys();
+  const allSubs = await loadPushSubscriptionsFromStore();
+  const targets = onlyEndpoint
+    ? allSubs.filter((s) => s.endpoint === onlyEndpoint)
+    : allSubs;
+
+  if (targets.length === 0) {
+    return { total: 0, sent: 0, failed: 0, removed: 0 };
+  }
+
+  const serializedPayload = JSON.stringify({
+    title: payload.title,
+    body: payload.body,
+    icon: "/pwa-192x192.png",
+    badge: "/pwa-192x192.png",
+    tag: payload.tag || "gm-emprestimo-push",
+    url: payload.url || "/?view=admin",
+    type: payload.type || "info",
+    clientId: payload.clientId || "",
+    tab: payload.tab || "",
+    requireInteraction: payload.requireInteraction !== false,
+    data: {
+      ...(payload.data || {}),
+      url: payload.url || "/?view=admin",
+      type: payload.type || "info",
+      clientId: payload.clientId || "",
+      tab: payload.tab || "",
+    },
+  });
+
+  let sent = 0;
+  let failed = 0;
+  let removed = 0;
+
+  await Promise.allSettled(
+    targets.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            expirationTime: sub.expirationTime ?? null,
+            keys: sub.keys,
+          },
+          serializedPayload,
+          { TTL: 60 * 60 * 12 },
+        );
+        sent++;
+        if (!db) {
+          const idx = mockPushSubscriptions.findIndex((s) => s.id === sub.id);
+          if (idx >= 0) mockPushSubscriptions[idx].lastSuccessAt = new Date().toISOString();
+        } else {
+          await setDoc(
+            doc(db, "push_subscriptions", sub.id),
+            { lastSuccessAt: new Date().toISOString() },
+            { merge: true },
+          );
+        }
+      } catch (err: any) {
+        const statusCode = Number(err?.statusCode || err?.status || 0);
+        if (statusCode === 404 || statusCode === 410) {
+          removed++;
+          await deletePushSubscriptionFromStore({ id: sub.id, endpoint: sub.endpoint });
+        } else {
+          failed++;
+          console.error(`[WebPush] Falha ao enviar para ${sub.deviceLabel} (${statusCode}):`, err?.message || err);
+        }
+      }
+    }),
+  );
+
+  if (!db && (sent > 0 || removed > 0)) {
+    syncData();
+  }
+
+  return { total: targets.length, sent, failed, removed };
+};
+
+const notifyNewClientPush = async (client: {
+  id: string;
+  nomeCompleto?: string;
+  cpf?: string;
+  valorSolicitado?: string | number | null;
+}) => {
+  try {
+    const settings = await loadServerSettings();
+    const pushCfg = normalizePushConfig(settings.pushConfig);
+    if (!pushCfg.enabled || !pushCfg.notifyNewClients) return;
+
+    const valorNum = Number(client.valorSolicitado);
+    const valorLabel =
+      client.valorSolicitado && Number.isFinite(valorNum) && valorNum > 0
+        ? ` • Valor: R$ ${valorNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : "";
+
+    await sendAdminWebPushNotification({
+      title: "📋 Novo Cadastro Recebido!",
+      body: `${client.nomeCompleto || "Novo Cliente"}${client.cpf ? ` • CPF: ${client.cpf}` : ""}${valorLabel}`,
+      tag: `gm-new-client-${client.id}`,
+      type: "new_client",
+      clientId: client.id,
+      tab: "clientes",
+      url: `/?view=admin&tab=clientes&clientId=${encodeURIComponent(client.id)}`,
+      requireInteraction: true,
+    });
+  } catch (err) {
+    console.error("[WebPush] Erro ao notificar novo cadastro:", err);
+  }
+};
+
+let isPushReminderRunning = false;
+
+const runPaymentReminderPushCheck = async (options: {
+  trigger: "automatic" | "manual" | "schedule";
+  dateISO?: string;
+  force?: boolean;
+}) => {
+  if (isPushReminderRunning) {
+    return { alreadyRunning: true, evaluated: 0, dispatched: 0, sent: 0, dateISO: options.dateISO || getBrazilTodayISO() };
+  }
+  isPushReminderRunning = true;
+  const targetDateISO = options.dateISO || getBrazilTodayISO();
+
+  try {
+    const settings = await loadServerSettings();
+    const pushCfg = normalizePushConfig(settings.pushConfig);
+
+    if (!options.force && (!pushCfg.enabled || !pushCfg.notifyPaymentReminders)) {
+      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "disabled" };
+    }
+
+    const subs = await loadPushSubscriptionsFromStore();
+    if (subs.length === 0) {
+      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "no_subscriptions" };
+    }
+
+    const clients = await loadAllClientsForSchedule();
+    const evalSettings = {
+      ...settings,
+      autoScheduleConfig: {
+        ...normalizeAutoScheduleConfig(settings.autoScheduleConfig),
+        enabled: true,
+        enviarPreVencimento: pushCfg.incluirPreVencimento,
+        preVencimentoModo: "janela" as const,
+        enviarVenceHoje: pushCfg.incluirVenceHoje,
+        enviarVencido: pushCfg.incluirVencido,
+        frequenciaVencidoDias: "1",
+        enviarCongelado: pushCfg.incluirCongelado7Dias,
+        frequenciaCongeladoDias: "1",
+        incluirEmprestimos: true,
+        incluirLembretesAbater: true,
+      },
+    };
+
+    const candidates = evaluateAutoScheduleNotifications(clients, evalSettings, targetDateISO);
+    const sentKeysForDate = options.force ? new Set<string>() : await loadPushSentKeysForDate(targetDateISO);
+
+    const pendingToPush = candidates.filter((item) => !sentKeysForDate.has(`push::${targetDateISO}::${item.id}`));
+    if (pendingToPush.length === 0) {
+      return { alreadyRunning: false, evaluated: candidates.length, dispatched: 0, sent: 0, dateISO: targetDateISO };
+    }
+
+    const situacaoLabels: Record<string, string> = {
+      vence_hoje: "Vence Hoje",
+      pre_vencimento: "Vencimento Próximo",
+      vencido: "Parcela em Atraso",
+      congelado: "Juros Congelados (Prazo 7 dias)",
+    };
+
+    const priorityOrder = (s: string) =>
+      s === "vence_hoje" ? 0 : s === "congelado" ? 1 : s === "vencido" ? 2 : 3;
+    const sorted = [...pendingToPush].sort((a, b) => priorityOrder(a.situacao) - priorityOrder(b.situacao));
+
+    const individualSlice = sorted.slice(0, 3);
+    let totalSentDeliveries = 0;
+
+    for (const item of individualSlice) {
+      const sitLabel = situacaoLabels[item.situacao] || "Lembrete de Pagamento";
+      const refText = item.parcelaNumero > 0 ? `Parcela ${item.parcelaNumero}` : "Lembrete (Abater)";
+      const res = await sendAdminWebPushNotification({
+        title: `⏰ ${sitLabel}: ${item.clientName}`,
+        body: `${refText} • Venc.: ${item.dataVencimento} • Valor: ${item.valor}`,
+        tag: `gm-reminder-${targetDateISO}-${item.id}`,
+        type: "payment_reminder",
+        clientId: item.clientId,
+        tab: "lembretes",
+        url: `/?view=admin&tab=lembretes&clientId=${encodeURIComponent(item.clientId)}`,
+        requireInteraction: item.situacao === "vence_hoje" || item.situacao === "congelado",
+      });
+      totalSentDeliveries += res.sent;
+    }
+
+    if (sorted.length > 3) {
+      const extraCount = sorted.length - 3;
+      const venceHojeCount = sorted.filter((i) => i.situacao === "vence_hoje").length;
+      const vencidoCount = sorted.filter((i) => i.situacao === "vencido").length;
+      const congeladoCount = sorted.filter((i) => i.situacao === "congelado").length;
+      const parts = [
+        venceHojeCount > 0 ? `${venceHojeCount} vence hoje` : "",
+        congeladoCount > 0 ? `${congeladoCount} congelado(s)` : "",
+        vencidoCount > 0 ? `${vencidoCount} em atraso` : "",
+      ].filter(Boolean);
+
+      const sumRes = await sendAdminWebPushNotification({
+        title: `💰 ${sorted.length} Lembretes de Pagamento Pendentes`,
+        body: `Mais ${extraCount} cobrança(s) hoje${parts.length > 0 ? ` (${parts.join(" • ")})` : ""}. Toque para abrir a fila.`,
+        tag: `gm-reminder-summary-${targetDateISO}`,
+        type: "payment_reminder",
+        tab: "lembretes",
+        url: "/?view=admin&tab=lembretes",
+        requireInteraction: true,
+      });
+      totalSentDeliveries += sumRes.sent;
+    }
+
+    await markPushKeysAsSent(
+      sorted.map((item) => `push::${targetDateISO}::${item.id}`),
+      targetDateISO,
+    );
+
+    const updatedPushConfig: PushNotificationConfig = {
+      ...pushCfg,
+      lastReminderPushDate: targetDateISO,
+      lastReminderPushAt: new Date().toISOString(),
+    };
+    if (!db) {
+      mockSettings = { ...(mockSettings || {}), pushConfig: updatedPushConfig };
+      syncData();
+    } else {
+      await setDoc(
+        doc(db, "admin_settings", "1"),
+        sanitizeForFirestore({ pushConfig: updatedPushConfig }),
+        { merge: true },
+      );
+    }
+
+    return {
+      alreadyRunning: false,
+      dateISO: targetDateISO,
+      evaluated: candidates.length,
+      dispatched: sorted.length,
+      sent: totalSentDeliveries,
+    };
+  } finally {
+    isPushReminderRunning = false;
+  }
+};
+
+app.get("/api/push/status", requireAdmin, async (req, res) => {
+  try {
+    const vapid = await ensureVapidKeys();
+    const settings = await loadServerSettings();
+    const subs = await loadPushSubscriptionsFromStore();
+    res.json({
+      supported: true,
+      publicKey: vapid.publicKey,
+      config: normalizePushConfig(settings.pushConfig),
+      subscriptionCount: subs.length,
+      subscriptions: subs.map((s) => ({
+        id: s.id,
+        endpoint: s.endpoint,
+        deviceLabel: s.deviceLabel,
+        createdAt: s.createdAt,
+        lastSuccessAt: s.lastSuccessAt,
+      })),
+    });
+  } catch (error: any) {
+    console.error("Error fetching push status:", error);
+    res.status(500).json({ error: "Falha ao carregar status das notificações push" });
+  }
+});
+
+app.post("/api/push/subscribe", requireAdmin, async (req, res) => {
+  try {
+    const { subscription, deviceLabel } = req.body || {};
+    if (
+      !subscription ||
+      typeof subscription.endpoint !== "string" ||
+      !subscription.endpoint.startsWith("http") ||
+      !subscription.keys?.p256dh ||
+      !subscription.keys?.auth
+    ) {
+      return res.status(400).json({ error: "Assinatura Web Push inválida." });
+    }
+    const saved = await upsertPushSubscriptionToStore(subscription, String(deviceLabel || "Navegador"));
+    res.json({
+      success: true,
+      subscription: {
+        id: saved.id,
+        endpoint: saved.endpoint,
+        deviceLabel: saved.deviceLabel,
+        createdAt: saved.createdAt,
+        lastSuccessAt: saved.lastSuccessAt,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error saving push subscription:", error);
+    res.status(500).json({ error: "Falha ao registrar dispositivo para notificações push" });
+  }
+});
+
+app.delete("/api/push/subscribe", requireAdmin, async (req, res) => {
+  try {
+    const endpoint = typeof req.body?.endpoint === "string"
+      ? req.body.endpoint
+      : typeof req.query?.endpoint === "string"
+        ? req.query.endpoint
+        : undefined;
+    const id = typeof req.body?.id === "string"
+      ? req.body.id
+      : typeof req.query?.id === "string"
+        ? req.query.id
+        : undefined;
+
+    await deletePushSubscriptionFromStore({ id, endpoint });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error deleting push subscription:", error);
+    res.status(500).json({ error: "Falha ao remover dispositivo push" });
+  }
+});
+
+app.put("/api/push/config", requireAdmin, async (req, res) => {
+  try {
+    const currentSettings = await loadServerSettings();
+    const merged = normalizePushConfig({
+      ...currentSettings.pushConfig,
+      ...(req.body || {}),
+      lastReminderPushDate: currentSettings.pushConfig?.lastReminderPushDate || "",
+      lastReminderPushAt: currentSettings.pushConfig?.lastReminderPushAt || "",
+    });
+    if (!db) {
+      mockSettings = { ...(mockSettings || {}), pushConfig: merged };
+      syncData();
+    } else {
+      await setDoc(
+        doc(db, "admin_settings", "1"),
+        sanitizeForFirestore({ pushConfig: merged }),
+        { merge: true },
+      );
+    }
+    broadcastUpdate("UPDATE_SETTINGS");
+    res.json({ success: true, config: merged });
+  } catch (error: any) {
+    console.error("Error updating push config:", error);
+    res.status(500).json({ error: "Falha ao salvar preferências de push" });
+  }
+});
+
+app.post("/api/push/test", requireAdmin, async (req, res) => {
+  try {
+    const onlyEndpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : undefined;
+    const result = await sendAdminWebPushNotification(
+      {
+        title: "🔔 Notificação Push Ativa — GM-Empréstimo",
+        body: "Teste concluído! Você receberá novos cadastros e lembretes de pagamento em tempo real, mesmo em segundo plano.",
+        tag: `gm-push-test-${Date.now()}`,
+        type: "test",
+        tab: "configuracoes",
+        url: "/?view=admin&tab=configuracoes",
+        requireInteraction: false,
+      },
+      onlyEndpoint,
+    );
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error("Error sending test push:", error);
+    res.status(500).json({ error: error?.message || "Falha ao enviar notificação push de teste" });
+  }
+});
+
+app.post("/api/push/send-reminders-now", requireAdmin, async (req, res) => {
+  try {
+    const force = Boolean(req.body?.force);
+    const result = await runPaymentReminderPushCheck({
+      trigger: "manual",
+      dateISO: getBrazilTodayISO(),
+      force,
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error("Error triggering payment reminder push:", error);
+    res.status(500).json({ error: error?.message || "Falha ao disparar lembretes push" });
+  }
+});
 
 app.get("/api/whatsapp-schedule", requireAdmin, async (req, res) => {
   try {
@@ -1749,15 +2393,18 @@ const startAutoScheduleCron = () => {
   const checkAndRun = async () => {
     try {
       const settings = await loadServerSettings();
-      const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
-      if (!config.enabled) return;
-
       const todayISO = getBrazilTodayISO();
       const nowTime = getBrazilTimeHHMM();
-      if (config.lastRunDate === todayISO) return;
-      if (nowTime >= config.horarioExecucao) {
+
+      const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
+      if (config.enabled && config.lastRunDate !== todayISO && nowTime >= config.horarioExecucao) {
         console.log(`[AutoSchedule] Executando agendamento automático (${todayISO} ${nowTime} >= ${config.horarioExecucao})`);
         await runAutoWhatsAppSchedule({ trigger: "automatic", dateISO: todayISO });
+      }
+
+      const pushCfg = normalizePushConfig(settings.pushConfig);
+      if (pushCfg.enabled && pushCfg.notifyPaymentReminders && nowTime >= pushCfg.horarioLembretePush) {
+        await runPaymentReminderPushCheck({ trigger: "automatic", dateISO: todayISO });
       }
     } catch (err) {
       console.error("[AutoSchedule] Erro no ciclo automático:", err);
