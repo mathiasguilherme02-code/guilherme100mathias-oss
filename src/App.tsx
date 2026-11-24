@@ -68,6 +68,7 @@ import {
   WaTemplateKey,
   WaSituacaoType,
   CustomWhatsAppTemplate,
+  computeParcelaMenos60Tags,
 } from "./utils/whatsappReminders";
 import {
   DEFAULT_FERIADOS_CONFIG,
@@ -163,9 +164,12 @@ const WA_DYNAMIC_TAGS: WaDynamicTagItem[] = [
   { tag: "{cliente}", desc: "Primeiro nome do cliente (também aceita {nome})", primary: true },
   { tag: "{valor}", desc: "Valor da parcela / saldo devedor (ex: R$ 606,80)", primary: true },
   { tag: "{data}", desc: "Data e dia da semana (ex: (20/11/2026) - Sexta-Feira)", primary: true },
+  { tag: "{valor_menos_60}", desc: "Resultado do valor total da parcela menos 60% (ex: R$ 140,00)", primary: true },
+  { tag: "{calculo_menos_60}", desc: "Cálculo completo: total da parcela - 60% = resultado", primary: true },
+  { tag: "{valor_60}", desc: "Valor dos 60% subtraídos do total da parcela (ex: R$ 210,00)" },
   { tag: "{referencia}", desc: "seu Lembrete de Pagamento ou sua Parcela N" },
   { tag: "{dias}", desc: "Dias até vencer ou dias de atraso" },
-  { tag: "{valor_divida}", desc: "Valor da dívida antes dos abatimentos (ex: R$ 1.186,80)" },
+  { tag: "{valor_divida}", desc: "Valor total da parcela / dívida antes dos abatimentos (ex: R$ 1.186,80)" },
   { tag: "{abatimentos}", desc: "Lista de abatimentos com datas e valores" },
   { tag: "{prazo_congelamento}", desc: "Data limite de 7 dias do congelamento (regra 40%)" },
 ];
@@ -2586,6 +2590,9 @@ export default function App() {
       cliente: string;
       valor: string;
       valorDivida?: string;
+      valorMenos60?: string;
+      valor60?: string;
+      calculoMenos60?: string;
       data: string;
       referencia: string;
       dias?: string | number;
@@ -2596,9 +2603,27 @@ export default function App() {
     const firstName = vars.cliente
       ? String(vars.cliente).trim().split(" ")[0]
       : "Cliente";
+    const needsMenos60Fallback =
+      vars.valorMenos60 === undefined ||
+      vars.valor60 === undefined ||
+      vars.calculoMenos60 === undefined;
+    const fallbackMenos60 = needsMenos60Fallback
+      ? computeParcelaMenos60Tags(
+          parseMonetaryValue(vars.valorDivida || vars.valor || 0),
+        )
+      : null;
+    const resolvedValorMenos60 =
+      vars.valorMenos60 ?? fallbackMenos60?.valorMenos60 ?? "";
+    const resolvedValor60 = vars.valor60 ?? fallbackMenos60?.valor60 ?? "";
+    const resolvedCalculoMenos60 =
+      vars.calculoMenos60 ?? fallbackMenos60?.calculoMenos60 ?? "";
+
     return template
       .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
       .replace(/\{(?:valor_divida|valor_total|divida)\}/gi, vars.valorDivida || vars.valor || "")
+      .replace(/\{(?:valor_menos_60|parcela_menos_60|resultado_menos_60|menos_60)\}/gi, resolvedValorMenos60)
+      .replace(/\{(?:calculo_menos_60|calculo_60)\}/gi, resolvedCalculoMenos60)
+      .replace(/\{(?:valor_60|desconto_60)\}/gi, resolvedValor60)
       .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, vars.valor || "")
       .replace(/\{data\}/gi, vars.data || "")
       .replace(/\{referencia\}/gi, vars.referencia || "")
@@ -2647,11 +2672,17 @@ export default function App() {
           )
         : 0;
       const resolvedDivida =
-        valorDivida !== undefined ? valorDivida : valorAtualizado + pAbatTotal;
+        valorDivida !== undefined
+          ? valorDivida
+          : calc.valorTotalSemAbatimentos || valorAtualizado + pAbatTotal;
+      const menos60 = computeParcelaMenos60Tags(resolvedDivida);
       return renderWhatsAppTemplate(adminSettings.msgLembreteVencido, {
         cliente: nomeCompleto,
         valor: formatCurrency(valorAtualizado),
         valorDivida: formatCurrency(resolvedDivida),
+        valorMenos60: menos60.valorMenos60,
+        valor60: menos60.valor60,
+        calculoMenos60: menos60.calculoMenos60,
         data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
         referencia: itemDesc,
         dias: diasAtraso,
@@ -2784,11 +2815,19 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
           0,
         )
       : 0;
+    const calc = calculateParcelaDetails(params.p, {
+      sim: params.sim,
+      taxaGlobal: adminSettings.taxaAtrasoDia,
+      hoje: new Date(),
+    });
     const resolvedValorDivida =
       params.valorDivida !== undefined
         ? params.valorDivida
-        : params.valor + pAbatTotal;
+        : params.type === "confirmacao"
+          ? calc.valorOriginal || params.valor
+          : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
     const formattedValorDivida = formatCurrency(resolvedValorDivida);
+    const menos60 = computeParcelaMenos60Tags(resolvedValorDivida);
     const formattedData = params.dataStr
       ? formatDate(params.dataStr)
       : params.p.dataVencimento
@@ -2800,11 +2839,6 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       params.sim,
       params.client,
     );
-    const calc = calculateParcelaDetails(params.p, {
-      sim: params.sim,
-      taxaGlobal: adminSettings.taxaAtrasoDia,
-      hoje: new Date(),
-    });
     const prazoCongelamentoStr = calc.freezeEndDateISO
       ? formatISOToBR(calc.freezeEndDateISO)
       : "";
@@ -2841,6 +2875,9 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         cliente: params.cliente,
         valor: formattedValor,
         valorDivida: formattedValorDivida,
+        valorMenos60: menos60.valorMenos60,
+        valor60: menos60.valor60,
+        calculoMenos60: menos60.calculoMenos60,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
@@ -2887,6 +2924,9 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       cliente: params.cliente,
       valor: formattedValor,
       valorDivida: formattedValorDivida,
+      valorMenos60: menos60.valorMenos60,
+      valor60: menos60.valor60,
+      calculoMenos60: menos60.calculoMenos60,
       data: formattedData,
       referencia: itemDesc,
       dias: params.dias ?? 0,
@@ -2923,11 +2963,17 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
           0,
         )
       : 0;
-    const formattedValorDivida = formatCurrency(
+    const calc = calculateParcelaDetails(params.p, {
+      sim: params.sim,
+      taxaGlobal: adminSettings.taxaAtrasoDia,
+      hoje: new Date(),
+    });
+    const resolvedValorDividaCustom =
       params.valorDivida !== undefined
         ? params.valorDivida
-        : params.valor + pAbatTotal,
-    );
+        : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
+    const formattedValorDivida = formatCurrency(resolvedValorDividaCustom);
+    const menos60 = computeParcelaMenos60Tags(resolvedValorDividaCustom);
     const formattedData = params.dataStr
       ? formatDate(params.dataStr)
       : params.p.dataVencimento
@@ -2938,11 +2984,6 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
       params.sim,
       params.client,
     );
-    const calc = calculateParcelaDetails(params.p, {
-      sim: params.sim,
-      taxaGlobal: adminSettings.taxaAtrasoDia,
-      hoje: new Date(),
-    });
     const prazoCongelamentoStr = calc.freezeEndDateISO
       ? formatISOToBR(calc.freezeEndDateISO)
       : "";
@@ -2953,6 +2994,9 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
         cliente: params.cliente,
         valor: formattedValor,
         valorDivida: formattedValorDivida,
+        valorMenos60: menos60.valorMenos60,
+        valor60: menos60.valor60,
+        calculoMenos60: menos60.calculoMenos60,
         data: formattedData,
         referencia: itemDesc,
         dias: params.dias ?? 0,
@@ -9856,11 +9900,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         hoje: new Date(),
                       })
                     : null;
-                  const previewValorDivida = sampleCalc
-                    ? formatCurrency(sampleCalc.valorTotalSemAbatimentos)
+                  const previewValorDividaNum = sampleCalc
+                    ? sampleCalc.valorTotalSemAbatimentos
                     : isCongelado
-                      ? "R$ 1.186,80"
-                      : "R$ 350,00";
+                      ? 1186.8
+                      : 350;
+                  const previewValorDivida = formatCurrency(previewValorDividaNum);
+                  const previewMenos60 = computeParcelaMenos60Tags(previewValorDividaNum);
                   const previewValor = sampleCalc
                     ? formatCurrency(sampleCalc.valorAtualizado)
                     : isCongelado
@@ -9908,6 +9954,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     cliente: previewCliente,
                     valor: previewValor,
                     valorDivida: previewValorDivida,
+                    valorMenos60: previewMenos60.valorMenos60,
+                    valor60: previewMenos60.valor60,
+                    calculoMenos60: previewMenos60.calculoMenos60,
                     data: previewData,
                     referencia: previewReferencia,
                     dias:

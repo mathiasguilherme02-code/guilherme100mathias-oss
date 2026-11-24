@@ -388,7 +388,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1">
-                    {dynamicTags.slice(0, 6).map((t) => (
+                    {dynamicTags.map((t) => (
                       <button
                         key={`${opt.key}-${t.tag}`}
                         type="button"

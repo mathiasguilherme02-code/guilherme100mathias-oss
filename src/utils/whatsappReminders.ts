@@ -322,12 +322,29 @@ export const formatAbatimentosWhatsAppShared = (
   return `Abatimentos registrados na ficha:\n${linhas.join("\n")}\nTotal abatido: ${formatCurrencyShared(totalAbatido)}`;
 };
 
+export const computeParcelaMenos60Tags = (valorTotalParcela: number) => {
+  const safeTotal = Math.max(0, Number(valorTotalParcela) || 0);
+  const valor60 = Math.round(safeTotal * 0.6 * 100) / 100;
+  const resultado = Math.max(0, Number((safeTotal - valor60).toFixed(2)));
+  const totalFmt = formatCurrencyShared(safeTotal);
+  const valor60Fmt = formatCurrencyShared(valor60);
+  const resultadoFmt = formatCurrencyShared(resultado);
+  return {
+    valorMenos60: resultadoFmt,
+    valor60: valor60Fmt,
+    calculoMenos60: `${totalFmt} - 60% (${valor60Fmt}) = ${resultadoFmt}`,
+  };
+};
+
 export const renderWhatsAppTemplateShared = (
   template: string,
   vars: {
     cliente: string;
     valor: string;
     valorDivida?: string;
+    valorMenos60?: string;
+    valor60?: string;
+    calculoMenos60?: string;
     data: string;
     referencia: string;
     dias?: string | number;
@@ -338,12 +355,36 @@ export const renderWhatsAppTemplateShared = (
   const firstName = vars.cliente
     ? String(vars.cliente).trim().split(" ")[0]
     : "Cliente";
+  const needsMenos60Fallback =
+    vars.valorMenos60 === undefined ||
+    vars.valor60 === undefined ||
+    vars.calculoMenos60 === undefined;
+  const fallbackMenos60 = needsMenos60Fallback
+    ? computeParcelaMenos60Tags(
+        parseMonetaryValueShared(vars.valorDivida || vars.valor || 0),
+      )
+    : null;
+  const resolvedValorMenos60 =
+    vars.valorMenos60 ?? fallbackMenos60?.valorMenos60 ?? "";
+  const resolvedValor60 = vars.valor60 ?? fallbackMenos60?.valor60 ?? "";
+  const resolvedCalculoMenos60 =
+    vars.calculoMenos60 ?? fallbackMenos60?.calculoMenos60 ?? "";
+
   return template
     .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
     .replace(
       /\{(?:valor_divida|valor_total|divida)\}/gi,
       vars.valorDivida || vars.valor || "",
     )
+    .replace(
+      /\{(?:valor_menos_60|parcela_menos_60|resultado_menos_60|menos_60)\}/gi,
+      resolvedValorMenos60,
+    )
+    .replace(
+      /\{(?:calculo_menos_60|calculo_60)\}/gi,
+      resolvedCalculoMenos60,
+    )
+    .replace(/\{(?:valor_60|desconto_60)\}/gi, resolvedValor60)
     .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, vars.valor || "")
     .replace(/\{data\}/gi, vars.data || "")
     .replace(/\{referencia\}/gi, vars.referencia || "")
@@ -391,11 +432,17 @@ export const generateVencidaMessageShared = (
         )
       : 0;
     const resolvedDivida =
-      valorDivida !== undefined ? valorDivida : valorAtualizado + pAbatTotal;
+      valorDivida !== undefined
+        ? valorDivida
+        : calc.valorTotalSemAbatimentos || valorAtualizado + pAbatTotal;
+    const menos60 = computeParcelaMenos60Tags(resolvedDivida);
     return renderWhatsAppTemplateShared(settings.msgLembreteVencido, {
       cliente: nomeCompleto,
       valor: formatCurrencyShared(valorAtualizado),
       valorDivida: formatCurrencyShared(resolvedDivida),
+      valorMenos60: menos60.valorMenos60,
+      valor60: menos60.valor60,
+      calculoMenos60: menos60.calculoMenos60,
       data: p.dataVencimento ? formatDateShared(p.dataVencimento) : "",
       referencia: itemDesc,
       dias: diasAtraso,
@@ -510,11 +557,19 @@ export const buildWhatsAppPaymentMessageShared = (
         0,
       )
     : 0;
+  const calc = calculateParcelaDetails(params.p, {
+    sim: params.sim,
+    taxaGlobal: settings.taxaAtrasoDia,
+    hoje: params.hojeDate || new Date(),
+  });
   const resolvedValorDivida =
     params.valorDivida !== undefined
       ? params.valorDivida
-      : params.valor + pAbatTotal;
+      : params.type === "confirmacao"
+        ? calc.valorOriginal || params.valor
+        : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
   const formattedValorDivida = formatCurrencyShared(resolvedValorDivida);
+  const menos60 = computeParcelaMenos60Tags(resolvedValorDivida);
   const formattedData = params.dataStr
     ? formatDateShared(params.dataStr)
     : params.p.dataVencimento
@@ -526,11 +581,6 @@ export const buildWhatsAppPaymentMessageShared = (
     params.sim,
     params.client,
   );
-  const calc = calculateParcelaDetails(params.p, {
-    sim: params.sim,
-    taxaGlobal: settings.taxaAtrasoDia,
-    hoje: params.hojeDate || new Date(),
-  });
   const prazoCongelamentoStr = calc.freezeEndDateISO
     ? formatISOToBR(calc.freezeEndDateISO)
     : "";
@@ -565,6 +615,9 @@ export const buildWhatsAppPaymentMessageShared = (
       cliente: params.cliente,
       valor: formattedValor,
       valorDivida: formattedValorDivida,
+      valorMenos60: menos60.valorMenos60,
+      valor60: menos60.valor60,
+      calculoMenos60: menos60.calculoMenos60,
       data: formattedData,
       referencia: itemDesc,
       dias: params.dias ?? 0,
@@ -612,6 +665,9 @@ export const buildWhatsAppPaymentMessageShared = (
     cliente: params.cliente,
     valor: formattedValor,
     valorDivida: formattedValorDivida,
+    valorMenos60: menos60.valorMenos60,
+    valor60: menos60.valor60,
+    calculoMenos60: menos60.calculoMenos60,
     data: formattedData,
     referencia: itemDesc,
     dias: params.dias ?? 0,
