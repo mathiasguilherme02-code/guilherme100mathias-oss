@@ -214,8 +214,13 @@ function sanitizeForFirestore(obj: any): any {
 const app = express();
 const PORT = 3000;
 
-// Enable HTTP compression to speed up API responses
-app.use(compression());
+// Enable HTTP compression to speed up API responses (skip SSE stream)
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path === '/api/events') return false;
+    return compression.filter(req, res);
+  },
+}));
 
 // Increase payload limit for file uploads (base64)
 app.use(express.json({ limit: '100mb' }));
@@ -416,9 +421,15 @@ const normalizeLoadedSettings = (raw: any) => {
   ) {
     data.msgLembreteCongelado = defaultSettings.msgLembreteCongelado;
   }
-  if (!data.diasLembreteAntecipado) {
-    data.diasLembreteAntecipado = '3';
-  }
+  data.diasLembreteAntecipado = String(
+    Math.min(
+      60,
+      Math.max(
+        1,
+        parseInt(String(data.diasLembreteAntecipado ?? '3'), 10) || 3,
+      ),
+    ),
+  );
   if (!data.msgTelefones || typeof data.msgTelefones !== 'object' || Array.isArray(data.msgTelefones)) {
     data.msgTelefones = {};
   }
@@ -452,8 +463,8 @@ app.get("/api/settings", async (req, res) => {
     const data = await loadServerSettings();
     res.json(data);
   } catch (error) {
-    console.error("Error fetching settings:", error);
-    res.status(500).json({ error: "Falha ao buscar configurações" });
+    console.error("Error fetching settings (returning defaults):", error);
+    res.json(buildDefaultSettings());
   }
 });
 
@@ -510,11 +521,28 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
         })
       : currentSettings.pushConfig;
 
+    const normalizedDiasAntecipado = String(
+      Math.min(
+        60,
+        Math.max(
+          1,
+          parseInt(
+            String(
+              diasLembreteAntecipado !== undefined && diasLembreteAntecipado !== ""
+                ? diasLembreteAntecipado
+                : currentSettings.diasLembreteAntecipado || "3",
+            ),
+            10,
+          ) || 3,
+        ),
+      ),
+    );
+
     const payloadToSave: any = {
       taxaJuros,
       taxaAtrasoDia,
       tipoTaxa,
-      diasLembreteAntecipado: diasLembreteAntecipado || '3',
+      diasLembreteAntecipado: normalizedDiasAntecipado,
       ...(whatsappAppMode === 'business' || whatsappAppMode === 'padrao'
         ? { whatsappAppMode }
         : {}),
@@ -2442,9 +2470,41 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   startVite();
 } else if (!process.env.VERCEL) {
   // Serve static files in production (non-Vercel)
-  app.use(express.static(path.join(process.cwd(), "dist")));
+  const distDir = path.join(process.cwd(), "dist");
+  app.use(
+    express.static(distDir, {
+      setHeaders: (res, filePath) => {
+        const normalized = filePath.replace(/\\/g, "/");
+        if (
+          normalized.endsWith("/index.html") ||
+          normalized.endsWith("/sw.js") ||
+          normalized.endsWith("/push-sw.js") ||
+          normalized.endsWith("/registerSW.js") ||
+          normalized.endsWith("/manifest.webmanifest")
+        ) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+          res.setHeader("Pragma", "no-cache");
+          res.setHeader("Expires", "0");
+        } else if (normalized.includes("/assets/")) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }),
+  );
+
+  // Never serve HTML fallback for missing JS/CSS/API files (prevents MIME-type crashes on mobile)
+  app.use("/assets", (_req, res) => {
+    res.status(404).type("text/plain").send("Asset not found");
+  });
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "Rota não encontrada" });
+  });
+
   app.get("*", (req, res) => {
-    res.sendFile(path.join(process.cwd(), "dist", "index.html"));
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.sendFile(path.join(distDir, "index.html"));
   });
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

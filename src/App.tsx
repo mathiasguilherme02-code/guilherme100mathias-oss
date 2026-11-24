@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Toaster, toast } from "sonner";
-import { exportFluxoCaixaPDF, exportLembretesPDF } from "./utils/pdfExport";
+import { toast } from "sonner";
 import {
   User,
   MapPin,
@@ -427,6 +426,74 @@ const playNotificationSound = () => {
   }
 };
 
+const safeStorageGet = (key: string): string | null => {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeStorageSet = (key: string, value: string): void => {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(key, value);
+  } catch {}
+};
+
+const safeStorageRemove = (key: string): void => {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.removeItem(key);
+  } catch {}
+};
+
+const PUBLIC_APP_ORIGIN =
+  "https://ais-pre-iuaewkhwf2i2wi4bd7n74o-6135474589.us-east1.run.app";
+
+const getPublicShareOrigin = (): string => {
+  try {
+    const { origin, hostname } = window.location;
+    if (
+      !origin ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname.startsWith("ais-dev-")
+    ) {
+      return PUBLIC_APP_ORIGIN;
+    }
+    return origin;
+  } catch {
+    return PUBLIC_APP_ORIGIN;
+  }
+};
+
+const copyTextSafe = async (text: string): Promise<boolean> => {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+};
+
 export default function App() {
   const [view, setView] = useState<
     | "welcome"
@@ -443,18 +510,22 @@ export default function App() {
     | "produto_detalhes"
     | "carrinho"
   >(() => {
-    const params = new URLSearchParams(window.location.search);
-    const v = params.get("v");
-    if (v) return v as any;
-    if (params.get("cliente") === "true") return "client_login";
-    if (params.get("admin") === "true") return "admin_login";
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get("v");
+      if (v) return v as any;
+      if (params.get("cliente") === "true") return "client_login";
+      if (params.get("admin") === "true") return "admin_login";
+    } catch {}
     return "welcome";
   });
 
   useEffect(() => {
-    window.alert = (message: any) => {
-      toast(String(message));
-    };
+    try {
+      window.alert = (message: any) => {
+        toast(String(message));
+      };
+    } catch {}
     const handlePopState = (e: PopStateEvent) => {
       if (e.state?.view) {
         setView(e.state.view);
@@ -465,11 +536,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (window.history.state?.view !== view) {
-      const params = new URLSearchParams(window.location.search);
-      params.set("v", view);
-      window.history.pushState({ view }, "", `?${params.toString()}`);
-    }
+    try {
+      const currentStateView = window.history.state?.view;
+      if (currentStateView !== view) {
+        const params = new URLSearchParams(window.location.search);
+        params.set("v", view);
+        if (!currentStateView) {
+          window.history.replaceState({ view }, "", `?${params.toString()}`);
+        } else {
+          window.history.pushState({ view }, "", `?${params.toString()}`);
+        }
+      }
+    } catch {}
   }, [view]);
 
   const [adminTab, setAdminTab] = useState<
@@ -509,97 +587,45 @@ export default function App() {
   }, []);
 
   const [cronogramaDate, setCronogramaDate] = useState(getLocalISODate());
-  const [cronogramaYear, setCronogramaYear] = useState(() => {
-    try {
-      return localStorage.getItem("gm_cronograma_year") || getLocalISOYear();
-    } catch (e) {
-      return getLocalISOYear();
-    }
-  });
-  const [cronogramaMonth, setCronogramaMonth] = useState(() => {
-    try {
-      return localStorage.getItem("gm_cronograma_month") || getLocalMonthDigits();
-    } catch (e) {
-      return getLocalMonthDigits();
-    }
-  });
-  const [cronogramaStatusFilter, setCronogramaStatusFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_cronograma_status_filter") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
-  const [fluxoYear, setFluxoYear] = useState(() => {
-    try {
-      return localStorage.getItem("gm_fluxo_year") || getLocalISOYear();
-    } catch (e) {
-      return getLocalISOYear();
-    }
-  });
-  const [fluxoMonth, setFluxoMonth] = useState(() => {
-    try {
-      return localStorage.getItem("gm_fluxo_month") || getLocalMonthDigits();
-    } catch (e) {
-      return getLocalMonthDigits();
-    }
-  });
-  const [fluxoTypeFilter, setFluxoTypeFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_fluxo_type_filter") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
-  const [lembretesYear, setLembretesYear] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_year") || getLocalISOYear();
-    } catch (e) {
-      return getLocalISOYear();
-    }
-  });
-  const [lembretesMonth, setLembretesMonth] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_month") || getLocalMonthDigits();
-    } catch (e) {
-      return getLocalMonthDigits();
-    }
-  });
-  const [lembretesDateFilter, setLembretesDateFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_date_filter") || "";
-    } catch (e) {
-      return "";
-    }
-  });
-  const [lembretesStatusFilter, setLembretesStatusFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_status_filter") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
-  const [lembretesClientFilter, setLembretesClientFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_client_filter") || "";
-    } catch (e) {
-      return "";
-    }
-  });
-  const [lembretesClientIdFilter, setLembretesClientIdFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_lembretes_client_id_filter") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
+  const [cronogramaYear, setCronogramaYear] = useState(
+    () => safeStorageGet("gm_cronograma_year") || getLocalISOYear(),
+  );
+  const [cronogramaMonth, setCronogramaMonth] = useState(
+    () => safeStorageGet("gm_cronograma_month") || getLocalMonthDigits(),
+  );
+  const [cronogramaStatusFilter, setCronogramaStatusFilter] = useState(
+    () => safeStorageGet("gm_cronograma_status_filter") || "all",
+  );
+  const [fluxoYear, setFluxoYear] = useState(
+    () => safeStorageGet("gm_fluxo_year") || getLocalISOYear(),
+  );
+  const [fluxoMonth, setFluxoMonth] = useState(
+    () => safeStorageGet("gm_fluxo_month") || getLocalMonthDigits(),
+  );
+  const [fluxoTypeFilter, setFluxoTypeFilter] = useState(
+    () => safeStorageGet("gm_fluxo_type_filter") || "all",
+  );
+  const [lembretesYear, setLembretesYear] = useState(
+    () => safeStorageGet("gm_lembretes_year") || getLocalISOYear(),
+  );
+  const [lembretesMonth, setLembretesMonth] = useState(
+    () => safeStorageGet("gm_lembretes_month") || getLocalMonthDigits(),
+  );
+  const [lembretesDateFilter, setLembretesDateFilter] = useState(
+    () => safeStorageGet("gm_lembretes_date_filter") || "",
+  );
+  const [lembretesStatusFilter, setLembretesStatusFilter] = useState(
+    () => safeStorageGet("gm_lembretes_status_filter") || "all",
+  );
+  const [lembretesClientFilter, setLembretesClientFilter] = useState(
+    () => safeStorageGet("gm_lembretes_client_filter") || "",
+  );
+  const [lembretesClientIdFilter, setLembretesClientIdFilter] = useState(
+    () => safeStorageGet("gm_lembretes_client_id_filter") || "all",
+  );
   const [lembretesScope, setLembretesScope] = useState<"abater" | "todos">(() => {
-    try {
-      const saved = localStorage.getItem("gm_lembretes_scope");
-      return saved === "todos" ? "todos" : "abater";
-    } catch (e) {
-      return "abater";
-    }
+    const saved = safeStorageGet("gm_lembretes_scope");
+    return saved === "todos" ? "todos" : "abater";
   });
   const [newRetirada, setNewRetirada] = useState({
     valor: "",
@@ -610,7 +636,7 @@ export default function App() {
 
   const [adminPassword, setAdminPassword] = useState("");
   const [adminToken, setAdminToken] = useState(
-    () => localStorage.getItem("adminToken") || "",
+    () => safeStorageGet("adminToken") || "",
   );
   const [loginError, setLoginError] = useState("");
   const [undoState, setUndoState] = useState<{
@@ -729,9 +755,9 @@ export default function App() {
 
   useEffect(() => {
     if (adminToken) {
-      localStorage.setItem("adminToken", adminToken);
+      safeStorageSet("adminToken", adminToken);
     } else {
-      localStorage.removeItem("adminToken");
+      safeStorageRemove("adminToken");
     }
   }, [adminToken]);
   const [clientCpf, setClientCpf] = useState("");
@@ -751,33 +777,21 @@ export default function App() {
     clientsRef.current = clients;
   }, [clients]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState(() => {
-    try {
-      return localStorage.getItem("gm_clientes_status_filter") || "todos";
-    } catch (e) {
-      return "todos";
-    }
-  });
-  const [clientesMonth, setClientesMonth] = useState(() => {
-    try {
-      return localStorage.getItem("gm_clientes_month") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
-  const [clientesYear, setClientesYear] = useState(() => {
-    try {
-      return localStorage.getItem("gm_clientes_year") || "all";
-    } catch (e) {
-      return "all";
-    }
-  });
+  const [statusFilter, setStatusFilter] = useState(
+    () => safeStorageGet("gm_clientes_status_filter") || "todos",
+  );
+  const [clientesMonth, setClientesMonth] = useState(
+    () => safeStorageGet("gm_clientes_month") || "all",
+  );
+  const [clientesYear, setClientesYear] = useState(
+    () => safeStorageGet("gm_clientes_year") || "all",
+  );
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
 
   // Admin Notifications State
   const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() => {
     try {
-      const saved = localStorage.getItem("gm_admin_notifications");
+      const saved = safeStorageGet("gm_admin_notifications");
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
       return [];
@@ -787,7 +801,7 @@ export default function App() {
   // Track viewed client fichas by ID to dismiss badges and alert banners
   const [viewedFichas, setViewedFichas] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem("gm_viewed_fichas");
+      const saved = safeStorageGet("gm_viewed_fichas");
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
       return [];
@@ -803,9 +817,7 @@ export default function App() {
     setViewedFichas((prev) => {
       if (prev.includes(clientId)) return prev;
       const updated = [...prev, clientId];
-      try {
-        localStorage.setItem("gm_viewed_fichas", JSON.stringify(updated));
-      } catch (e) {}
+      safeStorageSet("gm_viewed_fichas", JSON.stringify(updated));
       return updated;
     });
 
@@ -819,9 +831,7 @@ export default function App() {
       const updated = prev.map((n) =>
         n.clientId === clientId ? { ...n, read: true } : n,
       );
-      try {
-        localStorage.setItem("gm_admin_notifications", JSON.stringify(updated));
-      } catch (err) {}
+      safeStorageSet("gm_admin_notifications", JSON.stringify(updated));
       return updated;
     });
 
@@ -1246,13 +1256,27 @@ export default function App() {
     if (!adminToken) return;
     setIsSavingAutoSchedule(true);
     try {
+      const normalizedDias = String(
+        Math.min(
+          60,
+          Math.max(
+            1,
+            parseInt(String(adminSettings.diasLembreteAntecipado || "3"), 10) || 3,
+          ),
+        ),
+      );
+      const payloadToSave = {
+        ...adminSettings,
+        diasLembreteAntecipado: normalizedDias,
+      };
+      setAdminSettings(payloadToSave);
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${adminToken}`,
         },
-        body: JSON.stringify(adminSettings),
+        body: JSON.stringify(payloadToSave),
       });
       if (res.ok) {
         toast.success("Configurações de agendamento automático salvas!");
@@ -1857,8 +1881,19 @@ export default function App() {
 
     fetchData();
 
-    // Setup SSE for real-time updates
-    const eventSource = new EventSource("/api/events");
+    // Setup SSE for real-time updates (safe in restricted mobile browsers)
+    let eventSource: EventSource | null = null;
+    try {
+      if (typeof EventSource !== "undefined") {
+        eventSource = new EventSource("/api/events");
+      }
+    } catch (e) {
+      eventSource = null;
+    }
+
+    if (!eventSource) {
+      return;
+    }
 
     eventSource.onmessage = (event) => {
       try {
@@ -2084,7 +2119,9 @@ export default function App() {
     };
 
     return () => {
-      eventSource.close();
+      try {
+        eventSource?.close();
+      } catch {}
     };
   }, [adminToken]);
 
@@ -2270,6 +2307,7 @@ export default function App() {
     logradouro: "",
   });
   const [cepSearchResults, setCepSearchResults] = useState<any[]>([]);
+  const [cepResultsFilter, setCepResultsFilter] = useState("");
   const [isSearchingCep, setIsSearchingCep] = useState(false);
   const [cepSearchError, setCepSearchError] = useState("");
   const [cepTarget, setCepTarget] = useState<
@@ -2358,6 +2396,7 @@ export default function App() {
     setIsSearchingCep(true);
     setCepSearchError("");
     setCepSearchResults([]);
+    setCepResultsFilter("");
 
     try {
       const response = await fetch(
@@ -2408,6 +2447,7 @@ export default function App() {
     }
     setShowCepSearchModal(false);
     setCepSearchResults([]);
+    setCepResultsFilter("");
     setCepSearchData({ uf: "", cidade: "", logradouro: "" });
   };
 
@@ -4354,13 +4394,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    navigator.clipboard
-                      ?.writeText(waPhonePrompt.message)
-                      .then(() =>
-                        toast.success("Mensagem copiada para a área de transferência!"),
-                      )
-                      .catch(() => {});
+                  onClick={async () => {
+                    const ok = await copyTextSafe(waPhonePrompt.message);
+                    if (ok) {
+                      toast.success("Mensagem copiada para a área de transferência!");
+                    }
                   }}
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                 >
@@ -4862,7 +4900,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl relative max-h-[90vh] flex flex-col">
             <button
-              onClick={() => setShowCepSearchModal(false)}
+              onClick={() => {
+                setShowCepSearchModal(false);
+                setCepResultsFilter("");
+              }}
               className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors"
             >
               <X size={24} />
@@ -4951,33 +4992,96 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               </button>
             </form>
 
-            {cepSearchResults.length > 0 && (
-              <div className="mt-6 flex-1 overflow-y-auto min-h-0 border-t pt-4">
-                <h4 className="font-medium text-slate-700 mb-3">
-                  Selecione o endereço correto:
-                </h4>
-                <div className="space-y-2">
-                  {cepSearchResults.map((address, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      onClick={() => handleSelectCep(address)}
-                      className="w-full text-left p-3 border border-slate-200 rounded-lg hover:border-yellow-500 hover:bg-yellow-50 transition-colors"
-                    >
-                      <div className="font-semibold text-slate-800">
-                        {address.cep}
+            {cepSearchResults.length > 0 && (() => {
+              const normalizeFilterText = (val: string) =>
+                String(val || "")
+                  .normalize("NFD")
+                  .replace(/[\u0300-\u036f]/g, "")
+                  .toLowerCase();
+              const normalizedQuery = normalizeFilterText(cepResultsFilter.trim());
+              const filteredCepResults = normalizedQuery
+                ? cepSearchResults.filter((address) => {
+                    const searchable = normalizeFilterText(
+                      [
+                        address.cep,
+                        address.logradouro,
+                        address.complemento,
+                        address.bairro,
+                        address.localidade,
+                        address.uf,
+                      ]
+                        .filter(Boolean)
+                        .join(" "),
+                    );
+                    return searchable.includes(normalizedQuery);
+                  })
+                : cepSearchResults;
+
+              return (
+                <div className="mt-6 flex-1 flex flex-col min-h-0 border-t pt-4">
+                  <div className="flex items-center justify-between gap-2 mb-2 flex-shrink-0">
+                    <h4 className="font-medium text-slate-700 text-sm">
+                      Selecione o endereço correto:
+                    </h4>
+                    <span className="text-xs text-slate-500 tabular-nums">
+                      {filteredCepResults.length} de {cepSearchResults.length}
+                    </span>
+                  </div>
+                  <div className="relative mb-3 flex-shrink-0">
+                    <Search
+                      size={16}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                    />
+                    <input
+                      type="text"
+                      value={cepResultsFilter}
+                      onChange={(e) => setCepResultsFilter(e.target.value)}
+                      placeholder="Buscar endereços..."
+                      aria-label="Buscar endereços..."
+                      className="w-full pl-9 pr-8 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all bg-slate-50 focus:bg-white"
+                    />
+                    {cepResultsFilter && (
+                      <button
+                        type="button"
+                        onClick={() => setCepResultsFilter("")}
+                        title="Limpar filtro"
+                        aria-label="Limpar filtro"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-y-auto min-h-0 space-y-2 pr-1">
+                    {filteredCepResults.length === 0 ? (
+                      <div className="p-4 text-center text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg">
+                        Nenhum endereço encontrado para &ldquo;{cepResultsFilter}&rdquo;.
                       </div>
-                      <div className="text-sm text-slate-600">
-                        {address.logradouro}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {address.bairro} - {address.localidade}/{address.uf}
-                      </div>
-                    </button>
-                  ))}
+                    ) : (
+                      filteredCepResults.map((address, index) => (
+                        <button
+                          key={`${address.cep || ""}-${index}`}
+                          type="button"
+                          onClick={() => handleSelectCep(address)}
+                          className="w-full text-left p-3 border border-slate-200 rounded-lg hover:border-yellow-500 hover:bg-yellow-50 transition-colors"
+                        >
+                          <div className="font-semibold text-slate-800">
+                            {address.cep}
+                          </div>
+                          <div className="text-sm text-slate-600">
+                            {address.logradouro}
+                            {address.complemento ? ` (${address.complemento})` : ""}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {address.bairro} - {address.localidade}/{address.uf}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
@@ -5357,78 +5461,78 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
   if (view === "produtos") {
     return (
-      <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
-        <div className="absolute top-4 left-4 flex gap-3">
-          <button
-            onClick={() => setView("welcome")}
-            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-            title="Voltar"
-          >
-            <ArrowLeft size={16} />
-            Voltar
-          </button>
-          <button
-            onClick={toggleFullscreen}
-            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-            title="Alternar Tela Cheia"
-          >
-            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-            {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
-          </button>
+      <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-[95%] mx-auto flex flex-wrap items-center justify-between gap-2 mb-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setView("welcome")}
+              className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+              title="Voltar"
+            >
+              <ArrowLeft size={16} />
+              Voltar
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 sm:px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+              title="Alternar Tela Cheia"
+            >
+              {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+              {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setShowComoFuncionaEmprestimo(true)}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona empréstimo
+            </button>
+
+            <button
+              onClick={() => setShowComoFuncionaProdutos(true)}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona produtos
+            </button>
+
+            <a
+              href="https://wa.me/5531972323040"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Phone size={16} />
+              Fale conosco
+            </a>
+            <button
+              onClick={() => {
+                setView("form_produtos");
+              }}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <UserPlus size={16} />
+              Cadastro de Clientes
+            </button>
+            <button
+              onClick={() => setView("client_login_produtos")}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <User size={16} />
+              Já sou cliente
+            </button>
+            <button
+              onClick={() => setView("admin_login")}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <LayoutDashboard size={16} />
+              Acesso Admin
+            </button>
+          </div>
         </div>
-        <div className="absolute top-4 right-4 flex gap-3">
-          <button
-            onClick={() => setShowComoFuncionaEmprestimo(true)}
-
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona empréstimo
-          </button>
-
-          <button
-            onClick={() => setShowComoFuncionaProdutos(true)}
-
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona produtos
-          </button>
-
-          <a
-            href="https://wa.me/5531972323040"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Phone size={16} />
-            Fale conosco
-          </a>
-          <button
-            onClick={() => {
-              setView("form_produtos");
-            }}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <UserPlus size={16} />
-            Cadastro de Clientes
-          </button>
-          <button
-            onClick={() => setView("client_login_produtos")}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <User size={16} />
-            Já sou cliente
-          </button>
-          <button
-            onClick={() => setView("admin_login")}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <LayoutDashboard size={16} />
-            Acesso Admin
-          </button>
-        </div>
-        <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden mt-8">
+        <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden">
           <div className="bg-white px-8 py-10 border-b-4 border-yellow-500 flex flex-col items-center text-center">
             <div className="mb-4 flex flex-col items-center justify-center">
               <div
@@ -6264,8 +6368,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       .map((s: any, index: number) => ({ ...s, originalIndex: index }))
       .filter((s: any) => s && s.valorSolicitado);
     return (
-      <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
-        <div className="absolute top-4 left-4 flex gap-3">
+      <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-[95%] mx-auto flex flex-wrap items-center gap-2 mb-6">
           <button
             onClick={() => window.history.back()}
             className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
@@ -7617,8 +7721,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       ? (() => {
           const hoje = new Date();
           hoje.setHours(0, 0, 0, 0);
-          const maxDiasAntecipado =
-            parseInt(adminSettings.diasLembreteAntecipado || "3") || 3;
+          const maxDiasAntecipado = Math.min(
+            60,
+            Math.max(
+              1,
+              parseInt(String(adminSettings.diasLembreteAntecipado || "3"), 10) || 3,
+            ),
+          );
 
           const allReminders = clients
             .filter((c) => c.id !== "admin-transactions")
@@ -9098,7 +9207,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       }
     };
 
-    const handleExportLembretesPDF = () => {
+    const handleExportLembretesPDF = async () => {
       try {
         const monthNames: Record<string, string> = {
           all: "Ano Todo",
@@ -9151,6 +9260,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         const clientFilterLabel =
           clientParts.length > 0 ? clientParts.join(" · ") : "Todos os Clientes";
 
+        const { exportLembretesPDF } = await import("./utils/pdfExport");
         exportLembretesPDF({
           scopeLabel,
           periodLabel,
@@ -9169,7 +9279,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
       }
     };
 
-    const handleExportFluxoPDF = () => {
+    const handleExportFluxoPDF = async () => {
       try {
         const monthNames: Record<string, string> = {
           all: "Ano Todo",
@@ -9215,6 +9325,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             return (a.descricao || "").localeCompare(b.descricao || "");
           });
 
+        const { exportFluxoCaixaPDF } = await import("./utils/pdfExport");
         exportFluxoCaixaPDF({
           periodLabel,
           filePeriod,
@@ -9243,8 +9354,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     };
 
     return (
-      <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
-        <div className="absolute top-4 left-4 flex gap-3 print:hidden">
+      <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-[98%] mx-auto flex flex-wrap items-center gap-2 mb-6 print:hidden">
           <button
             onClick={() => window.history.back()}
             className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium print:hidden"
@@ -9713,19 +9824,44 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   <LayoutDashboard size={20} className="text-yellow-500" />
                   Configurações Globais de Taxas
                 </h2>
-                <button
-                  onClick={() => {
-                    const link = `https://ais-pre-iuaewkhwf2i2wi4bd7n74o-6135474589.us-east1.run.app/?cliente=true`;
-                    navigator.clipboard.writeText(link);
-                    alert(
-                      "Link da Área do Cliente copiado para a área de transferência!\n\nEnvie este link para os seus clientes.",
-                    );
-                  }}
-                  className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
-                >
-                  <User size={16} />
-                  Copiar Link do Cliente
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const link = `${getPublicShareOrigin()}/?cliente=true`;
+                      const ok = await copyTextSafe(link);
+                      if (ok) {
+                        toast.success(
+                          "Link da Área do Cliente copiado! Envie este link para os seus clientes.",
+                        );
+                      } else {
+                        toast.info(`Copie o link: ${link}`);
+                      }
+                    }}
+                    className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                  >
+                    <User size={16} />
+                    Copiar Link do Cliente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const link = `${getPublicShareOrigin()}/?v=simulation`;
+                      const ok = await copyTextSafe(link);
+                      if (ok) {
+                        toast.success(
+                          "Link de Simulação e Cadastro copiado para a área de transferência!",
+                        );
+                      } else {
+                        toast.info(`Copie o link: ${link}`);
+                      }
+                    }}
+                    className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2 rounded-lg transition-colors text-sm font-medium"
+                  >
+                    <Copy size={15} />
+                    Copiar Link de Cadastro
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
                 <div>
@@ -9963,7 +10099,13 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       keyOrSituacao === "msgLembreteVencido" ||
                       keyOrSituacao === "vencido"
                         ? 5
-                        : adminSettings.diasLembreteAntecipado || "3",
+                        : Math.min(
+                            60,
+                            Math.max(
+                              1,
+                              parseInt(String(adminSettings.diasLembreteAntecipado || "3"), 10) || 3,
+                            ),
+                          ),
                     abatimentos: previewAbatimentos,
                     prazoCongelamento: previewPrazoCongelamento,
                   });
@@ -10011,7 +10153,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         : "business"
                     }
                     diasLembreteAntecipado={
-                      adminSettings.diasLembreteAntecipado || "3"
+                      adminSettings.diasLembreteAntecipado ?? "3"
                     }
                     onChangeWhatsappAppMode={(mode) =>
                       setAdminSettings((prev) => ({
@@ -10023,6 +10165,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       setAdminSettings((prev) => ({
                         ...prev,
                         diasLembreteAntecipado: dias,
+                      }))
+                    }
+                    onBlurDiasAntecipado={() =>
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        diasLembreteAntecipado: String(
+                          Math.min(
+                            60,
+                            Math.max(
+                              1,
+                              parseInt(String(prev.diasLembreteAntecipado || "3"), 10) || 3,
+                            ),
+                          ),
+                        ),
                       }))
                     }
                     onChangeBuiltInText={(key, text) =>
@@ -10098,13 +10254,30 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     onSaveAll={async () => {
                       setIsSavingWaSettings(true);
                       try {
+                        const normalizedDias = String(
+                          Math.min(
+                            60,
+                            Math.max(
+                              1,
+                              parseInt(
+                                String(adminSettings.diasLembreteAntecipado || "3"),
+                                10,
+                              ) || 3,
+                            ),
+                          ),
+                        );
+                        const payloadToSave = {
+                          ...adminSettings,
+                          diasLembreteAntecipado: normalizedDias,
+                        };
+                        setAdminSettings(payloadToSave);
                         const res = await fetch("/api/settings", {
                           method: "PUT",
                           headers: {
                             "Content-Type": "application/json",
                             Authorization: `Bearer ${adminToken}`,
                           },
-                          body: JSON.stringify(adminSettings),
+                          body: JSON.stringify(payloadToSave),
                         });
                         if (res.ok) {
                           toast.success(
@@ -10377,26 +10550,91 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               />
                               Pré-Vencimento (usa modelo &ldquo;Pré-Vencimento&rdquo;)
                             </label>
-                            {autoCfg.enviarPreVencimento && (
-                              <select
-                                value={autoCfg.preVencimentoModo}
-                                onChange={(e) =>
-                                  updateAutoCfg({
-                                    preVencimentoModo:
-                                      e.target.value === "dia_exato"
-                                        ? "dia_exato"
-                                        : "janela",
-                                  })
-                                }
-                                className="w-full px-2.5 py-1 text-xs text-slate-700 bg-white border border-slate-300 rounded-md outline-none"
+                            <div className="flex flex-wrap items-center gap-2 pl-6 text-xs text-slate-600">
+                              <label
+                                htmlFor="input-dias-pre-vencimento"
+                                className="font-medium text-slate-700"
                               >
-                                <option value="janela">
-                                  Qualquer parcela dentro de {adminSettings.diasLembreteAntecipado || "3"} dia(s) antes
-                                </option>
-                                <option value="dia_exato">
-                                  Apenas exatamente {adminSettings.diasLembreteAntecipado || "3"} dia(s) antes
-                                </option>
-                              </select>
+                                Enviar com
+                              </label>
+                              <input
+                                id="input-dias-pre-vencimento"
+                                type="number"
+                                min="1"
+                                max="60"
+                                step="1"
+                                value={adminSettings.diasLembreteAntecipado ?? "3"}
+                                onChange={(e) =>
+                                  setAdminSettings((prev) => ({
+                                    ...prev,
+                                    diasLembreteAntecipado: e.target.value,
+                                  }))
+                                }
+                                onBlur={() =>
+                                  setAdminSettings((prev) => ({
+                                    ...prev,
+                                    diasLembreteAntecipado: String(
+                                      Math.min(
+                                        60,
+                                        Math.max(
+                                          1,
+                                          parseInt(
+                                            String(prev.diasLembreteAntecipado || "3"),
+                                            10,
+                                          ) || 3,
+                                        ),
+                                      ),
+                                    ),
+                                  }))
+                                }
+                                className="w-16 px-2 py-0.5 text-xs font-bold text-slate-800 bg-white border border-slate-300 rounded focus:ring-2 focus:ring-emerald-500 outline-none tabular-nums"
+                              />
+                              <span>dia(s) antes do vencimento</span>
+                            </div>
+                            {autoCfg.enviarPreVencimento && (
+                              <div className="pl-6">
+                                <select
+                                  value={autoCfg.preVencimentoModo}
+                                  onChange={(e) =>
+                                    updateAutoCfg({
+                                      preVencimentoModo:
+                                        e.target.value === "dia_exato"
+                                          ? "dia_exato"
+                                          : "janela",
+                                    })
+                                  }
+                                  className="w-full px-2.5 py-1 text-xs text-slate-700 bg-white border border-slate-300 rounded-md outline-none"
+                                >
+                                  <option value="janela">
+                                    Qualquer parcela dentro de{" "}
+                                    {Math.min(
+                                      60,
+                                      Math.max(
+                                        1,
+                                        parseInt(
+                                          String(adminSettings.diasLembreteAntecipado || "3"),
+                                          10,
+                                        ) || 3,
+                                      ),
+                                    )}{" "}
+                                    dia(s) antes
+                                  </option>
+                                  <option value="dia_exato">
+                                    Apenas exatamente{" "}
+                                    {Math.min(
+                                      60,
+                                      Math.max(
+                                        1,
+                                        parseInt(
+                                          String(adminSettings.diasLembreteAntecipado || "3"),
+                                          10,
+                                        ) || 3,
+                                      ),
+                                    )}{" "}
+                                    dia(s) antes
+                                  </option>
+                                </select>
+                              </div>
                             )}
                           </div>
 
@@ -12244,11 +12482,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                         diffParaVencimento /
                                           (1000 * 60 * 60 * 24),
                                       );
-                                      const maxDiasAntecipado =
-                                        parseInt(
-                                          adminSettings.diasLembreteAntecipado ||
-                                            "3",
-                                        ) || 3;
+                                      const maxDiasAntecipado = Math.min(
+                                        60,
+                                        Math.max(
+                                          1,
+                                          parseInt(
+                                            String(adminSettings.diasLembreteAntecipado || "3"),
+                                            10,
+                                          ) || 3,
+                                        ),
+                                      );
                                       const isPreVencimento =
                                         !p.paga &&
                                         p.status !== "pago" &&
@@ -14537,10 +14780,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       const diasParaVencimento = Math.round(
                         diffParaVencimento / (1000 * 60 * 60 * 24),
                       );
-                      const maxDiasAntecipado =
-                        parseInt(
-                          adminSettings.diasLembreteAntecipado || "3",
-                        ) || 3;
+                      const maxDiasAntecipado = Math.min(
+                        60,
+                        Math.max(
+                          1,
+                          parseInt(
+                            String(adminSettings.diasLembreteAntecipado || "3"),
+                            10,
+                          ) || 3,
+                        ),
+                      );
                       const isPreVencimento =
                         diasParaVencimento >= 1 &&
                         diasParaVencimento <= maxDiasAntecipado;
@@ -17293,80 +17542,80 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
   if (view === "simulation") {
     return (
-      <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
-        <div className="absolute top-4 left-4 flex gap-3">
-          <button
-            onClick={() => window.history.back()}
-            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-            title="Clique para retroceder, mantenha pressionado para ver histórico"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <button
-            onClick={toggleFullscreen}
-            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-            title="Alternar Tela Cheia"
-          >
-            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-            {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
-          </button>
+      <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
+        <div className="max-w-[95%] mx-auto flex flex-wrap items-center justify-between gap-2 mb-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => window.history.back()}
+              className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+              title="Clique para retroceder, mantenha pressionado para ver histórico"
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <button
+              onClick={toggleFullscreen}
+              className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 sm:px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+              title="Alternar Tela Cheia"
+            >
+              {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+              {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setShowComoFuncionaEmprestimo(true)}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona empréstimo
+            </button>
+
+            <button
+              onClick={() => setShowComoFuncionaProdutos(true)}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Info size={16} />
+              Como funciona produtos
+            </button>
+
+            <a
+              href="https://wa.me/5531972323040"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <Phone size={16} />
+              Fale conosco
+            </a>
+            <button
+              onClick={() => {
+                setView("form");
+                setSelectedClient(null);
+                setFormData(initialFormData);
+                setCategorizedFiles({});
+              }}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <UserPlus size={16} />
+              Cadastro de Clientes
+            </button>
+            <button
+              onClick={() => setView("client_login")}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <User size={16} />
+              Já sou cliente
+            </button>
+            <button
+              onClick={() => setView("admin_login")}
+              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+            >
+              <LayoutDashboard size={16} />
+              Acesso Admin
+            </button>
+          </div>
         </div>
-        <div className="absolute top-4 right-4 flex gap-3">
-          <button
-            onClick={() => setShowComoFuncionaEmprestimo(true)}
-
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona empréstimo
-          </button>
-
-          <button
-            onClick={() => setShowComoFuncionaProdutos(true)}
-
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Info size={16} />
-            Como funciona produtos
-          </button>
-
-          <a
-            href="https://wa.me/5531972323040"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <Phone size={16} />
-            Fale conosco
-          </a>
-          <button
-            onClick={() => {
-              setView("form");
-              setSelectedClient(null);
-              setFormData(initialFormData);
-              setCategorizedFiles({});
-            }}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <UserPlus size={16} />
-            Cadastro de Clientes
-          </button>
-          <button
-            onClick={() => setView("client_login")}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <User size={16} />
-            Já sou cliente
-          </button>
-          <button
-            onClick={() => setView("admin_login")}
-            className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-          >
-            <LayoutDashboard size={16} />
-            Acesso Admin
-          </button>
-        </div>
-        <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden mt-8">
+        <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden">
           <div className="bg-white px-8 py-10 border-b-4 border-yellow-500 flex flex-col items-center text-center">
             <div className="mb-4 flex flex-col items-center justify-center">
               <div
@@ -17786,74 +18035,73 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans relative">
-      <Toaster position="top-right" richColors />
-      <div className="absolute top-4 left-4 flex gap-3">
-        <button
-          onClick={() => window.history.back()}
-          className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-          title="Clique para retroceder, mantenha pressionado para ver histórico"
-        >
-          <ArrowLeft size={16} />
-        </button>
-        <button
-          onClick={toggleFullscreen}
-          className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
-          title="Alternar Tela Cheia"
-        >
-          {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
-          {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
-        </button>
+    <div className="min-h-screen bg-slate-50 py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-[95%] mx-auto flex flex-wrap items-center justify-between gap-2 mb-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => window.history.back()}
+            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+            title="Clique para retroceder, mantenha pressionado para ver histórico"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <button
+            onClick={toggleFullscreen}
+            className="flex items-center gap-2 bg-white text-slate-800 border border-slate-300 px-3 sm:px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors shadow-sm text-sm font-medium"
+            title="Alternar Tela Cheia"
+          >
+            {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+            {isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {!isEditingClientData && (
+            <>
+              <button
+                onClick={() => setView("welcome")}
+                className="flex items-center gap-2 bg-slate-200 text-slate-800 px-3 sm:px-4 py-2 rounded-lg hover:bg-slate-300 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+              >
+                <ArrowLeft size={16} />
+                Voltar à página inicial
+              </button>
+
+              <button
+                onClick={() => setShowComoFuncionaEmprestimo(true)}
+                className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+              >
+                <Info size={16} />
+                Como funciona empréstimo
+              </button>
+
+              <button
+                onClick={() => setShowComoFuncionaProdutos(true)}
+                className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+              >
+                <Info size={16} />
+                Como funciona produtos
+              </button>
+
+              <a
+                href="https://wa.me/5531972323040"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+              >
+                <Phone size={16} />
+                Fale conosco
+              </a>
+              <button
+                onClick={() => setView("admin_login")}
+                className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-3 sm:px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-xs sm:text-sm font-semibold"
+              >
+                <LayoutDashboard size={16} />
+                Acesso Admin
+              </button>
+            </>
+          )}
+        </div>
       </div>
-      <div className="absolute top-4 right-4 flex gap-3">
-        {!isEditingClientData && (
-          <>
-            <button
-              onClick={() => setView("welcome")}
-              className="flex items-center gap-2 bg-slate-200 text-slate-800 px-4 py-2 rounded-lg hover:bg-slate-300 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <ArrowLeft size={16} />
-              Voltar à página inicial
-            </button>
-
-            <button
-              onClick={() => setShowComoFuncionaEmprestimo(true)}
-
-              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <Info size={16} />
-              Como funciona empréstimo
-            </button>
-
-            <button
-              onClick={() => setShowComoFuncionaProdutos(true)}
-
-              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <Info size={16} />
-              Como funciona produtos
-            </button>
-
-            <a
-              href="https://wa.me/5531972323040"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <Phone size={16} />
-              Fale conosco
-            </a>
-            <button
-              onClick={() => setView("admin_login")}
-              className="flex items-center gap-2 bg-yellow-500 text-slate-900 px-4 py-2 rounded-lg hover:bg-yellow-600 transition-colors shadow-sm text-sm font-semibold"
-            >
-              <LayoutDashboard size={16} />
-              Acesso Admin
-            </button>
-          </>
-        )}
-      </div>
-      <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden mt-8">
+      <div className="max-w-[95%] mx-auto bg-white rounded-2xl shadow-xl overflow-hidden">
         <div className="bg-white px-8 py-10 border-b-4 border-yellow-500 flex flex-col items-center text-center">
           <div className="mb-4 flex flex-col items-center justify-center">
             <div
@@ -17993,19 +18241,35 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   CEP
                 </label>
-                <input
-                  type="text"
-                  name="cep"
-                  value={formData.cep}
-                  onChange={handleInputChange}
-                  onBlur={(e) => handleCepBlur(e, "client")}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                  placeholder="00000-000"
-                  required
-                />
-                {loadingCep && (
-                  <div className="absolute right-3 top-9 w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
-                )}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1 min-w-0">
+                    <input
+                      type="text"
+                      name="cep"
+                      value={formData.cep}
+                      onChange={handleInputChange}
+                      onBlur={(e) => handleCepBlur(e, "client")}
+                      className="w-full px-3.5 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
+                      placeholder="00000-000"
+                      required
+                    />
+                    {loadingCep && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCepTarget("client");
+                      setShowCepSearchModal(true);
+                    }}
+                    title="Buscar endereço por cidade e rua"
+                    aria-label="Buscar endereço por cidade e rua"
+                    className="inline-flex items-center justify-center px-3 py-2.5 bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-semibold rounded-lg transition-colors shrink-0 shadow-xs"
+                  >
+                    <Search size={18} />
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={() => {

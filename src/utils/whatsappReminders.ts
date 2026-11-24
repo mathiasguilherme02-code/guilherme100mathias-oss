@@ -786,9 +786,12 @@ export const evaluateAutoScheduleNotifications = (
   const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
   const hoje = parseLocalDateShared(dateISO);
   hoje.setHours(0, 0, 0, 0);
-  const maxDiasAntecipado = Math.max(
-    1,
-    parseInt(String(settings.diasLembreteAntecipado || "3"), 10) || 3,
+  const maxDiasAntecipado = Math.min(
+    60,
+    Math.max(
+      1,
+      parseInt(String(settings.diasLembreteAntecipado || "3"), 10) || 3,
+    ),
   );
   const freqVencido = Math.max(
     1,

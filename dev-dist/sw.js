@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-619edae6'], (function (workbox) { 'use strict';
+define(['./workbox-083e6eab'], (function (workbox) { 'use strict';
 
   importScripts("/push-sw.js");
   self.skipWaiting();
@@ -82,5 +82,12 @@ define(['./workbox-619edae6'], (function (workbox) { 'use strict';
     "revision": "d41d8cd98f00b204e9800998ecf8427e"
   }], {});
   workbox.cleanupOutdatedCaches();
+  workbox.registerRoute(({
+    request
+  }) => request.mode === "navigate", new workbox.NetworkFirst({
+    "cacheName": "gm-pages-cache",
+    "networkTimeoutSeconds": 4,
+    plugins: []
+  }), 'GET');
 
 }));

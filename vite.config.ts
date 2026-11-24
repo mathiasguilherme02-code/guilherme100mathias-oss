@@ -54,8 +54,29 @@ export default defineConfig(({mode}) => {
         },
         workbox: {
           importScripts: ['/push-sw.js'],
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          cleanupOutdatedCaches: true,
+          globPatterns: ['**/*.{js,css,ico,png,svg,woff,woff2}'],
+          globIgnores: [
+            '**/index.html',
+            '**/html2pdf*',
+            '**/html2canvas*',
+            '**/purify*',
+            '**/jspdf*',
+            '**/pdfExport*',
+            '**/index.es-*',
+            '**/*.map',
+          ],
           navigateFallback: null,
+          runtimeCaching: [
+            {
+              urlPattern: ({request}) => request.mode === 'navigate',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'gm-pages-cache',
+                networkTimeoutSeconds: 4,
+              },
+            },
+          ],
         },
         devOptions: {
           enabled: true,

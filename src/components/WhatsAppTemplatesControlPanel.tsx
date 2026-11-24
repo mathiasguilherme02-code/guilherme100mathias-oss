@@ -48,6 +48,7 @@ interface WhatsAppTemplatesControlPanelProps {
   diasLembreteAntecipado: string;
   onChangeWhatsappAppMode: (mode: "business" | "padrao") => void;
   onChangeDiasAntecipado: (dias: string) => void;
+  onBlurDiasAntecipado?: () => void;
   onChangeBuiltInText: (key: WaTemplateKey, text: string) => void;
   onChangeBuiltInPhone: (key: WaTemplateKey, phone: string) => void;
   onRestoreBuiltInDefault: (key: WaTemplateKey) => void;
@@ -101,6 +102,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
   diasLembreteAntecipado,
   onChangeWhatsappAppMode,
   onChangeDiasAntecipado,
+  onBlurDiasAntecipado,
   onChangeBuiltInText,
   onChangeBuiltInPhone,
   onRestoreBuiltInDefault,
@@ -282,10 +284,11 @@ export const WhatsAppTemplatesControlPanel: React.FC<
             <input
               type="number"
               min="1"
-              max="30"
-              value={diasLembreteAntecipado || "3"}
+              max="60"
+              value={diasLembreteAntecipado ?? "3"}
               onChange={(e) => onChangeDiasAntecipado(e.target.value)}
-              className="w-12 px-1.5 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500 tabular-nums"
+              onBlur={() => onBlurDiasAntecipado?.()}
+              className="w-14 px-1.5 py-0.5 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded outline-none focus:ring-2 focus:ring-yellow-500 tabular-nums"
             />
             <span className="text-xs text-slate-500">dia(s)</span>
           </div>
