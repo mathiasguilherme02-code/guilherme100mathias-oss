@@ -98,6 +98,8 @@ import {
   getCurrentPushSubscription,
   subscribeBrowserPush,
   unsubscribeBrowserPush,
+  BrowserPushDiagnostics,
+  checkBrowserPushDiagnostics,
 } from "./utils/pushNotifications";
 
 export interface AdminNotification {
@@ -1339,16 +1341,81 @@ export default function App() {
   }, [currentPushEndpoint]);
 
   const [isPushBusy, setIsPushBusy] = useState(false);
+  const [isVerifyingPushPermission, setIsVerifyingPushPermission] = useState(false);
   const [isSavingPushConfig, setIsSavingPushConfig] = useState(false);
   const [isSendingTestPush, setIsSendingTestPush] = useState(false);
+  const [isSendingNewClientTestPush, setIsSendingNewClientTestPush] = useState(false);
   const [isSendingPushReminders, setIsSendingPushReminders] = useState(false);
+  const [browserPushDiagnostics, setBrowserPushDiagnostics] =
+    useState<BrowserPushDiagnostics | null>(null);
+  const [lastNewClientPushTestResult, setLastNewClientPushTestResult] =
+    useState<{
+      sent: number;
+      total: number;
+      failed: number;
+      at: string;
+    } | null>(null);
+
+  const runBrowserPushDiagnostics = async (showToast = false) => {
+    setIsVerifyingPushPermission(true);
+    try {
+      const diag = await checkBrowserPushDiagnostics();
+      setBrowserPushDiagnostics(diag);
+      setPushPermissionState(diag.permission);
+      if (diag.endpoint) {
+        setCurrentPushEndpoint(diag.endpoint);
+      }
+      if (showToast) {
+        if (!diag.pushSupported) {
+          toast.error("Este navegador não suporta Notificações Push em segundo plano.");
+        } else if (diag.permission === "denied") {
+          toast.error("Permissão de notificações bloqueada no navegador. Libere no cadeado da barra de endereço.");
+        } else if (diag.permission === "default") {
+          toast.info("Permissão ainda não solicitada. Clique em 'Ativar Push neste Dispositivo'.");
+        } else if (!diag.hasSubscription) {
+          toast.warning("Permissão concedida, mas este navegador ainda não está inscrito para Push.");
+        } else {
+          toast.success("Permissão concedida e Service Worker Push ativo neste navegador!");
+        }
+      }
+      return diag;
+    } finally {
+      setIsVerifyingPushPermission(false);
+    }
+  };
+
+  useEffect(() => {
+    runBrowserPushDiagnostics(false);
+    let permStatus: PermissionStatus | null = null;
+    const handlePermChange = () => {
+      runBrowserPushDiagnostics(false);
+    };
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.permissions &&
+        typeof navigator.permissions.query === "function"
+      ) {
+        navigator.permissions
+          .query({ name: "notifications" as PermissionName })
+          .then((status) => {
+            permStatus = status;
+            status.addEventListener("change", handlePermChange);
+          })
+          .catch(() => {});
+      }
+    } catch {}
+    return () => {
+      try {
+        permStatus?.removeEventListener("change", handlePermChange);
+      } catch {}
+    };
+  }, []);
 
   const fetchPushStatus = async (tokenOverride?: string) => {
     const tokenToUse = tokenOverride || adminToken;
     if (!tokenToUse) return;
-    if (typeof window !== "undefined" && "Notification" in window) {
-      setPushPermissionState(Notification.permission);
-    }
+    await runBrowserPushDiagnostics(false);
     try {
       const [res, localSub] = await Promise.all([
         fetch("/api/push/status", {
@@ -1503,6 +1570,35 @@ export default function App() {
     }
   };
 
+  const handleToggleNewClientsPush = async (notifyNewClients: boolean) => {
+    const nextConfig = { ...pushConfig, notifyNewClients };
+    setPushConfig(nextConfig);
+    if (!adminToken) return;
+    try {
+      const res = await fetch("/api/push/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(nextConfig),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.config) setPushConfig(normalizePushConfig(data.config));
+        toast.success(
+          notifyNewClients
+            ? "Notificações Push para novos cadastros ativadas!"
+            : "Notificações Push para novos cadastros pausadas.",
+        );
+      } else {
+        toast.error(data.error || "Erro ao atualizar preferência de novos cadastros.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao atualizar preferência de novos cadastros.");
+    }
+  };
+
   const handleSendTestPush = async () => {
     if (!adminToken) return;
     setIsSendingTestPush(true);
@@ -1513,7 +1609,7 @@ export default function App() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${adminToken}`,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ scenario: "general" }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -1534,6 +1630,56 @@ export default function App() {
       toast.error("Erro ao conectar para testar push.");
     } finally {
       setIsSendingTestPush(false);
+    }
+  };
+
+  const handleSendNewClientTestPush = async (sample?: {
+    clientName?: string;
+    valorSolicitado?: string;
+  }) => {
+    if (!adminToken) return;
+    setIsSendingNewClientTestPush(true);
+    try {
+      const res = await fetch("/api/push/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          scenario: "new_client",
+          clientName: sample?.clientName,
+          valorSolicitado: sample?.valorSolicitado,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const total = Number(data.total || 0);
+        const sent = Number(data.sent || 0);
+        const failed = Number(data.failed || 0);
+        setLastNewClientPushTestResult({
+          sent,
+          total,
+          failed,
+          at: new Date().toISOString(),
+        });
+        if (sent > 0) {
+          toast.success(
+            `Push de teste de Novo Cadastro enviado para ${sent} dispositivo(s)!`,
+          );
+        } else {
+          toast.warning(
+            "Nenhum dispositivo ativo recebeu o teste de novo cadastro. Verifique a permissão e inscrição Push.",
+          );
+        }
+        await fetchPushStatus(adminToken);
+      } else {
+        toast.error(data.error || "Falha ao enviar teste de novo cadastro.");
+      }
+    } catch {
+      toast.error("Erro ao conectar para testar notificação de novo cadastro.");
+    } finally {
+      setIsSendingNewClientTestPush(false);
     }
   };
 
@@ -11184,21 +11330,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               <PushNotificationPanel
                 pushSupported={pushSupported}
                 permissionState={pushPermissionState}
+                browserDiagnostics={browserPushDiagnostics}
+                isVerifyingPermission={isVerifyingPushPermission}
                 isSubscribedThisDevice={Boolean(currentPushEndpoint)}
                 isBusy={isPushBusy}
                 isSavingConfig={isSavingPushConfig}
                 isSendingTest={isSendingTestPush}
+                isSendingNewClientTest={isSendingNewClientTestPush}
                 isSendingReminders={isSendingPushReminders}
+                lastNewClientTestResult={lastNewClientPushTestResult}
                 pushConfig={pushConfig}
                 devices={pushDevices}
                 currentEndpoint={currentPushEndpoint}
                 onUpdateConfig={(patch) =>
                   setPushConfig((prev) => ({ ...prev, ...patch }))
                 }
+                onToggleNewClientsPush={handleToggleNewClientsPush}
                 onSaveConfig={handleSavePushConfig}
+                onVerifyPermission={() => runBrowserPushDiagnostics(true)}
                 onSubscribeDevice={handleSubscribePushDevice}
                 onUnsubscribeDevice={handleUnsubscribePushDevice}
                 onSendTestPush={handleSendTestPush}
+                onSendTestNewClientPush={handleSendNewClientTestPush}
                 onSendRemindersNow={handleSendPushRemindersNow}
                 onRemoveDevice={handleRemovePushDevice}
                 onRefreshStatus={() => fetchPushStatus()}

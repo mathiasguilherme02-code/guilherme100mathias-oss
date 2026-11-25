@@ -202,3 +202,78 @@ export async function unsubscribeBrowserPush(): Promise<string | null> {
   await existing.unsubscribe();
   return endpoint;
 }
+
+export interface BrowserPushDiagnostics {
+  notificationSupported: boolean;
+  serviceWorkerSupported: boolean;
+  pushManagerSupported: boolean;
+  pushSupported: boolean;
+  permission: NotificationPermission | "unsupported";
+  serviceWorkerRegistered: boolean;
+  serviceWorkerActive: boolean;
+  hasSubscription: boolean;
+  endpoint: string | null;
+  checkedAt: string;
+}
+
+export async function checkBrowserPushDiagnostics(): Promise<BrowserPushDiagnostics> {
+  const checkedAt = new Date().toISOString();
+  if (typeof window === "undefined") {
+    return {
+      notificationSupported: false,
+      serviceWorkerSupported: false,
+      pushManagerSupported: false,
+      pushSupported: false,
+      permission: "unsupported",
+      serviceWorkerRegistered: false,
+      serviceWorkerActive: false,
+      hasSubscription: false,
+      endpoint: null,
+      checkedAt,
+    };
+  }
+
+  const notificationSupported = "Notification" in window;
+  const serviceWorkerSupported = "serviceWorker" in navigator;
+  const pushManagerSupported = "PushManager" in window;
+  const pushSupported =
+    notificationSupported && serviceWorkerSupported && pushManagerSupported;
+  const permission: NotificationPermission | "unsupported" =
+    notificationSupported ? Notification.permission : "unsupported";
+
+  let serviceWorkerRegistered = false;
+  let serviceWorkerActive = false;
+  let hasSubscription = false;
+  let endpoint: string | null = null;
+
+  if (serviceWorkerSupported) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration("/");
+      if (reg) {
+        serviceWorkerRegistered = true;
+        serviceWorkerActive = Boolean(reg.active);
+        if (reg.pushManager) {
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            hasSubscription = true;
+            endpoint = sub.endpoint;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    notificationSupported,
+    serviceWorkerSupported,
+    pushManagerSupported,
+    pushSupported,
+    permission,
+    serviceWorkerRegistered,
+    serviceWorkerActive,
+    hasSubscription,
+    endpoint,
+    checkedAt,
+  };
+}
+

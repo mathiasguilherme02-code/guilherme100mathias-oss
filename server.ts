@@ -2235,6 +2235,38 @@ app.put("/api/push/config", requireAdmin, async (req, res) => {
 app.post("/api/push/test", requireAdmin, async (req, res) => {
   try {
     const onlyEndpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : undefined;
+    const scenario = req.body?.scenario === "new_client" ? "new_client" : "general";
+
+    if (scenario === "new_client") {
+      const sampleName =
+        typeof req.body?.clientName === "string" && req.body.clientName.trim()
+          ? req.body.clientName.trim()
+          : "Cliente Exemplo (Teste)";
+      const sampleCpf =
+        typeof req.body?.cpf === "string" && req.body.cpf.trim()
+          ? req.body.cpf.trim()
+          : "123.456.789-00";
+      const sampleVal = Number(req.body?.valorSolicitado);
+      const valorLabel =
+        Number.isFinite(sampleVal) && sampleVal > 0
+          ? ` • Valor: R$ ${sampleVal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : " • Valor: R$ 1.500,00";
+
+      const result = await sendAdminWebPushNotification(
+        {
+          title: "📋 Novo Cadastro Recebido! (Teste)",
+          body: `${sampleName} • CPF: ${sampleCpf}${valorLabel}`,
+          tag: `gm-push-test-new-client-${Date.now()}`,
+          type: "new_client",
+          tab: "clientes",
+          url: "/?view=admin&tab=clientes",
+          requireInteraction: true,
+        },
+        onlyEndpoint,
+      );
+      return res.json({ success: true, scenario, ...result });
+    }
+
     const result = await sendAdminWebPushNotification(
       {
         title: "🔔 Notificação Push Ativa — GM-Empréstimo",
@@ -2247,7 +2279,7 @@ app.post("/api/push/test", requireAdmin, async (req, res) => {
       },
       onlyEndpoint,
     );
-    res.json({ success: true, ...result });
+    res.json({ success: true, scenario, ...result });
   } catch (error: any) {
     console.error("Error sending test push:", error);
     res.status(500).json({ error: error?.message || "Falha ao enviar notificação push de teste" });
