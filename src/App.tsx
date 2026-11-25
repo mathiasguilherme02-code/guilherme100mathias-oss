@@ -355,6 +355,45 @@ const getParcelaDiasAtraso = (
   return calculateParcelaDetails(p, { sim, taxaGlobal, hoje }).diasJurosCobrados;
 };
 
+const normalizeSearchText = (val: unknown) =>
+  String(val || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+const matchesClientSearchQuery = (
+  client: { nomeCompleto?: string; cpf?: string; telefone?: string },
+  query: string,
+) => {
+  const normQuery = normalizeSearchText(query);
+  if (!normQuery) return true;
+  const normName = normalizeSearchText(client.nomeCompleto);
+  if (normName.includes(normQuery)) return true;
+
+  const queryWords = normQuery.split(" ").filter(Boolean);
+  if (queryWords.length > 1 && queryWords.every((w) => normName.includes(w))) {
+    return true;
+  }
+
+  if (client.cpf && normalizeSearchText(client.cpf).includes(normQuery)) {
+    return true;
+  }
+
+  const digitsQuery = query.replace(/\D/g, "");
+  if (digitsQuery.length > 0) {
+    const cpfDigits = String(client.cpf || "").replace(/\D/g, "");
+    if (cpfDigits.includes(digitsQuery)) return true;
+    const phoneDigits = String(client.telefone || "").replace(/\D/g, "");
+    if (digitsQuery.length >= 4 && phoneDigits.includes(digitsQuery)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const isSimulacaoAtiva = (s: any) => {
   if (!s || s.arquivado) return false;
   if (
@@ -8028,14 +8067,18 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             }
 
             if (lembretesClientFilter.trim()) {
-              const q = lembretesClientFilter.trim().toLowerCase();
-              const cleanQ = q.replace(/\D/g, "");
-              const matchName = (r.clientName || "").toLowerCase().includes(q);
-              const matchCpf =
-                (r.clientCpf || "").toLowerCase().includes(q) ||
-                (cleanQ.length > 0 &&
-                  (r.clientCpf || "").replace(/\D/g, "").includes(cleanQ));
-              if (!matchName && !matchCpf) return false;
+              if (
+                !matchesClientSearchQuery(
+                  {
+                    nomeCompleto: r.clientName,
+                    cpf: r.clientCpf,
+                    telefone: r.clientPhone,
+                  },
+                  lembretesClientFilter,
+                )
+              ) {
+                return false;
+              }
             }
 
             return true;
@@ -14568,16 +14611,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 </div>
               </div>
               {(() => {
-                const filteredClients = clients
+                const searchMatchedClients = clients
                   .filter((c) => c.id !== "admin-transactions")
-                  .filter(
-                    (c) =>
-                      (c.nomeCompleto &&
-                        c.nomeCompleto
-                          .toLowerCase()
-                          .includes(searchTerm.toLowerCase())) ||
-                      (c.cpf && c.cpf.includes(searchTerm)),
-                  )
+                  .filter((c) => matchesClientSearchQuery(c, searchTerm));
+
+                const hasActiveDropdownFilters =
+                  statusFilter !== "todos" ||
+                  clientesMonth !== "all" ||
+                  clientesYear !== "all";
+
+                const filteredClients = searchMatchedClients
                   .filter((c) => {
                     // 1. Status Filter
                     if (statusFilter !== "todos") {
@@ -14827,8 +14870,28 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       {clients.filter((c) => c.id !== "admin-transactions")
                         .length === 0
                         ? "Os clientes que preencherem o formulário aparecerão aqui."
-                        : "Tente buscar por outro nome ou CPF."}
+                        : searchTerm.trim() &&
+                            searchMatchedClients.length > 0 &&
+                            hasActiveDropdownFilters
+                          ? `Encontramos ${searchMatchedClients.length} cliente(s) com essa busca, mas os filtros de Status/Mês/Ano estão ocultando o resultado.`
+                          : "Tente buscar por outro nome ou CPF."}
                     </p>
+                    {hasActiveDropdownFilters && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStatusFilter("todos");
+                          setClientesMonth("all");
+                          setClientesYear("all");
+                          safeStorageSet("gm_clientes_status_filter", "todos");
+                          safeStorageSet("gm_clientes_month", "all");
+                          safeStorageSet("gm_clientes_year", "all");
+                        }}
+                        className="mt-4 px-4 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-semibold text-sm transition-colors"
+                      >
+                        Limpar filtros (Status / Mês / Ano)
+                      </button>
+                    )}
                   </div>
                 );
               })()}
