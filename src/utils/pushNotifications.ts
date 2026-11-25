@@ -72,6 +72,30 @@ export function normalizePushConfig(raw: any): PushNotificationConfig {
   };
 }
 
+export interface NewClientAlertConfig {
+  soundEnabled: boolean;
+  nativeNotificationEnabled: boolean;
+}
+
+export const DEFAULT_NEW_CLIENT_ALERT_CONFIG: NewClientAlertConfig = {
+  soundEnabled: true,
+  nativeNotificationEnabled: true,
+};
+
+export function normalizeNewClientAlertConfig(raw: any): NewClientAlertConfig {
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    soundEnabled:
+      src.soundEnabled !== undefined
+        ? Boolean(src.soundEnabled)
+        : DEFAULT_NEW_CLIENT_ALERT_CONFIG.soundEnabled,
+    nativeNotificationEnabled:
+      src.nativeNotificationEnabled !== undefined
+        ? Boolean(src.nativeNotificationEnabled)
+        : DEFAULT_NEW_CLIENT_ALERT_CONFIG.nativeNotificationEnabled,
+  };
+}
+
 export interface PushDeviceSummary {
   id: string;
   endpoint: string;

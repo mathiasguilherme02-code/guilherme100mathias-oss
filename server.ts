@@ -24,6 +24,8 @@ import {
   DEFAULT_PUSH_CONFIG,
   normalizePushConfig,
   PushNotificationConfig,
+  DEFAULT_NEW_CLIENT_ALERT_CONFIG,
+  normalizeNewClientAlertConfig,
 } from './src/utils/pushNotifications';
 
 dotenv.config();
@@ -405,6 +407,7 @@ const buildDefaultSettings = () => ({
   autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG },
   feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
   pushConfig: { ...DEFAULT_PUSH_CONFIG },
+  newClientAlertConfig: { ...DEFAULT_NEW_CLIENT_ALERT_CONFIG },
 });
 
 const normalizeLoadedSettings = (raw: any) => {
@@ -442,6 +445,7 @@ const normalizeLoadedSettings = (raw: any) => {
   data.autoScheduleConfig = normalizeAutoScheduleConfig(data.autoScheduleConfig);
   data.feriadosConfig = normalizeFeriadosConfig(data.feriadosConfig);
   data.pushConfig = normalizePushConfig(data.pushConfig);
+  data.newClientAlertConfig = normalizeNewClientAlertConfig(data.newClientAlertConfig);
   return data;
 };
 
@@ -488,6 +492,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       autoScheduleConfig,
       feriadosConfig,
       pushConfig,
+      newClientAlertConfig,
     } = req.body;
 
     const currentSettings = await loadServerSettings();
@@ -575,6 +580,9 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
         ? { feriadosConfig: normalizeFeriadosConfig(feriadosConfig) }
         : {}),
       ...(pushConfig !== undefined ? { pushConfig: mergedPushConfig } : {}),
+      ...(newClientAlertConfig !== undefined
+        ? { newClientAlertConfig: normalizeNewClientAlertConfig(newClientAlertConfig) }
+        : {}),
     };
 
     if (!db) {

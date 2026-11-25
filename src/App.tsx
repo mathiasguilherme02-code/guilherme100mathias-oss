@@ -56,6 +56,8 @@ import {
   Play,
   SkipForward,
   CalendarClock,
+  Volume2,
+  Monitor,
 } from "lucide-react";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
@@ -92,6 +94,9 @@ import {
   DEFAULT_PUSH_CONFIG,
   normalizePushConfig,
   PushNotificationConfig,
+  DEFAULT_NEW_CLIENT_ALERT_CONFIG,
+  normalizeNewClientAlertConfig,
+  NewClientAlertConfig,
   PushDeviceSummary,
   isPushSupportedInBrowser,
   getBrowserDeviceLabel,
@@ -1083,7 +1088,16 @@ export default function App() {
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
     autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG } as AutoScheduleConfig,
     feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
+    newClientAlertConfig: {
+      ...DEFAULT_NEW_CLIENT_ALERT_CONFIG,
+    } as NewClientAlertConfig,
   });
+  const adminSettingsRef = useRef(adminSettings);
+  useEffect(() => {
+    adminSettingsRef.current = adminSettings;
+  }, [adminSettings]);
+  const [isSavingNewClientAlertConfig, setIsSavingNewClientAlertConfig] =
+    useState(false);
   setActiveFeriadosConfig(adminSettings.feriadosConfig);
 
   const [newHolidayName, setNewHolidayName] = useState("");
@@ -1372,6 +1386,10 @@ export default function App() {
   const [pushConfig, setPushConfig] = useState<PushNotificationConfig>(() => ({
     ...DEFAULT_PUSH_CONFIG,
   }));
+  const pushConfigRef = useRef<PushNotificationConfig>(pushConfig);
+  useEffect(() => {
+    pushConfigRef.current = pushConfig;
+  }, [pushConfig]);
   const [pushDevices, setPushDevices] = useState<PushDeviceSummary[]>([]);
   const [currentPushEndpoint, setCurrentPushEndpoint] = useState<string | null>(
     null,
@@ -1637,6 +1655,81 @@ export default function App() {
       }
     } catch {
       toast.error("Erro de conexão ao atualizar preferência de novos cadastros.");
+    }
+  };
+
+  const handleSaveNewClientAlertConfig = async (
+    overrideConfig?: NewClientAlertConfig,
+    successMessage?: string,
+  ) => {
+    const cfgToSave = normalizeNewClientAlertConfig(
+      overrideConfig || adminSettings.newClientAlertConfig,
+    );
+    const nextSettings = {
+      ...adminSettings,
+      newClientAlertConfig: cfgToSave,
+    };
+    setAdminSettings(nextSettings);
+    if (!adminToken) return;
+    setIsSavingNewClientAlertConfig(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(nextSettings),
+      });
+      if (res.ok) {
+        toast.success(
+          successMessage ||
+            "Preferências de som e alerta visual para novos cadastros salvas!",
+        );
+      } else {
+        toast.error("Não foi possível salvar as preferências de alerta.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao salvar preferências de alerta.");
+    } finally {
+      setIsSavingNewClientAlertConfig(false);
+    }
+  };
+
+  const handleTestNewClientNativeVisualAlert = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      toast.error("Este navegador não suporta alertas visuais nativos (Notification API).");
+      return;
+    }
+    let permission = Notification.permission;
+    if (permission === "default") {
+      try {
+        permission = await Notification.requestPermission();
+        await runBrowserPushDiagnostics(false);
+      } catch {
+        permission = Notification.permission;
+      }
+    }
+    if (permission !== "granted") {
+      toast.error(
+        permission === "denied"
+          ? "Permissão bloqueada pelo navegador. Libere as notificações nas configurações do site."
+          : "Permissão de notificação não concedida.",
+      );
+      return;
+    }
+    try {
+      const n = new Notification("📋 Nova Ficha Cadastral Recebida! (Teste)", {
+        body: "Exemplo: Novo cliente concluiu o preenchimento da ficha cadastral.",
+        icon: "/pwa-192x192.png",
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+      toast.success("Alerta visual nativo exibido pelo navegador!");
+    } catch {
+      toast.error("Não foi possível exibir o alerta visual nativo neste navegador.");
     }
   };
 
@@ -2041,6 +2134,9 @@ export default function App() {
               settings.autoScheduleConfig,
             ),
             feriadosConfig: normalizeFeriadosConfig(settings.feriadosConfig),
+            newClientAlertConfig: normalizeNewClientAlertConfig(
+              settings.newClientAlertConfig,
+            ),
           }));
           setActiveFeriadosConfig(
             normalizeFeriadosConfig(settings.feriadosConfig),
@@ -2092,11 +2188,23 @@ export default function App() {
           window.dispatchEvent(new CustomEvent("app:update_clients"));
         } else if (data.type === "NEW_CLIENT") {
           if (adminToken) {
-            playNotificationSound();
+            const alertCfg = normalizeNewClientAlertConfig(
+              adminSettingsRef.current.newClientAlertConfig,
+            );
+            if (alertCfg.soundEnabled) {
+              playNotificationSound();
+            }
 
-            // Native Desktop Browser Notification fallback (skip when Service Worker Web Push is already subscribed here)
+            const swPushHandlingNewClient = Boolean(
+              currentPushEndpointRef.current &&
+                pushConfigRef.current.enabled &&
+                pushConfigRef.current.notifyNewClients,
+            );
+
+            // Alerta visual nativo do navegador (quando habilitado nas Configurações)
             if (
-              !currentPushEndpointRef.current &&
+              alertCfg.nativeNotificationEnabled &&
+              !swPushHandlingNewClient &&
               typeof window !== "undefined" &&
               "Notification" in window &&
               Notification.permission === "granted"
@@ -11440,6 +11548,193 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   );
                 })()}
               </div>
+
+              {/* Seção: Som e Alerta Visual Nativo para Novos Cadastros */}
+              {(() => {
+                const alertCfg = normalizeNewClientAlertConfig(
+                  adminSettings.newClientAlertConfig,
+                );
+                const nativePerm =
+                  browserPushDiagnostics?.permission || pushPermissionState;
+
+                return (
+                  <div
+                    id="section-new-client-alerts"
+                    className="mt-6 pt-6 border-t border-slate-200"
+                  >
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <Bell size={18} className="text-yellow-600" />
+                            Alertas de Novo Cadastro no Painel (Som e Aviso Visual)
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Defina se a notificação sonora deve tocar e se o navegador deve exibir um alerta visual nativo sempre que um novo cliente preencher a ficha cadastral.
+                          </p>
+                        </div>
+
+                        <button
+                          id="btn-save-new-client-alerts"
+                          type="button"
+                          disabled={isSavingNewClientAlertConfig}
+                          onClick={() => handleSaveNewClientAlertConfig()}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors shrink-0"
+                        >
+                          <Save size={14} />
+                          {isSavingNewClientAlertConfig
+                            ? "Salvando..."
+                            : "Salvar Alertas"}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Notificação Sonora */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <label className="flex items-start gap-2.5 cursor-pointer flex-1">
+                              <input
+                                id="toggle-new-client-sound"
+                                type="checkbox"
+                                checked={alertCfg.soundEnabled}
+                                onChange={(e) => {
+                                  const nextCfg: NewClientAlertConfig = {
+                                    ...alertCfg,
+                                    soundEnabled: e.target.checked,
+                                  };
+                                  handleSaveNewClientAlertConfig(
+                                    nextCfg,
+                                    e.target.checked
+                                      ? "Notificação sonora para novos cadastros ativada!"
+                                      : "Notificação sonora para novos cadastros desativada.",
+                                  );
+                                }}
+                                className="mt-0.5 rounded border-slate-300 text-yellow-600 focus:ring-yellow-500"
+                              />
+                              <div>
+                                <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                  <Volume2 size={15} className="text-yellow-600" />
+                                  Tocar notificação sonora
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                                  Emite um aviso sonoro no navegador sempre que um novo cliente concluir o cadastro com o painel aberto.
+                                </p>
+                              </div>
+                            </label>
+
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${
+                                alertCfg.soundEnabled
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                  : "bg-slate-100 text-slate-600 border-slate-200"
+                              }`}
+                            >
+                              {alertCfg.soundEnabled ? "Ativo" : "Silenciado"}
+                            </span>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <button
+                              id="btn-test-new-client-sound"
+                              type="button"
+                              onClick={() => {
+                                playNotificationSound();
+                                toast.success("Som de notificação reproduzido!");
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors"
+                            >
+                              <Volume2 size={13} />
+                              Testar Som
+                            </button>
+                            <span className="text-[11px] text-slate-400">
+                              Áudio padrão do painel
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Alerta Visual Nativo do Navegador */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <label className="flex items-start gap-2.5 cursor-pointer flex-1">
+                              <input
+                                id="toggle-new-client-native-alert"
+                                type="checkbox"
+                                checked={alertCfg.nativeNotificationEnabled}
+                                onChange={(e) => {
+                                  const nextCfg: NewClientAlertConfig = {
+                                    ...alertCfg,
+                                    nativeNotificationEnabled: e.target.checked,
+                                  };
+                                  handleSaveNewClientAlertConfig(
+                                    nextCfg,
+                                    e.target.checked
+                                      ? "Alerta visual nativo do navegador ativado!"
+                                      : "Alerta visual nativo do navegador desativado.",
+                                  );
+                                }}
+                                className="mt-0.5 rounded border-slate-300 text-yellow-600 focus:ring-yellow-500"
+                              />
+                              <div>
+                                <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                  <Monitor size={15} className="text-indigo-600" />
+                                  Exibir alerta visual nativo do navegador
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                                  Mostra uma notificação visual nativa do sistema operacional quando um novo cliente se cadastrar (evita duplicidade quando o Web Push já estiver inscrito).
+                                </p>
+                              </div>
+                            </label>
+
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${
+                                alertCfg.nativeNotificationEnabled
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                  : "bg-slate-100 text-slate-600 border-slate-200"
+                              }`}
+                            >
+                              {alertCfg.nativeNotificationEnabled
+                                ? "Ativo"
+                                : "Desativado"}
+                            </span>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                            <button
+                              id="btn-test-new-client-native-alert"
+                              type="button"
+                              onClick={handleTestNewClientNativeVisualAlert}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors"
+                            >
+                              <BellRing size={13} />
+                              {nativePerm === "default"
+                                ? "Permitir e Testar Alerta"
+                                : "Testar Alerta Visual"}
+                            </button>
+                            <span
+                              className={`text-[11px] font-semibold ${
+                                nativePerm === "granted"
+                                  ? "text-emerald-700"
+                                  : nativePerm === "denied" ||
+                                      nativePerm === "unsupported"
+                                    ? "text-red-600"
+                                    : "text-amber-700"
+                              }`}
+                            >
+                              {nativePerm === "granted"
+                                ? "Permissão concedida"
+                                : nativePerm === "denied"
+                                  ? "Bloqueada no navegador"
+                                  : nativePerm === "default"
+                                    ? "Aguardando permissão"
+                                    : "Não suportada"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <PushNotificationPanel
                 pushSupported={pushSupported}
