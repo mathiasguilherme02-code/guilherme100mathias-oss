@@ -13,12 +13,16 @@ import {
   RefreshCw,
   ShieldCheck,
   UserPlus,
+  Moon,
 } from "lucide-react";
 import {
   BrowserPushDiagnostics,
   PushDeviceSummary,
   PushNotificationConfig,
+  QuietHoursConfig,
+  isTimeInQuietWindow,
 } from "../utils/pushNotifications";
+import { getBrazilTimeHHMM } from "../utils/whatsappReminders";
 
 interface PushNotificationPanelProps {
   pushSupported: boolean;
@@ -38,6 +42,7 @@ interface PushNotificationPanelProps {
     at: string;
   } | null;
   pushConfig: PushNotificationConfig;
+  quietHoursConfig?: QuietHoursConfig;
   devices: PushDeviceSummary[];
   currentEndpoint: string | null;
   onUpdateConfig: (patch: Partial<PushNotificationConfig>) => void;
@@ -69,6 +74,7 @@ export const PushNotificationPanel: React.FC<PushNotificationPanelProps> = ({
   isSendingReminders,
   lastNewClientTestResult,
   pushConfig,
+  quietHoursConfig,
   devices,
   currentEndpoint,
   onUpdateConfig,
@@ -159,6 +165,20 @@ export const PushNotificationPanel: React.FC<PushNotificationPanelProps> = ({
             </button>
           </div>
         </div>
+
+        {quietHoursConfig?.enabled &&
+          isTimeInQuietWindow(quietHoursConfig, getBrazilTimeHHMM()) && (
+            <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-900">
+              <Moon size={16} className="text-indigo-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">
+                  Janela de silêncio ativa agora ({quietHoursConfig.startTime} às{" "}
+                  {quietHoursConfig.endTime}):
+                </span>{" "}
+                as notificações push automáticas e alertas sonoros estão temporariamente suprimidos. Os botões de teste manual continuam funcionando normalmente.
+              </div>
+            </div>
+          )}
 
         {/* Diagnóstico e Verificação de Permissões do Navegador */}
         <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">

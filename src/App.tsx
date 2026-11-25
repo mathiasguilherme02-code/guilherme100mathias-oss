@@ -57,7 +57,9 @@ import {
   SkipForward,
   CalendarClock,
   Volume2,
+  VolumeX,
   Monitor,
+  Moon,
 } from "lucide-react";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
@@ -66,6 +68,7 @@ import {
   ScheduledWhatsAppNotification,
   normalizeAutoScheduleConfig,
   getBrazilTodayISO,
+  getBrazilTimeHHMM,
   WaTemplateKey,
   WaSituacaoType,
   CustomWhatsAppTemplate,
@@ -97,6 +100,10 @@ import {
   DEFAULT_NEW_CLIENT_ALERT_CONFIG,
   normalizeNewClientAlertConfig,
   NewClientAlertConfig,
+  DEFAULT_QUIET_HOURS_CONFIG,
+  normalizeQuietHoursConfig,
+  QuietHoursConfig,
+  isTimeInQuietWindow,
   PushDeviceSummary,
   isPushSupportedInBrowser,
   getBrowserDeviceLabel,
@@ -1091,12 +1098,17 @@ export default function App() {
     newClientAlertConfig: {
       ...DEFAULT_NEW_CLIENT_ALERT_CONFIG,
     } as NewClientAlertConfig,
+    quietHoursConfig: {
+      ...DEFAULT_QUIET_HOURS_CONFIG,
+    } as QuietHoursConfig,
   });
   const adminSettingsRef = useRef(adminSettings);
   useEffect(() => {
     adminSettingsRef.current = adminSettings;
   }, [adminSettings]);
   const [isSavingNewClientAlertConfig, setIsSavingNewClientAlertConfig] =
+    useState(false);
+  const [isSavingQuietHoursConfig, setIsSavingQuietHoursConfig] =
     useState(false);
   setActiveFeriadosConfig(adminSettings.feriadosConfig);
 
@@ -1658,6 +1670,56 @@ export default function App() {
     }
   };
 
+  const playAutomaticNotificationSound = () => {
+    if (
+      isTimeInQuietWindow(
+        adminSettingsRef.current.quietHoursConfig,
+        getBrazilTimeHHMM(),
+      )
+    ) {
+      return;
+    }
+    playNotificationSound();
+  };
+
+  const handleSaveQuietHoursConfig = async (
+    overrideConfig?: QuietHoursConfig,
+    successMessage?: string,
+  ) => {
+    const cfgToSave = normalizeQuietHoursConfig(
+      overrideConfig || adminSettings.quietHoursConfig,
+    );
+    const nextSettings = {
+      ...adminSettings,
+      quietHoursConfig: cfgToSave,
+    };
+    setAdminSettings(nextSettings);
+    if (!adminToken) return;
+    setIsSavingQuietHoursConfig(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify(nextSettings),
+      });
+      if (res.ok) {
+        toast.success(
+          successMessage ||
+            "Configurações da Janela de Silêncio salvas com sucesso!",
+        );
+      } else {
+        toast.error("Não foi possível salvar a Janela de Silêncio.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao salvar a Janela de Silêncio.");
+    } finally {
+      setIsSavingQuietHoursConfig(false);
+    }
+  };
+
   const handleSaveNewClientAlertConfig = async (
     overrideConfig?: NewClientAlertConfig,
     successMessage?: string,
@@ -2137,6 +2199,9 @@ export default function App() {
             newClientAlertConfig: normalizeNewClientAlertConfig(
               settings.newClientAlertConfig,
             ),
+            quietHoursConfig: normalizeQuietHoursConfig(
+              settings.quietHoursConfig,
+            ),
           }));
           setActiveFeriadosConfig(
             normalizeFeriadosConfig(settings.feriadosConfig),
@@ -2192,7 +2257,7 @@ export default function App() {
               adminSettingsRef.current.newClientAlertConfig,
             );
             if (alertCfg.soundEnabled) {
-              playNotificationSound();
+              playAutomaticNotificationSound();
             }
 
             const swPushHandlingNewClient = Boolean(
@@ -2292,7 +2357,7 @@ export default function App() {
           }
         } else if (data.type === "NEW_LOAN_REQUEST") {
           if (adminToken) {
-            playNotificationSound();
+            playAutomaticNotificationSound();
             const now = new Date();
             const timeStr =
               now.toLocaleDateString("pt-BR") +
@@ -2339,7 +2404,7 @@ export default function App() {
             const sCount = Number(data.payload?.sent || 0);
             const eCount = Number(data.payload?.errors || 0);
             if (pCount > 0 || sCount > 0 || eCount > 0) {
-              playNotificationSound();
+              playAutomaticNotificationSound();
               const summaryMsg =
                 sCount > 0
                   ? `${sCount} lembrete(s) enviado(s) automaticamente via API${eCount > 0 ? ` (${eCount} erro(s))` : ""}.`
@@ -2399,7 +2464,7 @@ export default function App() {
           if (data.type === "CHAT_UPDATE" && data.payload?.newMessage) {
             const isFromAdmin = data.payload.sender === "admin";
             if ((adminToken && !isFromAdmin) || (!adminToken && isFromAdmin)) {
-              playNotificationSound();
+              playAutomaticNotificationSound();
             }
           }
           window.dispatchEvent(
@@ -11639,7 +11704,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               type="button"
                               onClick={() => {
                                 playNotificationSound();
-                                toast.success("Som de notificação reproduzido!");
+                                const quietNow = isTimeInQuietWindow(
+                                  adminSettings.quietHoursConfig,
+                                  getBrazilTimeHHMM(),
+                                );
+                                toast.success(
+                                  quietNow
+                                    ? "Som de teste reproduzido! (Obs.: janela de silêncio ativa agora para alertas automáticos.)"
+                                    : "Som de notificação reproduzido!",
+                                );
                               }}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors"
                             >
@@ -11736,6 +11809,239 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 );
               })()}
 
+              {/* Seção: Janela de Silêncio (Push e Alertas Sonoros) */}
+              {(() => {
+                const quietCfg = normalizeQuietHoursConfig(
+                  adminSettings.quietHoursConfig,
+                );
+                const isQuietActiveNow =
+                  quietCfg.enabled &&
+                  isTimeInQuietWindow(quietCfg, getBrazilTimeHHMM());
+                const isSameTime = quietCfg.startTime === quietCfg.endTime;
+                const crossesMidnight =
+                  quietCfg.startTime > quietCfg.endTime;
+
+                return (
+                  <div
+                    id="section-quiet-hours"
+                    className="mt-6 pt-6 border-t border-slate-200"
+                  >
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <Moon size={18} className="text-indigo-600" />
+                            Janela de Silêncio (Push e Alertas Sonoros)
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Defina um horário inicial e final (Horário de Brasília) em que as notificações push automáticas e alertas sonoros do painel serão suprimidos automaticamente.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <span
+                            id="badge-quiet-hours-status"
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${
+                              isQuietActiveNow
+                                ? "bg-indigo-100 text-indigo-800 border-indigo-200"
+                                : quietCfg.enabled
+                                  ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                  : "bg-slate-100 text-slate-600 border-slate-200"
+                            }`}
+                          >
+                            {isQuietActiveNow ? (
+                              <>
+                                <VolumeX size={12} />
+                                Silêncio Ativo Agora ({quietCfg.startTime} –{" "}
+                                {quietCfg.endTime})
+                              </>
+                            ) : quietCfg.enabled ? (
+                              <>
+                                <Moon size={12} />
+                                Programada ({quietCfg.startTime} –{" "}
+                                {quietCfg.endTime})
+                              </>
+                            ) : (
+                              "Desativada"
+                            )}
+                          </span>
+
+                          <button
+                            id="btn-save-quiet-hours"
+                            type="button"
+                            disabled={isSavingQuietHoursConfig}
+                            onClick={() => handleSaveQuietHoursConfig()}
+                            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors"
+                          >
+                            <Save size={14} />
+                            {isSavingQuietHoursConfig
+                              ? "Salvando..."
+                              : "Salvar Janela de Silêncio"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <label className="flex items-start gap-2.5 cursor-pointer flex-1">
+                            <input
+                              id="toggle-quiet-hours-enabled"
+                              type="checkbox"
+                              checked={quietCfg.enabled}
+                              onChange={(e) => {
+                                const nextCfg: QuietHoursConfig = {
+                                  ...quietCfg,
+                                  enabled: e.target.checked,
+                                };
+                                handleSaveQuietHoursConfig(
+                                  nextCfg,
+                                  e.target.checked
+                                    ? `Janela de silêncio ativada (${nextCfg.startTime} às ${nextCfg.endTime})!`
+                                    : "Janela de silêncio desativada.",
+                                );
+                              }}
+                              className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <div>
+                              <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                <VolumeX size={14} className="text-indigo-600" />
+                                Ativar supressão automática na Janela de Silêncio
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                                Quando ativada, nenhum alerta sonoro automático ou notificação push em segundo plano será disparado dentro do intervalo definido.
+                              </p>
+                            </div>
+                          </label>
+
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div>
+                              <label
+                                htmlFor="input-quiet-hours-start"
+                                className="block text-[11px] font-semibold text-slate-600 mb-1"
+                              >
+                                Horário Inicial
+                              </label>
+                              <input
+                                id="input-quiet-hours-start"
+                                type="time"
+                                value={quietCfg.startTime}
+                                onChange={(e) =>
+                                  setAdminSettings((prev) => ({
+                                    ...prev,
+                                    quietHoursConfig: {
+                                      ...normalizeQuietHoursConfig(
+                                        prev.quietHoursConfig,
+                                      ),
+                                      startTime: e.target.value || "22:00",
+                                    },
+                                  }))
+                                }
+                                className="px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none tabular-nums"
+                              />
+                            </div>
+
+                            <span className="text-xs text-slate-400 font-semibold mt-4">
+                              até
+                            </span>
+
+                            <div>
+                              <label
+                                htmlFor="input-quiet-hours-end"
+                                className="block text-[11px] font-semibold text-slate-600 mb-1"
+                              >
+                                Horário Final
+                              </label>
+                              <input
+                                id="input-quiet-hours-end"
+                                type="time"
+                                value={quietCfg.endTime}
+                                onChange={(e) =>
+                                  setAdminSettings((prev) => ({
+                                    ...prev,
+                                    quietHoursConfig: {
+                                      ...normalizeQuietHoursConfig(
+                                        prev.quietHoursConfig,
+                                      ),
+                                      endTime: e.target.value || "08:00",
+                                    },
+                                  }))
+                                }
+                                className="px-3 py-1.5 text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none tabular-nums"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="text-[11px] text-slate-500">
+                            {isSameTime ? (
+                              <span className="text-amber-700 font-semibold">
+                                Os horários inicial e final são iguais — escolha horários diferentes para definir um intervalo válido.
+                              </span>
+                            ) : crossesMidnight ? (
+                              <span>
+                                Intervalo noturno: suprime alertas das{" "}
+                                <strong className="text-slate-700 tabular-nums">
+                                  {quietCfg.startTime}
+                                </strong>{" "}
+                                até às{" "}
+                                <strong className="text-slate-700 tabular-nums">
+                                  {quietCfg.endTime}
+                                </strong>{" "}
+                                do dia seguinte.
+                              </span>
+                            ) : (
+                              <span>
+                                Intervalo diurno: suprime alertas das{" "}
+                                <strong className="text-slate-700 tabular-nums">
+                                  {quietCfg.startTime}
+                                </strong>{" "}
+                                até às{" "}
+                                <strong className="text-slate-700 tabular-nums">
+                                  {quietCfg.endTime}
+                                </strong>{" "}
+                                do mesmo dia.
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mr-1">
+                              Atalhos:
+                            </span>
+                            {[
+                              { label: "22:00 – 08:00", start: "22:00", end: "08:00" },
+                              { label: "23:00 – 07:00", start: "23:00", end: "07:00" },
+                              { label: "12:00 – 14:00", start: "12:00", end: "14:00" },
+                            ].map((preset) => (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() =>
+                                  setAdminSettings((prev) => ({
+                                    ...prev,
+                                    quietHoursConfig: {
+                                      ...normalizeQuietHoursConfig(
+                                        prev.quietHoursConfig,
+                                      ),
+                                      startTime: preset.start,
+                                      endTime: preset.end,
+                                    },
+                                  }))
+                                }
+                                className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-md transition-colors tabular-nums"
+                              >
+                                {preset.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <PushNotificationPanel
                 pushSupported={pushSupported}
                 permissionState={pushPermissionState}
@@ -11749,6 +12055,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 isSendingReminders={isSendingPushReminders}
                 lastNewClientTestResult={lastNewClientPushTestResult}
                 pushConfig={pushConfig}
+                quietHoursConfig={adminSettings.quietHoursConfig}
                 devices={pushDevices}
                 currentEndpoint={currentPushEndpoint}
                 onUpdateConfig={(patch) =>

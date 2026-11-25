@@ -96,6 +96,73 @@ export function normalizeNewClientAlertConfig(raw: any): NewClientAlertConfig {
   };
 }
 
+export interface QuietHoursConfig {
+  enabled: boolean;
+  startTime: string; // "HH:MM"
+  endTime: string; // "HH:MM"
+}
+
+export const DEFAULT_QUIET_HOURS_CONFIG: QuietHoursConfig = {
+  enabled: false,
+  startTime: "22:00",
+  endTime: "08:00",
+};
+
+export function normalizeQuietHoursConfig(raw: any): QuietHoursConfig {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const validTime = (val: any, fallback: string): string => {
+    if (typeof val !== "string") return fallback;
+    const trimmed = val.trim();
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(trimmed) ? trimmed : fallback;
+  };
+  return {
+    enabled:
+      src.enabled !== undefined
+        ? Boolean(src.enabled)
+        : DEFAULT_QUIET_HOURS_CONFIG.enabled,
+    startTime: validTime(src.startTime, DEFAULT_QUIET_HOURS_CONFIG.startTime),
+    endTime: validTime(src.endTime, DEFAULT_QUIET_HOURS_CONFIG.endTime),
+  };
+}
+
+export function isTimeInQuietWindow(
+  config: QuietHoursConfig | null | undefined,
+  currentHHMM: string,
+): boolean {
+  const cfg = normalizeQuietHoursConfig(config);
+  if (!cfg.enabled) return false;
+
+  const toMinutes = (hhmm: string): number | null => {
+    const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || "").trim());
+    if (!m) return null;
+    let hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (hh === 24) hh = 0;
+    if (
+      !Number.isFinite(hh) ||
+      !Number.isFinite(mm) ||
+      hh < 0 ||
+      hh > 23 ||
+      mm < 0 ||
+      mm > 59
+    ) {
+      return null;
+    }
+    return hh * 60 + mm;
+  };
+
+  const start = toMinutes(cfg.startTime);
+  const end = toMinutes(cfg.endTime);
+  const current = toMinutes(currentHHMM);
+  if (start === null || end === null || current === null) return false;
+  if (start === end) return false;
+
+  if (start < end) {
+    return current >= start && current < end;
+  }
+  return current >= start || current < end;
+}
+
 export interface PushDeviceSummary {
   id: string;
   endpoint: string;

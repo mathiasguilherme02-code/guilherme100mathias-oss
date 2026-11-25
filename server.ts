@@ -26,6 +26,9 @@ import {
   PushNotificationConfig,
   DEFAULT_NEW_CLIENT_ALERT_CONFIG,
   normalizeNewClientAlertConfig,
+  DEFAULT_QUIET_HOURS_CONFIG,
+  normalizeQuietHoursConfig,
+  isTimeInQuietWindow,
 } from './src/utils/pushNotifications';
 
 dotenv.config();
@@ -408,6 +411,7 @@ const buildDefaultSettings = () => ({
   feriadosConfig: normalizeFeriadosConfig(DEFAULT_FERIADOS_CONFIG),
   pushConfig: { ...DEFAULT_PUSH_CONFIG },
   newClientAlertConfig: { ...DEFAULT_NEW_CLIENT_ALERT_CONFIG },
+  quietHoursConfig: { ...DEFAULT_QUIET_HOURS_CONFIG },
 });
 
 const normalizeLoadedSettings = (raw: any) => {
@@ -446,6 +450,7 @@ const normalizeLoadedSettings = (raw: any) => {
   data.feriadosConfig = normalizeFeriadosConfig(data.feriadosConfig);
   data.pushConfig = normalizePushConfig(data.pushConfig);
   data.newClientAlertConfig = normalizeNewClientAlertConfig(data.newClientAlertConfig);
+  data.quietHoursConfig = normalizeQuietHoursConfig(data.quietHoursConfig);
   return data;
 };
 
@@ -493,6 +498,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       feriadosConfig,
       pushConfig,
       newClientAlertConfig,
+      quietHoursConfig,
     } = req.body;
 
     const currentSettings = await loadServerSettings();
@@ -582,6 +588,9 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       ...(pushConfig !== undefined ? { pushConfig: mergedPushConfig } : {}),
       ...(newClientAlertConfig !== undefined
         ? { newClientAlertConfig: normalizeNewClientAlertConfig(newClientAlertConfig) }
+        : {}),
+      ...(quietHoursConfig !== undefined
+        ? { quietHoursConfig: normalizeQuietHoursConfig(quietHoursConfig) }
         : {}),
     };
 
@@ -1892,7 +1901,30 @@ const sendAdminWebPushNotification = async (
     data?: Record<string, any>;
   },
   onlyEndpoint?: string,
-): Promise<{ total: number; sent: number; failed: number; removed: number }> => {
+  options?: { bypassQuietHours?: boolean },
+): Promise<{
+  total: number;
+  sent: number;
+  failed: number;
+  removed: number;
+  suppressedByQuietHours?: boolean;
+}> => {
+  if (!options?.bypassQuietHours) {
+    try {
+      const settings = await loadServerSettings();
+      const quietCfg = normalizeQuietHoursConfig(settings.quietHoursConfig);
+      if (isTimeInQuietWindow(quietCfg, getBrazilTimeHHMM())) {
+        return {
+          total: 0,
+          sent: 0,
+          failed: 0,
+          removed: 0,
+          suppressedByQuietHours: true,
+        };
+      }
+    } catch {}
+  }
+
   await ensureVapidKeys();
   const allSubs = await loadPushSubscriptionsFromStore();
   const targets = onlyEndpoint
@@ -1981,6 +2013,14 @@ const notifyNewClientPush = async (client: {
     const pushCfg = normalizePushConfig(settings.pushConfig);
     if (!pushCfg.enabled || !pushCfg.notifyNewClients) return;
 
+    const quietCfg = normalizeQuietHoursConfig(settings.quietHoursConfig);
+    if (isTimeInQuietWindow(quietCfg, getBrazilTimeHHMM())) {
+      console.log(
+        `[WebPush] Notificação de novo cadastro suprimida pela janela de silêncio (${quietCfg.startTime} - ${quietCfg.endTime}).`,
+      );
+      return;
+    }
+
     const valorNum = Number(client.valorSolicitado);
     const valorLabel =
       client.valorSolicitado && Number.isFinite(valorNum) && valorNum > 0
@@ -2018,9 +2058,14 @@ const runPaymentReminderPushCheck = async (options: {
   try {
     const settings = await loadServerSettings();
     const pushCfg = normalizePushConfig(settings.pushConfig);
+    const quietCfg = normalizeQuietHoursConfig(settings.quietHoursConfig);
 
     if (!options.force && (!pushCfg.enabled || !pushCfg.notifyPaymentReminders)) {
       return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "disabled" };
+    }
+
+    if (!options.force && isTimeInQuietWindow(quietCfg, getBrazilTimeHHMM())) {
+      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "quiet_hours" };
     }
 
     const subs = await loadPushSubscriptionsFromStore();
@@ -2071,16 +2116,20 @@ const runPaymentReminderPushCheck = async (options: {
     for (const item of individualSlice) {
       const sitLabel = situacaoLabels[item.situacao] || "Lembrete de Pagamento";
       const refText = item.parcelaNumero > 0 ? `Parcela ${item.parcelaNumero}` : "Lembrete (Abater)";
-      const res = await sendAdminWebPushNotification({
-        title: `⏰ ${sitLabel}: ${item.clientName}`,
-        body: `${refText} • Venc.: ${item.dataVencimento} • Valor: ${item.valor}`,
-        tag: `gm-reminder-${targetDateISO}-${item.id}`,
-        type: "payment_reminder",
-        clientId: item.clientId,
-        tab: "lembretes",
-        url: `/?view=admin&tab=lembretes&clientId=${encodeURIComponent(item.clientId)}`,
-        requireInteraction: item.situacao === "vence_hoje" || item.situacao === "congelado",
-      });
+      const res = await sendAdminWebPushNotification(
+        {
+          title: `⏰ ${sitLabel}: ${item.clientName}`,
+          body: `${refText} • Venc.: ${item.dataVencimento} • Valor: ${item.valor}`,
+          tag: `gm-reminder-${targetDateISO}-${item.id}`,
+          type: "payment_reminder",
+          clientId: item.clientId,
+          tab: "lembretes",
+          url: `/?view=admin&tab=lembretes&clientId=${encodeURIComponent(item.clientId)}`,
+          requireInteraction: item.situacao === "vence_hoje" || item.situacao === "congelado",
+        },
+        undefined,
+        { bypassQuietHours: Boolean(options.force) },
+      );
       totalSentDeliveries += res.sent;
     }
 
@@ -2095,15 +2144,19 @@ const runPaymentReminderPushCheck = async (options: {
         vencidoCount > 0 ? `${vencidoCount} em atraso` : "",
       ].filter(Boolean);
 
-      const sumRes = await sendAdminWebPushNotification({
-        title: `💰 ${sorted.length} Lembretes de Pagamento Pendentes`,
-        body: `Mais ${extraCount} cobrança(s) hoje${parts.length > 0 ? ` (${parts.join(" • ")})` : ""}. Toque para abrir a fila.`,
-        tag: `gm-reminder-summary-${targetDateISO}`,
-        type: "payment_reminder",
-        tab: "lembretes",
-        url: "/?view=admin&tab=lembretes",
-        requireInteraction: true,
-      });
+      const sumRes = await sendAdminWebPushNotification(
+        {
+          title: `💰 ${sorted.length} Lembretes de Pagamento Pendentes`,
+          body: `Mais ${extraCount} cobrança(s) hoje${parts.length > 0 ? ` (${parts.join(" • ")})` : ""}. Toque para abrir a fila.`,
+          tag: `gm-reminder-summary-${targetDateISO}`,
+          type: "payment_reminder",
+          tab: "lembretes",
+          url: "/?view=admin&tab=lembretes",
+          requireInteraction: true,
+        },
+        undefined,
+        { bypassQuietHours: Boolean(options.force) },
+      );
       totalSentDeliveries += sumRes.sent;
     }
 
@@ -2145,10 +2198,13 @@ app.get("/api/push/status", requireAdmin, async (req, res) => {
     const vapid = await ensureVapidKeys();
     const settings = await loadServerSettings();
     const subs = await loadPushSubscriptionsFromStore();
+    const quietHoursConfig = normalizeQuietHoursConfig(settings.quietHoursConfig);
     res.json({
       supported: true,
       publicKey: vapid.publicKey,
       config: normalizePushConfig(settings.pushConfig),
+      quietHoursConfig,
+      quietHoursActive: isTimeInQuietWindow(quietHoursConfig, getBrazilTimeHHMM()),
       subscriptionCount: subs.length,
       subscriptions: subs.map((s) => ({
         id: s.id,
@@ -2246,6 +2302,13 @@ app.post("/api/push/test", requireAdmin, async (req, res) => {
     const onlyEndpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : undefined;
     const scenario = req.body?.scenario === "new_client" ? "new_client" : "general";
 
+    const settings = await loadServerSettings();
+    const quietHoursActive = isTimeInQuietWindow(
+      normalizeQuietHoursConfig(settings.quietHoursConfig),
+      getBrazilTimeHHMM(),
+    );
+    const bypassQuietHours = req.body?.bypassQuietHours !== false;
+
     if (scenario === "new_client") {
       const sampleName =
         typeof req.body?.clientName === "string" && req.body.clientName.trim()
@@ -2272,8 +2335,9 @@ app.post("/api/push/test", requireAdmin, async (req, res) => {
           requireInteraction: true,
         },
         onlyEndpoint,
+        { bypassQuietHours },
       );
-      return res.json({ success: true, scenario, ...result });
+      return res.json({ success: true, scenario, quietHoursActive, ...result });
     }
 
     const result = await sendAdminWebPushNotification(
@@ -2287,8 +2351,9 @@ app.post("/api/push/test", requireAdmin, async (req, res) => {
         requireInteraction: false,
       },
       onlyEndpoint,
+      { bypassQuietHours },
     );
-    res.json({ success: true, scenario, ...result });
+    res.json({ success: true, scenario, quietHoursActive, ...result });
   } catch (error: any) {
     console.error("Error sending test push:", error);
     res.status(500).json({ error: error?.message || "Falha ao enviar notificação push de teste" });
