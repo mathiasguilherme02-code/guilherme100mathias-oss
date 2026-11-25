@@ -371,29 +371,149 @@ app.post("/api/admin/login", (req, res) => {
   }
 });
 
+const isFirestoreQuotaError = (err: any): boolean => {
+  const code = Number(err?.code || 0);
+  const msg = String(err?.message || err?.details || "");
+  return code === 8 || /RESOURCE_EXHAUSTED|Quota exceeded/i.test(msg);
+};
+
+const normalizeCpfDigits = (cpf: any): string =>
+  typeof cpf === "string" ? cpf.replace(/\D/g, "") : String(cpf || "").replace(/\D/g, "");
+
+const formatCpfMask = (digits: string): string =>
+  digits.length === 11
+    ? `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`
+    : digits;
+
+const mergeClientDocData = (docId: string, data: any) => {
+  let clientData: any = {};
+  if (typeof data?.dados === "string") {
+    try {
+      clientData = JSON.parse(data.dados);
+    } catch {
+      clientData = {};
+    }
+  } else if (data?.dados && typeof data.dados === "object") {
+    clientData = data.dados;
+  }
+  const merged = { ...(data || {}), ...clientData, id: docId };
+  if (!merged.arquivos && data?.arquivos) {
+    merged.arquivos = data.arquivos;
+  }
+  delete merged.dados;
+  return merged;
+};
+
+const CLIENTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min TTL (invalidated on writes)
+const CLIENT_LOGIN_CACHE_TTL_MS = 60 * 1000; // 1 min TTL for repeated logins/refreshes
+let cachedClientsList: any[] | null = null;
+let cachedRawClientsList: any[] | null = null;
+let lastKnownClientsList: any[] | null = null;
+let lastKnownRawClientsList: any[] | null = null;
+let lastClientsFetchTime = 0;
+const clientLoginCache = new Map<string, { data: any; ts: number }>();
+
+function invalidateClientsCache() {
+  cachedClientsList = null;
+  cachedRawClientsList = null;
+  lastKnownClientsList = null;
+  lastKnownRawClientsList = null;
+  lastClientsFetchTime = 0;
+  clientLoginCache.clear();
+}
+
+const findClientInArrayByCpf = (list: any[] | null | undefined, cpfDigits: string) => {
+  if (!Array.isArray(list) || !cpfDigits) return null;
+  return (
+    list.find((c) => {
+      const topDigits = normalizeCpfDigits(c?.cpf);
+      if (topDigits === cpfDigits) return true;
+      if (c?.dados && typeof c.dados === "object") {
+        if (normalizeCpfDigits(c.dados.cpf) === cpfDigits) return true;
+      }
+      return false;
+    }) || null
+  );
+};
+
 // Client Login (Securely fetch only one client's data)
 app.post("/api/clients/login", async (req, res) => {
+  const rawCpf = req.body?.cpf;
+  const formattedCpf = normalizeCpfDigits(rawCpf);
+
+  if (formattedCpf.length !== 11) {
+    return res.status(400).json({ error: "CPF inválido. Informe os 11 números do CPF." });
+  }
+
   try {
     if (!db) {
-      return res.status(404).json({ error: "Cliente não encontrado" });
+      const parsedMock = mockClients.map((c) => mergeClientDocData(c.id, c));
+      const found = findClientInArrayByCpf(parsedMock, formattedCpf);
+      if (!found) {
+        return res.status(404).json({ error: "CPF não encontrado em nossa base de dados." });
+      }
+      return res.json(found);
     }
-    const { cpf } = req.body;
-    const formattedCpf = cpf.replace(/[^\d]+/g, '');
-    
+
+    const now = Date.now();
+    const cachedLogin = clientLoginCache.get(formattedCpf);
+    if (cachedLogin && now - cachedLogin.ts < CLIENT_LOGIN_CACHE_TTL_MS) {
+      return res.json(cachedLogin.data);
+    }
+
+    if (cachedRawClientsList && now - lastClientsFetchTime < CLIENTS_CACHE_TTL_MS) {
+      const foundInRaw = findClientInArrayByCpf(cachedRawClientsList, formattedCpf);
+      if (foundInRaw) {
+        clientLoginCache.set(formattedCpf, { data: foundInRaw, ts: now });
+        return res.json(foundInRaw);
+      }
+    }
+
     const q = query(collection(db, "clients"), where("cpf", "==", formattedCpf));
-    const querySnapshot = await getDocs(q);
-      
+    let querySnapshot = await getDocs(q);
+
     if (querySnapshot.empty) {
-      return res.status(404).json({ error: "Cliente não encontrado" });
+      const maskedCpf = formatCpfMask(formattedCpf);
+      if (maskedCpf !== formattedCpf) {
+        const qMasked = query(collection(db, "clients"), where("cpf", "==", maskedCpf));
+        querySnapshot = await getDocs(qMasked);
+      }
     }
-    
-    const data = querySnapshot.docs[0].data();
-    const clientData = typeof data.dados === 'string' ? JSON.parse(data.dados) : (data.dados || {});
-    const merged = { ...data, ...clientData, id: querySnapshot.docs[0].id };
-    delete merged.dados;
-    res.json(merged);
-  } catch (error) {
-    console.error("Error logging in client:", error);
+
+    if (!querySnapshot.empty) {
+      const docSnap = querySnapshot.docs[0];
+      const merged = mergeClientDocData(docSnap.id, docSnap.data());
+      clientLoginCache.set(formattedCpf, { data: merged, ts: now });
+      return res.json(merged);
+    }
+
+    // Fallback: check full client list in case cpf was stored with extra spaces or nested only in dados.cpf
+    const allClients = await loadAllClientsForSchedule();
+    const fallbackMatch = findClientInArrayByCpf(allClients, formattedCpf);
+    if (fallbackMatch) {
+      clientLoginCache.set(formattedCpf, { data: fallbackMatch, ts: now });
+      return res.json(fallbackMatch);
+    }
+
+    return res.status(404).json({ error: "CPF não encontrado em nossa base de dados." });
+  } catch (error: any) {
+    console.error("Error logging in client:", error?.message || error);
+
+    const staleLogin = clientLoginCache.get(formattedCpf)?.data;
+    if (staleLogin) {
+      return res.json(staleLogin);
+    }
+    const staleRaw = findClientInArrayByCpf(lastKnownRawClientsList, formattedCpf);
+    if (staleRaw) {
+      return res.json(staleRaw);
+    }
+
+    if (isFirestoreQuotaError(error)) {
+      return res.status(503).json({
+        error: "O sistema está temporariamente sobrecarregado (limite diário do banco de dados atingido). Tente novamente em alguns instantes ou fale com o administrador.",
+        code: "QUOTA_EXCEEDED",
+      });
+    }
     res.status(500).json({ error: "Erro ao fazer login" });
   }
 });
@@ -454,16 +574,37 @@ const normalizeLoadedSettings = (raw: any) => {
   return data;
 };
 
-const loadServerSettings = async () => {
+const SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedServerSettings: any = null;
+let lastSettingsFetchTime = 0;
+
+function invalidateSettingsCache() {
+  lastSettingsFetchTime = 0;
+}
+
+const loadServerSettings = async (forceRefresh = false) => {
   if (!db) {
     return normalizeLoadedSettings(mockSettings);
   }
-  const docRef = doc(db, "admin_settings", "1");
-  const docSnap = await getDoc(docRef);
-  if (!docSnap.exists()) {
-    return normalizeLoadedSettings(null);
+  const now = Date.now();
+  if (!forceRefresh && cachedServerSettings && now - lastSettingsFetchTime < SETTINGS_CACHE_TTL_MS) {
+    return cachedServerSettings;
   }
-  return normalizeLoadedSettings(docSnap.data());
+  try {
+    const docRef = doc(db, "admin_settings", "1");
+    const docSnap = await getDoc(docRef);
+    const normalized = !docSnap.exists()
+      ? normalizeLoadedSettings(null)
+      : normalizeLoadedSettings(docSnap.data());
+    cachedServerSettings = normalized;
+    lastSettingsFetchTime = now;
+    return normalized;
+  } catch (error) {
+    if (cachedServerSettings) {
+      return cachedServerSettings;
+    }
+    throw error;
+  }
 };
 
 // Get Admin Settings (Public, needed for simulation)
@@ -473,7 +614,7 @@ app.get("/api/settings", async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error("Error fetching settings (returning defaults):", error);
-    res.json(buildDefaultSettings());
+    res.json(cachedServerSettings || buildDefaultSettings());
   }
 });
 
@@ -602,6 +743,9 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
     }
 
     await setDoc(doc(db, "admin_settings", "1"), sanitizeForFirestore(payloadToSave), { merge: true });
+    invalidateSettingsCache();
+    cachedServerSettings = normalizeLoadedSettings({ ...(cachedServerSettings || {}), ...payloadToSave });
+    lastSettingsFetchTime = Date.now();
 
     broadcastUpdate('UPDATE_SETTINGS');
     res.json({ success: true });
@@ -612,16 +756,6 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
 });
 
 app.get("/api/sysinfo", (req, res) => { res.json({ hasDb: !!db, firebaseConfig: !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT }); });
-
-// Optimization: In-memory cache and payload trimming for client list
-let cachedClientsList: any[] | null = null;
-let lastClientsFetchTime = 0;
-const CLIENTS_CACHE_TTL_MS = 25000; // 25s TTL
-
-function invalidateClientsCache() {
-  cachedClientsList = null;
-  lastClientsFetchTime = 0;
-}
 
 function sanitizeClientForList(c: any) {
   const shallow = { ...c };
@@ -654,37 +788,38 @@ app.get("/api/clients", requireAdmin, async (req, res) => {
     }
 
     if (!db) {
-      const parsedMock = mockClients.map((c) => {
-        let merged = { ...c };
-        if (merged.dados) {
-            const dados = typeof merged.dados === 'string' ? JSON.parse(merged.dados) : merged.dados;
-            merged = { ...merged, ...dados };
-            delete merged.dados;
-        }
-        return sanitizeClientForList(merged);
-      }).sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime());
-      
+      const parsedMock = mockClients.map((c) => sanitizeClientForList(mergeClientDocData(c.id, c)))
+        .sort((a, b) => new Date(b.dataCadastro).getTime() - new Date(a.dataCadastro).getTime());
+
       cachedClientsList = parsedMock;
+      lastKnownClientsList = parsedMock;
       lastClientsFetchTime = now;
       return res.json(parsedMock);
     }
 
     const q = query(collection(db, "clients"), orderBy("dataCadastro", "desc"));
     const querySnapshot = await getDocs(q);
-      
-    const parsedClients = querySnapshot.docs.map(doc => {
-      const c = doc.data();
-      const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
-      const merged = { ...c, ...dados, id: doc.id };
-      delete merged.dados;
-      return sanitizeClientForList(merged);
-    });
 
+    const rawClients = querySnapshot.docs.map(doc => mergeClientDocData(doc.id, doc.data()));
+    const parsedClients = rawClients.map(sanitizeClientForList);
+
+    cachedRawClientsList = rawClients;
+    lastKnownRawClientsList = rawClients;
     cachedClientsList = parsedClients;
+    lastKnownClientsList = parsedClients;
     lastClientsFetchTime = now;
     res.json(parsedClients);
   } catch (error) {
     console.error("Error fetching clients:", error);
+    if (lastKnownClientsList) {
+      return res.json(lastKnownClientsList);
+    }
+    if (isFirestoreQuotaError(error)) {
+      return res.status(503).json({
+        error: "Limite diário de leitura do banco de dados atingido. Aguarde a renovação da cota ou tente novamente em instantes.",
+        code: "QUOTA_EXCEEDED",
+      });
+    }
     res.status(500).json({ error: "Falha ao buscar clientes" });
   }
 });
@@ -1448,24 +1583,27 @@ app.get("/api/backup", requireAdmin, async (req, res) => {
 
 const loadAllClientsForSchedule = async (): Promise<any[]> => {
   if (!db) {
-    return mockClients.map((c) => {
-      let merged = { ...c };
-      if (merged.dados) {
-        const dados = typeof merged.dados === 'string' ? JSON.parse(merged.dados) : merged.dados;
-        merged = { ...merged, ...dados };
-        delete merged.dados;
-      }
-      return merged;
-    });
+    return mockClients.map((c) => mergeClientDocData(c.id, c));
   }
-  const snap = await db.collection("clients").get();
-  return snap.docs.map((d: any) => {
-    const c = d.data();
-    const dados = typeof c.dados === 'string' ? JSON.parse(c.dados) : (c.dados || {});
-    const merged = { ...c, ...dados, id: d.id };
-    delete merged.dados;
-    return merged;
-  });
+  const now = Date.now();
+  if (cachedRawClientsList && now - lastClientsFetchTime < CLIENTS_CACHE_TTL_MS) {
+    return cachedRawClientsList;
+  }
+  try {
+    const snap = await db.collection("clients").get();
+    const rawClients = snap.docs.map((d: any) => mergeClientDocData(d.id, d.data()));
+    cachedRawClientsList = rawClients;
+    lastKnownRawClientsList = rawClients;
+    cachedClientsList = rawClients.map(sanitizeClientForList);
+    lastKnownClientsList = cachedClientsList;
+    lastClientsFetchTime = now;
+    return rawClients;
+  } catch (err) {
+    if (lastKnownRawClientsList) {
+      return lastKnownRawClientsList;
+    }
+    throw err;
+  }
 };
 
 const loadScheduleLogsFromStore = async (): Promise<ScheduledWhatsAppNotification[]> => {
@@ -1671,6 +1809,7 @@ const runAutoWhatsAppSchedule = async (options: {
         sanitizeForFirestore({ autoScheduleConfig: updatedAutoConfig }),
         { merge: true },
       );
+      invalidateSettingsCache();
     }
 
     broadcastUpdate("AUTO_SCHEDULE_RUN", {
@@ -1790,12 +1929,28 @@ const ensureVapidKeys = async (): Promise<{ publicKey: string; privateKey: strin
   return cachedVapidKeys;
 };
 
+const PUSH_SUBS_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedPushSubscriptions: StoredPushSubscription[] | null = null;
+let lastPushSubsFetchTime = 0;
+
+function invalidatePushSubscriptionsCache() {
+  cachedPushSubscriptions = null;
+  lastPushSubsFetchTime = 0;
+}
+
 const loadPushSubscriptionsFromStore = async (): Promise<StoredPushSubscription[]> => {
   if (!db) {
     return [...mockPushSubscriptions];
   }
+  const now = Date.now();
+  if (cachedPushSubscriptions && now - lastPushSubsFetchTime < PUSH_SUBS_CACHE_TTL_MS) {
+    return cachedPushSubscriptions;
+  }
   const snap = await db.collection("push_subscriptions").get();
-  return snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as StoredPushSubscription));
+  const list = snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as StoredPushSubscription));
+  cachedPushSubscriptions = list;
+  lastPushSubsFetchTime = now;
+  return list;
 };
 
 const upsertPushSubscriptionToStore = async (
@@ -1834,6 +1989,7 @@ const upsertPushSubscriptionToStore = async (
     record.createdAt = existingSnap.data()?.createdAt || nowISO;
   }
   await setDoc(doc(db, "push_subscriptions", id), sanitizeForFirestore(record), { merge: true });
+  invalidatePushSubscriptionsCache();
   return record;
 };
 
@@ -1851,6 +2007,7 @@ const deletePushSubscriptionFromStore = async (criteria: { id?: string; endpoint
 
   if (targetId) {
     await deleteDoc(doc(db, "push_subscriptions", targetId));
+    invalidatePushSubscriptionsCache();
   }
 };
 
@@ -2179,6 +2336,7 @@ const runPaymentReminderPushCheck = async (options: {
         sanitizeForFirestore({ pushConfig: updatedPushConfig }),
         { merge: true },
       );
+      invalidateSettingsCache();
     }
 
     return {
@@ -2288,6 +2446,7 @@ app.put("/api/push/config", requireAdmin, async (req, res) => {
         sanitizeForFirestore({ pushConfig: merged }),
         { merge: true },
       );
+      invalidateSettingsCache();
     }
     broadcastUpdate("UPDATE_SETTINGS");
     res.json({ success: true, config: merged });
@@ -2524,6 +2683,9 @@ app.delete("/api/whatsapp-schedule/:id", requireAdmin, async (req, res) => {
 });
 
 const startAutoScheduleCron = () => {
+  let lastAutoPushAttemptDate = "";
+  let lastAutoPushAttemptAt = 0;
+
   const checkAndRun = async () => {
     try {
       const settings = await loadServerSettings();
@@ -2537,11 +2699,25 @@ const startAutoScheduleCron = () => {
       }
 
       const pushCfg = normalizePushConfig(settings.pushConfig);
-      if (pushCfg.enabled && pushCfg.notifyPaymentReminders && nowTime >= pushCfg.horarioLembretePush) {
+      const nowMs = Date.now();
+      const alreadyAttemptedRecently =
+        lastAutoPushAttemptDate === todayISO && nowMs - lastAutoPushAttemptAt < 15 * 60 * 1000;
+
+      if (
+        pushCfg.enabled &&
+        pushCfg.notifyPaymentReminders &&
+        pushCfg.lastReminderPushDate !== todayISO &&
+        nowTime >= pushCfg.horarioLembretePush &&
+        !alreadyAttemptedRecently
+      ) {
+        lastAutoPushAttemptDate = todayISO;
+        lastAutoPushAttemptAt = nowMs;
         await runPaymentReminderPushCheck({ trigger: "automatic", dateISO: todayISO });
       }
-    } catch (err) {
-      console.error("[AutoSchedule] Erro no ciclo automático:", err);
+    } catch (err: any) {
+      if (!isFirestoreQuotaError(err)) {
+        console.error("[AutoSchedule] Erro no ciclo automático:", err);
+      }
     }
   };
 

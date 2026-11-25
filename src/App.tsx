@@ -817,6 +817,7 @@ export default function App() {
   }, [adminToken]);
   const [clientCpf, setClientCpf] = useState("");
   const [clientLoginError, setClientLoginError] = useState("");
+  const [isClientLoggingIn, setIsClientLoggingIn] = useState(false);
   const [clientActionMessage, setClientActionMessage] = useState("");
   const [clientActionError, setClientActionError] = useState("");
   const [showReprovadoAlert, setShowReprovadoAlert] = useState(false);
@@ -4420,11 +4421,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
   const handleClientLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isClientLoggingIn) return;
+
+    const cpfDigits = clientCpf.replace(/\D/g, "");
+    if (cpfDigits.length !== 11) {
+      setClientLoginError("CPF inválido. Digite os 11 números do seu CPF.");
+      return;
+    }
+
+    setIsClientLoggingIn(true);
+    setClientLoginError("");
     try {
       const res = await fetch("/api/clients/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cpf: clientCpf }),
+        body: JSON.stringify({ cpf: cpfDigits }),
       });
 
       if (res.ok) {
@@ -4441,10 +4452,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           setShowReprovadoAlert(true);
         }
       } else {
-        setClientLoginError("CPF não encontrado em nossa base de dados.");
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          setClientLoginError("CPF não encontrado em nossa base de dados.");
+        } else {
+          setClientLoginError(
+            errData?.error ||
+              "Não foi possível acessar no momento. Tente novamente em alguns instantes.",
+          );
+        }
       }
     } catch (error) {
       setClientLoginError("Erro ao conectar com o servidor.");
+    } finally {
+      setIsClientLoggingIn(false);
     }
   };
 
@@ -6696,9 +6717,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={14}
                 required
                 value={clientCpf}
-                onChange={(e) => setClientCpf(e.target.value)}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 11);
+                  let formatted = digits;
+                  if (digits.length > 9) {
+                    formatted = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+                  } else if (digits.length > 6) {
+                    formatted = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+                  } else if (digits.length > 3) {
+                    formatted = `${digits.slice(0, 3)}.${digits.slice(3)}`;
+                  }
+                  setClientCpf(formatted);
+                  if (clientLoginError) setClientLoginError("");
+                }}
                 className="appearance-none relative block w-full px-4 py-3 border border-slate-300 rounded-xl placeholder-slate-400 text-slate-900 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500"
                 placeholder="000.000.000-00"
               />
@@ -6710,9 +6746,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             )}
             <button
               type="submit"
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-colors shadow-md"
+              disabled={isClientLoggingIn}
+              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-yellow-500 hover:bg-yellow-600 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-colors shadow-md"
             >
-              Acessar meu painel
+              {isClientLoggingIn ? "Acessando..." : "Acessar meu painel"}
             </button>
           </form>
         </div>
