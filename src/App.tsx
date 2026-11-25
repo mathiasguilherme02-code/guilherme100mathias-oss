@@ -637,6 +637,8 @@ export default function App() {
   const [cronogramaStatusFilter, setCronogramaStatusFilter] = useState(
     () => safeStorageGet("gm_cronograma_status_filter") || "all",
   );
+  const [cronogramaSearch, setCronogramaSearch] = useState("");
+  const [isRefreshingClients, setIsRefreshingClients] = useState(false);
   const [fluxoYear, setFluxoYear] = useState(
     () => safeStorageGet("gm_fluxo_year") || getLocalISOYear(),
   );
@@ -7664,7 +7666,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
     }
   };
 
-  if (view === "admin_login") {
+  if (view === "admin_login" || (view === "admin" && !adminToken)) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
         <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden p-8">
@@ -7793,7 +7795,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
   }
 
   if (view === "admin") {
-    const groupedCronograma =
+    const cronogramaData =
       adminTab === "cronograma"
         ? (() => {
             const cronogramaParcelas = clients
@@ -7843,7 +7845,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 return (a.clientName || "").localeCompare(b.clientName || "");
               });
 
-            const filteredCronogramaParcelas = cronogramaParcelas.filter(
+            const searchMatchedCronograma = cronogramaSearch.trim()
+              ? cronogramaParcelas.filter((p: any) =>
+                  matchesClientSearchQuery(
+                    {
+                      nomeCompleto: p.clientName,
+                      cpf: p.client?.cpf,
+                      telefone: p.clientPhone,
+                    },
+                    cronogramaSearch,
+                  ),
+                )
+              : cronogramaParcelas;
+
+            const filteredCronogramaParcelas = searchMatchedCronograma.filter(
               (p: any) => {
                 const date = p.dataVencimento;
                 if (!date) return false;
@@ -7887,18 +7902,33 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               },
             );
 
-            return filteredCronogramaParcelas.reduce(
-              (acc: any, p: any) => {
-                if (!acc[p.dataVencimento]) {
-                  acc[p.dataVencimento] = [];
-                }
-                acc[p.dataVencimento].push(p);
-                return acc;
-              },
-              {} as Record<string, any[]>,
-            );
+            return {
+              grouped: filteredCronogramaParcelas.reduce(
+                (acc: any, p: any) => {
+                  if (!acc[p.dataVencimento]) {
+                    acc[p.dataVencimento] = [];
+                  }
+                  acc[p.dataVencimento].push(p);
+                  return acc;
+                },
+                {} as Record<string, any[]>,
+              ),
+              hiddenByPeriodOrStatusCount: Math.max(
+                0,
+                searchMatchedCronograma.length - filteredCronogramaParcelas.length,
+              ),
+              sampleHiddenDate:
+                cronogramaSearch.trim() &&
+                searchMatchedCronograma.length > filteredCronogramaParcelas.length
+                  ? (searchMatchedCronograma.find(
+                      (p: any) => !filteredCronogramaParcelas.includes(p),
+                    )?.dataVencimento || "")
+                  : "",
+            };
           })()
-        : {};
+        : { grouped: {}, hiddenByPeriodOrStatusCount: 0, sampleHiddenDate: "" };
+
+    const groupedCronograma = cronogramaData.grouped;
 
     const isLembretesTab = adminTab === "lembretes";
 
@@ -8119,17 +8149,58 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
             },
           );
 
+          const clientMatchedAllPeriods =
+            lembretesClientFilter.trim() || lembretesClientIdFilter !== "all"
+              ? allReminders.filter((r: any) => {
+                  if (
+                    lembretesClientIdFilter !== "all" &&
+                    r.clientId !== lembretesClientIdFilter
+                  ) {
+                    return false;
+                  }
+                  if (
+                    lembretesClientFilter.trim() &&
+                    !matchesClientSearchQuery(
+                      {
+                        nomeCompleto: r.clientName,
+                        cpf: r.clientCpf,
+                        telefone: r.clientPhone,
+                      },
+                      lembretesClientFilter,
+                    )
+                  ) {
+                    return false;
+                  }
+                  return true;
+                })
+              : [];
+
+          const outsidePeriodCount = Math.max(
+            0,
+            clientMatchedAllPeriods.length - periodAndClientFiltered.length,
+          );
+          const sampleOutsidePeriodDate =
+            outsidePeriodCount > 0
+              ? (clientMatchedAllPeriods.find(
+                  (r: any) => !periodAndClientFiltered.includes(r),
+                )?.dataVencimentoClean || "")
+              : "";
+
           return {
             allCount: allReminders.length,
             clientOptions,
             filtered,
             summary,
+            outsidePeriodCount,
+            sampleOutsidePeriodDate,
           };
         })()
       : {
           allCount: 0,
           clientOptions: [],
           filtered: [],
+          outsidePeriodCount: 0,
+          sampleOutsidePeriodDate: "",
           summary: {
             totalCount: 0,
             totalValor: 0,
@@ -14528,9 +14599,49 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       placeholder="Buscar clientes por nome ou CPF..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
+                      className="w-full pl-10 pr-9 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none transition-all"
                     />
+                    {searchTerm && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchTerm("")}
+                        title="Limpar busca"
+                        aria-label="Limpar busca"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
                   </div>
+                  <button
+                    type="button"
+                    disabled={isRefreshingClients}
+                    onClick={async () => {
+                      if (!adminToken) return;
+                      setIsRefreshingClients(true);
+                      try {
+                        const res = await fetch("/api/clients?fresh=1", {
+                          headers: { Authorization: `Bearer ${adminToken}` },
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          setClients(data);
+                          toast.success(`Lista atualizada (${data.filter((c: any) => c.id !== "admin-transactions").length} clientes).`);
+                        } else {
+                          toast.error("Não foi possível atualizar a lista de clientes.");
+                        }
+                      } catch {
+                        toast.error("Erro de conexão ao atualizar clientes.");
+                      } finally {
+                        setIsRefreshingClients(false);
+                      }
+                    }}
+                    title="Recarregar lista de clientes do servidor"
+                    className="px-3 py-2 border border-slate-300 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60"
+                  >
+                    <RefreshCw size={15} className={isRefreshingClients ? "animate-spin" : ""} />
+                    <span>Atualizar</span>
+                  </button>
                   <div className="w-full sm:w-auto md:w-56">
                     <select
                       value={statusFilter}
@@ -14613,12 +14724,24 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               {(() => {
                 const searchMatchedClients = clients
                   .filter((c) => c.id !== "admin-transactions")
-                  .filter((c) => matchesClientSearchQuery(c, searchTerm));
+                  .filter((c) => matchesClientSearchQuery(c, searchTerm))
+                  .sort((a, b) =>
+                    (a.nomeCompleto || "").localeCompare(b.nomeCompleto || ""),
+                  );
 
                 const hasActiveDropdownFilters =
                   statusFilter !== "todos" ||
                   clientesMonth !== "all" ||
                   clientesYear !== "all";
+
+                const resetClientesDropdownFilters = () => {
+                  setStatusFilter("todos");
+                  setClientesMonth("all");
+                  setClientesYear("all");
+                  safeStorageSet("gm_clientes_status_filter", "todos");
+                  safeStorageSet("gm_clientes_month", "all");
+                  safeStorageSet("gm_clientes_year", "all");
+                };
 
                 const filteredClients = searchMatchedClients
                   .filter((c) => {
@@ -14693,7 +14816,41 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     (a.nomeCompleto || "").localeCompare(b.nomeCompleto || ""),
                   );
 
-                return filteredClients.length > 0 ? (
+                const hiddenSearchMatchesCount = searchTerm.trim()
+                  ? Math.max(0, searchMatchedClients.length - filteredClients.length)
+                  : 0;
+                const showingFallbackSearchMatches =
+                  Boolean(searchTerm.trim()) &&
+                  filteredClients.length === 0 &&
+                  searchMatchedClients.length > 0;
+                const displayedClients = showingFallbackSearchMatches
+                  ? searchMatchedClients
+                  : filteredClients;
+
+                return (
+                  <>
+                    {(hasActiveDropdownFilters || hiddenSearchMatchesCount > 0) && (
+                      <div className="px-6 py-3 bg-amber-50 border-b border-amber-200 flex flex-wrap items-center justify-between gap-3 text-sm">
+                        <div className="flex items-center gap-2 text-amber-900">
+                          <AlertTriangle size={16} className="text-amber-600 shrink-0" />
+                          <span>
+                            {showingFallbackSearchMatches
+                              ? `Exibindo ${searchMatchedClients.length} resultado(s) encontrado(s) para "${searchTerm.trim()}" fora dos filtros ativos (Status / Mês / Ano).`
+                              : hiddenSearchMatchesCount > 0
+                                ? `${hiddenSearchMatchesCount} cliente(s) encontrado(s) para "${searchTerm.trim()}" estão ocultos pelos filtros de Status / Mês / Ano.`
+                                : "Filtros ativos de Status / Mês / Ano podem ocultar clientes fora do período ou status selecionado."}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={resetClientesDropdownFilters}
+                          className="px-3 py-1 rounded-md bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold text-xs transition-colors"
+                        >
+                          Limpar filtros
+                        </button>
+                      </div>
+                    )}
+                    {displayedClients.length > 0 ? (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -14725,7 +14882,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredClients.map((client) => {
+                        {displayedClients.map((client) => {
                           const status = getClientStatus(client);
                           const statusDisplay = getStatusDisplay(status);
                           return (
@@ -14879,20 +15036,15 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     {hasActiveDropdownFilters && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setStatusFilter("todos");
-                          setClientesMonth("all");
-                          setClientesYear("all");
-                          safeStorageSet("gm_clientes_status_filter", "todos");
-                          safeStorageSet("gm_clientes_month", "all");
-                          safeStorageSet("gm_clientes_year", "all");
-                        }}
+                        onClick={resetClientesDropdownFilters}
                         className="mt-4 px-4 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-semibold text-sm transition-colors"
                       >
                         Limpar filtros (Status / Mês / Ano)
                       </button>
                     )}
                   </div>
+                )}
+                  </>
                 );
               })()}
             </div>
@@ -14900,12 +15052,35 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
           {!selectedClient && adminTab === "cronograma" && (
             <div className="bg-white rounded-2xl shadow-xl p-6 mb-8">
-              <div className="flex justify-between items-center mb-6">
+              <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
                 <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                   <Calendar size={24} className="text-yellow-500" />
                   Cronograma de Clientes
                 </h2>
-                <div className="flex gap-2 print:hidden">
+                <div className="flex flex-wrap gap-2 print:hidden">
+                  <div className="relative">
+                    <Search
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                      size={16}
+                    />
+                    <input
+                      type="text"
+                      value={cronogramaSearch}
+                      onChange={(e) => setCronogramaSearch(e.target.value)}
+                      placeholder="Buscar cliente..."
+                      className="pl-9 pr-8 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-yellow-500 outline-none bg-white w-52"
+                    />
+                    {cronogramaSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setCronogramaSearch("")}
+                        title="Limpar busca"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
                   <button
                     onClick={() => window.print()}
                     className="bg-yellow-100 text-yellow-700 p-2 rounded-lg hover:bg-yellow-200 transition-colors flex items-center justify-center"
@@ -14974,6 +15149,29 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </select>
                 </div>
               </div>
+
+              {cronogramaSearch.trim() && cronogramaData.hiddenByPeriodOrStatusCount > 0 && (
+                <div className="mb-6 p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3 text-sm print:hidden">
+                  <span className="text-amber-900">
+                    Encontramos <strong>{cronogramaData.hiddenByPeriodOrStatusCount}</strong> parcela(s) para &ldquo;{cronogramaSearch.trim()}&rdquo; em outro mês/ano ou status
+                    {cronogramaData.sampleHiddenDate ? ` (ex.: ${formatDate(cronogramaData.sampleHiddenDate)})` : ""}.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCronogramaStatusFilter("all");
+                      setCronogramaMonth("all");
+                      setCronogramaYear("all");
+                      safeStorageSet("gm_cronograma_status_filter", "all");
+                      safeStorageSet("gm_cronograma_month", "all");
+                      safeStorageSet("gm_cronograma_year", "all");
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold text-xs transition-colors"
+                  >
+                    Ver todos os meses e anos
+                  </button>
+                </div>
+              )}
 
               {Object.keys(groupedCronograma).length > 0 ? (
                 <div className="space-y-8">
@@ -16156,6 +16354,29 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </select>
                 </div>
               </div>
+
+              {lembretesData.outsidePeriodCount > 0 && (
+                <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3 text-sm print:hidden">
+                  <span className="text-amber-900">
+                    Encontramos <strong>{lembretesData.outsidePeriodCount}</strong> lançamento(s) para esta busca em outros meses/anos
+                    {lembretesData.sampleOutsidePeriodDate ? ` (ex.: ${formatDate(lembretesData.sampleOutsidePeriodDate)})` : ""}.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLembretesDateFilter("");
+                      setLembretesMonth("all");
+                      setLembretesYear("all");
+                      safeStorageSet("gm_lembretes_date_filter", "");
+                      safeStorageSet("gm_lembretes_month", "all");
+                      safeStorageSet("gm_lembretes_year", "all");
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold text-xs transition-colors"
+                  >
+                    Mostrar todos os meses e anos
+                  </button>
+                </div>
+              )}
 
               {/* Tabela Consolidada de Lembretes */}
               {lembretesData.filtered.length > 0 ? (

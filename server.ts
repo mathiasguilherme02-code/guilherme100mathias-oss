@@ -631,7 +631,8 @@ function sanitizeClientForList(c: any) {
 app.get("/api/clients", requireAdmin, async (req, res) => {
   try {
     const now = Date.now();
-    if (cachedClientsList && (now - lastClientsFetchTime) < CLIENTS_CACHE_TTL_MS) {
+    const forceFresh = req.query.fresh === '1' || req.query.fresh === 'true';
+    if (!forceFresh && cachedClientsList && (now - lastClientsFetchTime) < CLIENTS_CACHE_TTL_MS) {
       return res.json(cachedClientsList);
     }
 

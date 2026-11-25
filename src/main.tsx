@@ -4,6 +4,18 @@ import { Toaster } from 'sonner';
 import App from './App.tsx';
 import './index.css';
 
+// Proactively check for Service Worker updates on boot so users don't see stale cached UI
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((registrations) => {
+      registrations.forEach((registration) => {
+        registration.update().catch(() => {});
+      });
+    })
+    .catch(() => {});
+}
+
 // Handle Vite chunk preload errors (e.g. after app update with stale cached HTML on mobile)
 window.addEventListener('vite:preloadError', (event) => {
   event.preventDefault();
