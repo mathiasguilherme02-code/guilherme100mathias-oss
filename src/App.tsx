@@ -73,6 +73,13 @@ import {
   WaSituacaoType,
   CustomWhatsAppTemplate,
   computeParcelaMenos60Tags,
+  formatAbatimentosWhatsAppShared,
+  renderWhatsAppTemplateShared,
+  generateVencidaMessageShared,
+  buildWhatsAppPaymentMessageShared,
+  getCustomWhatsAppMessagesShared,
+  normalizeWhatsAppDigitsShared,
+  resolveWhatsAppTargetPhoneShared,
 } from "./utils/whatsappReminders";
 import {
   DEFAULT_FERIADOS_CONFIG,
@@ -1140,6 +1147,37 @@ export default function App() {
     null,
   );
 
+  const extractWaSettingsSnapshot = (s: any) =>
+    JSON.stringify({
+      diasLembreteAntecipado: String(s?.diasLembreteAntecipado ?? "3"),
+      whatsappAppMode: s?.whatsappAppMode === "padrao" ? "padrao" : "business",
+      msgLembreteAVencer: String(s?.msgLembreteAVencer ?? ""),
+      msgLembretePreVencimento: String(s?.msgLembretePreVencimento ?? ""),
+      msgLembreteVenceHoje: String(s?.msgLembreteVenceHoje ?? ""),
+      msgLembreteCongelado: String(s?.msgLembreteCongelado ?? ""),
+      msgLembreteConfirmacao: String(s?.msgLembreteConfirmacao ?? ""),
+      msgLembreteVencido: String(s?.msgLembreteVencido ?? ""),
+      msgTelefones:
+        s?.msgTelefones &&
+        typeof s.msgTelefones === "object" &&
+        !Array.isArray(s.msgTelefones)
+          ? s.msgTelefones
+          : {},
+      customWhatsAppTemplates: Array.isArray(s?.customWhatsAppTemplates)
+        ? s.customWhatsAppTemplates
+        : [],
+    });
+
+  const [lastSavedWaSnapshot, setLastSavedWaSnapshot] = useState<string>("");
+  const hasUnsavedWaChanges = Boolean(
+    lastSavedWaSnapshot &&
+      extractWaSettingsSnapshot(adminSettings) !== lastSavedWaSnapshot,
+  );
+  const hasUnsavedWaChangesRef = useRef(false);
+  useEffect(() => {
+    hasUnsavedWaChangesRef.current = hasUnsavedWaChanges;
+  }, [hasUnsavedWaChanges]);
+
   // Automatic WhatsApp Reminder Schedule State
   const [waScheduleLogs, setWaScheduleLogs] = useState<
     ScheduledWhatsAppNotification[]
@@ -1471,6 +1509,7 @@ export default function App() {
         body: JSON.stringify(payloadToSave),
       });
       if (res.ok) {
+        setLastSavedWaSnapshot(extractWaSettingsSnapshot(payloadToSave));
         toast.success("Configurações de agendamento automático salvas!");
         fetchWaSchedule();
       } else {
@@ -1496,6 +1535,7 @@ export default function App() {
         body: JSON.stringify(adminSettings),
       });
       if (res.ok) {
+        setLastSavedWaSnapshot(extractWaSettingsSnapshot(adminSettings));
         toast.success("Feriados salvos e aplicados ao cálculo do 5º dia útil!");
       } else {
         toast.error("Erro ao salvar configurações de feriados.");
@@ -1829,6 +1869,7 @@ export default function App() {
         body: JSON.stringify(nextSettings),
       });
       if (res.ok) {
+        setLastSavedWaSnapshot(extractWaSettingsSnapshot(nextSettings));
         toast.success(
           successMessage ||
             "Configurações da Janela de Silêncio salvas com sucesso!",
@@ -1867,6 +1908,7 @@ export default function App() {
         body: JSON.stringify(nextSettings),
       });
       if (res.ok) {
+        setLastSavedWaSnapshot(extractWaSettingsSnapshot(nextSettings));
         toast.success(
           successMessage ||
             "Preferências de som e alerta visual para novos cadastros salvas!",
@@ -2302,8 +2344,7 @@ export default function App() {
             legacyFrozenDefaults.includes(settings.msgLembreteCongelado.trim())
               ? DEFAULT_WHATSAPP_TEMPLATES.msgLembreteCongelado
               : settings.msgLembreteCongelado;
-          setAdminSettings((prev) => ({
-            ...prev,
+          const mergedServerSettings = {
             ...DEFAULT_WHATSAPP_TEMPLATES,
             diasLembreteAntecipado: settings.diasLembreteAntecipado || "3",
             ...settings,
@@ -2333,7 +2374,30 @@ export default function App() {
             quietHoursConfig: normalizeQuietHoursConfig(
               settings.quietHoursConfig,
             ),
-          }));
+          };
+          setAdminSettings((prev) => {
+            if (hasUnsavedWaChangesRef.current) {
+              return {
+                ...prev,
+                ...mergedServerSettings,
+                diasLembreteAntecipado: prev.diasLembreteAntecipado,
+                whatsappAppMode: prev.whatsappAppMode,
+                msgLembreteAVencer: prev.msgLembreteAVencer,
+                msgLembretePreVencimento: prev.msgLembretePreVencimento,
+                msgLembreteVenceHoje: prev.msgLembreteVenceHoje,
+                msgLembreteCongelado: prev.msgLembreteCongelado,
+                msgLembreteConfirmacao: prev.msgLembreteConfirmacao,
+                msgLembreteVencido: prev.msgLembreteVencido,
+                msgTelefones: prev.msgTelefones,
+                customWhatsAppTemplates: prev.customWhatsAppTemplates,
+              };
+            }
+            return {
+              ...prev,
+              ...mergedServerSettings,
+            };
+          });
+          setLastSavedWaSnapshot(extractWaSettingsSnapshot(mergedServerSettings));
           setActiveFeriadosConfig(
             normalizeFeriadosConfig(settings.feriadosConfig),
           );
@@ -3049,71 +3113,7 @@ export default function App() {
     p: any,
     sim?: any,
     client?: any,
-  ): string => {
-    const normalizeEntries = (list: any[], refLabel = "") =>
-      (Array.isArray(list) ? list : [])
-        .map((a: any) => ({
-          data: String(a?.data || a?.dataPagamento || a?.date || "").trim(),
-          valor: parseMonetaryValue(a?.valor ?? a?.value ?? 0),
-          refLabel,
-        }))
-        .filter((a) => a.valor > 0 || Boolean(a.data));
-
-    let entries = normalizeEntries(p?.abatimentos);
-
-    if (entries.length === 0 && sim) {
-      const simAbat = normalizeEntries(sim?.abatimentos);
-      const simParcelas = Array.isArray(sim?.parcelas) ? sim.parcelas : [];
-      const fromSimParcelas = simParcelas.flatMap((par: any, idx: number) => {
-        const ref =
-          simParcelas.length > 1
-            ? sim?.prazo === "abater"
-              ? `Lembrete ${par?.numero || idx + 1}`
-              : `Parcela ${par?.numero || idx + 1}`
-            : "";
-        return normalizeEntries(par?.abatimentos, ref);
-      });
-      entries = [...simAbat, ...fromSimParcelas];
-    }
-
-    if (entries.length === 0 && client) {
-      const allSims =
-        client.simulacoes || (client.simulacao ? [client.simulacao] : []);
-      const activeSims = allSims.filter(isSimulacaoAtiva);
-      const simsToScan = activeSims.length > 0 ? activeSims : allSims;
-      entries = simsToScan.flatMap((s: any) => {
-        const sAbat = normalizeEntries(s?.abatimentos);
-        const sParcelas = Array.isArray(s?.parcelas) ? s.parcelas : [];
-        const fromParcelas = sParcelas.flatMap((par: any, idx: number) => {
-          const ref =
-            sParcelas.length > 1
-              ? s?.prazo === "abater"
-                ? `Lembrete ${par?.numero || idx + 1}`
-                : `Parcela ${par?.numero || idx + 1}`
-              : "";
-          return normalizeEntries(par?.abatimentos, ref);
-        });
-        return [...sAbat, ...fromParcelas];
-      });
-    }
-
-    if (entries.length === 0) return "";
-
-    entries.sort((a, b) => {
-      const da = a.data ? a.data.split("T")[0] : "";
-      const db = b.data ? b.data.split("T")[0] : "";
-      return da.localeCompare(db);
-    });
-
-    let totalAbatido = 0;
-    const linhas = entries.map((a) => {
-      totalAbatido += a.valor;
-      const dataAbat = a.data ? formatDate(a.data) : "Data não informada";
-      const refSuffix = a.refLabel ? ` (${a.refLabel})` : "";
-      return `* ${dataAbat}: ${formatCurrency(a.valor)}${refSuffix}`;
-    });
-    return `Abatimentos registrados na ficha:\n${linhas.join("\n")}\nTotal abatido: ${formatCurrency(totalAbatido)}`;
-  };
+  ): string => formatAbatimentosWhatsAppShared(p, sim, client);
 
   const renderWhatsAppTemplate = (
     template: string,
@@ -3130,44 +3130,7 @@ export default function App() {
       abatimentos?: string;
       prazoCongelamento?: string;
     },
-  ) => {
-    const firstName = vars.cliente
-      ? String(vars.cliente).trim().split(" ")[0]
-      : "Cliente";
-    const needsMenos60Fallback =
-      vars.valorMenos60 === undefined ||
-      vars.valor60 === undefined ||
-      vars.calculoMenos60 === undefined;
-    const fallbackMenos60 = needsMenos60Fallback
-      ? computeParcelaMenos60Tags(
-          parseMonetaryValue(vars.valorDivida || vars.valor || 0),
-        )
-      : null;
-    const resolvedValorMenos60 =
-      vars.valorMenos60 ?? fallbackMenos60?.valorMenos60 ?? "";
-    const resolvedValor60 = vars.valor60 ?? fallbackMenos60?.valor60 ?? "";
-    const resolvedCalculoMenos60 =
-      vars.calculoMenos60 ?? fallbackMenos60?.calculoMenos60 ?? "";
-
-    return template
-      .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
-      .replace(/\{(?:valor_divida|valor_total|divida)\}/gi, vars.valorDivida || vars.valor || "")
-      .replace(/\{(?:valor_menos_60|parcela_menos_60|resultado_menos_60|menos_60)\}/gi, resolvedValorMenos60)
-      .replace(/\{(?:calculo_menos_60|calculo_60)\}/gi, resolvedCalculoMenos60)
-      .replace(/\{(?:valor_60|desconto_60)\}/gi, resolvedValor60)
-      .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, vars.valor || "")
-      .replace(/\{data\}/gi, vars.data || "")
-      .replace(/\{referencia\}/gi, vars.referencia || "")
-      .replace(
-        /\{dias\}/gi,
-        vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
-      )
-      .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
-      .replace(/\{prazo_congelamento\}/gi, vars.prazoCongelamento || "")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-  };
+  ) => renderWhatsAppTemplateShared(template, vars);
 
   const generateVencidaMessage = (
     nomeCompleto: string,
@@ -3178,144 +3141,18 @@ export default function App() {
     sim?: any,
     client?: any,
     valorDivida?: number,
-  ) => {
-    const calc = calculateParcelaDetails(p, {
+  ) =>
+    generateVencidaMessageShared(
+      adminSettings,
+      nomeCompleto,
+      p,
+      diasAtraso,
+      valorAtualizado,
+      prazo,
       sim,
-      taxaGlobal: adminSettings.taxaAtrasoDia,
-      hoje: new Date(),
-    });
-    const prazoCongelamentoStr = calc.freezeEndDateISO
-      ? formatISOToBR(calc.freezeEndDateISO)
-      : "";
-
-    if (
-      adminSettings.msgLembreteVencido &&
-      adminSettings.msgLembreteVencido.trim()
-    ) {
-      const itemDesc =
-        prazo === "abater"
-          ? "seu Lembrete de Pagamento"
-          : `sua Parcela ${p.numero}`;
-      const pAbatTotal = Array.isArray(p?.abatimentos)
-        ? p.abatimentos.reduce(
-            (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
-            0,
-          )
-        : 0;
-      const resolvedDivida =
-        valorDivida !== undefined
-          ? valorDivida
-          : calc.valorTotalSemAbatimentos || valorAtualizado + pAbatTotal;
-      const menos60 = computeParcelaMenos60Tags(resolvedDivida);
-      return renderWhatsAppTemplate(adminSettings.msgLembreteVencido, {
-        cliente: nomeCompleto,
-        valor: formatCurrency(valorAtualizado),
-        valorDivida: formatCurrency(resolvedDivida),
-        valorMenos60: menos60.valorMenos60,
-        valor60: menos60.valor60,
-        calculoMenos60: menos60.calculoMenos60,
-        data: p.dataVencimento ? formatDate(p.dataVencimento) : "",
-        referencia: itemDesc,
-        dias: diasAtraso,
-        abatimentos: formatAbatimentosWhatsApp(p, sim, client),
-        prazoCongelamento: prazoCongelamentoStr,
-      });
-    }
-
-    const nome = nomeCompleto ? nomeCompleto.split(" ")[0] : "Cliente";
-    const dataStrVencimento = p.dataVencimento
-      ? p.dataVencimento.split("T")[0].split("-").reverse().join("/")
-      : "";
-
-    if (prazo === "abater") {
-      let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida, que está VENCIDA desde ${dataStrVencimento}.
-
-`;
-
-      if (p.abatimentos && p.abatimentos.length > 0) {
-        mensagem += `Sua dívida (vencida há ${diasAtraso} dias) está no valor atualizado de ${formatCurrency(valorAtualizado)}.
-
-`;
-        mensagem += `Constam os seguintes pagamentos recentes abatidos dessa dívida:
-
-`;
-        p.abatimentos.forEach((a: any) => {
-          const dataStr = a.data ? a.data.split("-").reverse().join("/") : "";
-          mensagem += `• Dia: ${dataStr} | Valor: ${formatCurrency(a.valor)}
-`;
-        });
-        if (
-          calc.isPrazo7DiasVencido &&
-          calc.freezeStartDateISO &&
-          calc.freezeEndDateISO
-        ) {
-          mensagem += `\nO prazo de congelamento de 7 dias (de ${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. Os juros diários foram retomados sobre o saldo restante (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
-        }
-        mensagem += `
-Restando ainda o saldo de: ${formatCurrency(valorAtualizado)}.
-`;
-      } else {
-        mensagem += `O valor total da sua dívida (vencida há ${diasAtraso} dias) é de ${formatCurrency(valorAtualizado)}.
-`;
-      }
-
-      mensagem += `
-Por favor, regularize o quanto antes para evitar maiores encargos.`;
-      return mensagem;
-    }
-
-    const valor40Porcento = formatCurrency(valorAtualizado * 0.4);
-    let mensagem = `Olá, ${nome}. A GM-Empréstimo informa que sua Parcela ${p.numero} está VENCIDA desde ${dataStrVencimento}.
-Nossa política de trabalho, permite congelar seus juros diários por até 7 dias, para isso precisa efetuar o pagamento de 40% do valor da parcela, que hoje é ${valor40Porcento}. Porém, se vencer esse prazo de 7 dias, seus juros serão atualizados e será abatido o que foi enviado.
-
-`;
-
-    if (p.abatimentos && p.abatimentos.length > 0) {
-      mensagem += `Você realizou os seguintes pagamentos/abatimentos nesta parcela:
-`;
-      const hoje = parseLocalDate(getLocalISODate());
-      p.abatimentos.forEach((a: any) => {
-        const dataA = parseLocalDate(a.data);
-        const diff = Math.max(0, hoje.getTime() - dataA.getTime());
-        const dias = Math.round(diff / (1000 * 60 * 60 * 24));
-        const dataStr = a.data ? a.data.split("-").reverse().join("/") : "";
-        mensagem += `- ${dataStr}: ${formatCurrency(a.valor)} (há ${dias} dia${dias !== 1 ? "s" : ""})
-`;
-      });
-      if (
-        calc.isPrazo7DiasVencido &&
-        calc.freezeStartDateISO &&
-        calc.freezeEndDateISO
-      ) {
-        mensagem += `\n⚠️ O prazo de 7 dias corridos de congelamento (${formatISOToBR(calc.freezeStartDateISO)} até ${formatISOToBR(calc.freezeEndDateISO)}) encerrou. O valor já pago foi abatido (saldo restante de ${formatCurrency(calc.saldoAposUltimoAbatimento)}) e os juros diários foram retomados (${calc.diasJurosAposCongelamento} ${calc.diasJurosAposCongelamento === 1 ? "dia" : "dias"} após o prazo).\n`;
-      }
-      mensagem += `
-`;
-    }
-
-    if (p.jurosCongelados) {
-      if (p.dataCongelamento) {
-        const dataStrCongelada = p.dataCongelamento.split("T")[0].split("-").reverse().join("/");
-        if (diasAtraso > 0) {
-          mensagem += `Conforme acordo com juros congelados até ${dataStrCongelada} (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} de juros calculados), o valor total para pagamento é de ${formatCurrency(valorAtualizado)}.
-`;
-        } else {
-          mensagem += `Conforme acordo com juros congelados até ${dataStrCongelada}, o valor total para pagamento é de ${formatCurrency(valorAtualizado)}.
-`;
-        }
-      } else {
-        mensagem += `O valor acordado com juros congelados para pagamento é de ${formatCurrency(valorAtualizado)}.
-`;
-      }
-    } else {
-      mensagem += `O valor restante, atualizado com juros de atraso (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} de juros calculados) é de ${formatCurrency(valorAtualizado)}.
-`;
-    }
-
-    mensagem += `Por favor, regularize o quanto antes para evitar maiores encargos.`;
-
-    return mensagem;
-  };
+      client,
+      valorDivida,
+    );
 
   const buildWhatsAppPaymentMessage = (params: {
     type:
@@ -3334,138 +3171,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     valorDivida?: number;
     dias?: number;
     dataStr?: string;
-  }) => {
-    const itemDesc =
-      params.prazo === "abater"
-        ? "seu Lembrete de Pagamento"
-        : `sua Parcela ${params.p.numero}`;
-    const formattedValor = formatCurrency(params.valor);
-    const pAbatTotal = Array.isArray(params.p?.abatimentos)
-      ? params.p.abatimentos.reduce(
-          (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
-          0,
-        )
-      : 0;
-    const calc = calculateParcelaDetails(params.p, {
-      sim: params.sim,
-      taxaGlobal: adminSettings.taxaAtrasoDia,
-      hoje: new Date(),
-    });
-    const resolvedValorDivida =
-      params.valorDivida !== undefined
-        ? params.valorDivida
-        : params.type === "confirmacao"
-          ? calc.valorOriginal || params.valor
-          : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
-    const formattedValorDivida = formatCurrency(resolvedValorDivida);
-    const menos60 = computeParcelaMenos60Tags(resolvedValorDivida);
-    const formattedData = params.dataStr
-      ? formatDate(params.dataStr)
-      : params.p.dataVencimento
-        ? formatDate(params.p.dataVencimento)
-        : "";
-
-    const abatimentosTexto = formatAbatimentosWhatsApp(
-      params.p,
-      params.sim,
-      params.client,
-    );
-    const prazoCongelamentoStr = calc.freezeEndDateISO
-      ? formatISOToBR(calc.freezeEndDateISO)
-      : "";
-    const isCongeladoMsg =
-      params.type === "congelado" || calc.isCongeladoEfetivo;
-    const finalizeCongeladoMsg = (tplText: string, rendered: string) => {
-      let out = rendered;
-      if (
-        isCongeladoMsg &&
-        abatimentosTexto &&
-        !/\{abatimentos\}/i.test(tplText)
-      ) {
-        out = `${out}\n\n${abatimentosTexto}`;
-      }
-      if (
-        isCongeladoMsg &&
-        calc.isCongelado7DiasAtivo &&
-        calc.freezeEndDateISO &&
-        !/\{prazo_congelamento\}/i.test(tplText)
-      ) {
-        out = `${out}\n\nPrazo do congelamento (40% - 7 dias corridos): até ${formatISOToBR(calc.freezeEndDateISO)}. Após esse prazo, caso o saldo restante não seja quitado integralmente, os juros diários serão retomados sobre o saldo restante.`;
-      }
-      return out;
-    };
-
-    const customOverride = (
-      adminSettings.customWhatsAppTemplates || []
-    ).find(
-      (tpl: CustomWhatsAppTemplate) =>
-        tpl.situacao === params.type && tpl.text && tpl.text.trim().length > 0,
-    );
-    if (customOverride) {
-      const renderedCustom = renderWhatsAppTemplate(customOverride.text, {
-        cliente: params.cliente,
-        valor: formattedValor,
-        valorDivida: formattedValorDivida,
-        valorMenos60: menos60.valorMenos60,
-        valor60: menos60.valor60,
-        calculoMenos60: menos60.calculoMenos60,
-        data: formattedData,
-        referencia: itemDesc,
-        dias: params.dias ?? 0,
-        abatimentos: abatimentosTexto,
-        prazoCongelamento: prazoCongelamentoStr,
-      });
-      return finalizeCongeladoMsg(customOverride.text, renderedCustom);
-    }
-
-    if (params.type === "vencido") {
-      return generateVencidaMessage(
-        params.cliente,
-        params.p,
-        params.dias || 0,
-        params.valor,
-        params.prazo,
-        params.sim,
-        params.client,
-        resolvedValorDivida,
-      );
-    }
-
-    const templateMap: Record<Exclude<typeof params.type, "vencido">, string> =
-      {
-        a_vencer: adminSettings.msgLembreteAVencer?.trim()
-          ? adminSettings.msgLembreteAVencer
-          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteAVencer,
-        pre_vencimento: adminSettings.msgLembretePreVencimento?.trim()
-          ? adminSettings.msgLembretePreVencimento
-          : DEFAULT_WHATSAPP_TEMPLATES.msgLembretePreVencimento,
-        vence_hoje: adminSettings.msgLembreteVenceHoje?.trim()
-          ? adminSettings.msgLembreteVenceHoje
-          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteVenceHoje,
-        congelado: adminSettings.msgLembreteCongelado?.trim()
-          ? adminSettings.msgLembreteCongelado
-          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteCongelado,
-        confirmacao: adminSettings.msgLembreteConfirmacao?.trim()
-          ? adminSettings.msgLembreteConfirmacao
-          : DEFAULT_WHATSAPP_TEMPLATES.msgLembreteConfirmacao,
-      };
-
-    const selectedTemplate = templateMap[params.type];
-    const renderedMsg = renderWhatsAppTemplate(selectedTemplate, {
-      cliente: params.cliente,
-      valor: formattedValor,
-      valorDivida: formattedValorDivida,
-      valorMenos60: menos60.valorMenos60,
-      valor60: menos60.valor60,
-      calculoMenos60: menos60.calculoMenos60,
-      data: formattedData,
-      referencia: itemDesc,
-      dias: params.dias ?? 0,
-      abatimentos: abatimentosTexto,
-      prazoCongelamento: prazoCongelamentoStr,
-    });
-    return finalizeCongeladoMsg(selectedTemplate, renderedMsg);
-  };
+  }) => buildWhatsAppPaymentMessageShared(adminSettings, params);
 
   const getCustomWhatsAppMessages = (params: {
     cliente: string;
@@ -3478,85 +3184,10 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
     dias?: number;
     dataStr?: string;
     clientPhoneOverride?: string;
-  }) => {
-    const customList = (adminSettings.customWhatsAppTemplates || []).filter(
-      (t: CustomWhatsAppTemplate) => t.text && t.text.trim().length > 0,
-    );
-    if (customList.length === 0) return [];
-    const itemDesc =
-      params.prazo === "abater"
-        ? "seu Lembrete de Pagamento"
-        : `sua Parcela ${params.p.numero}`;
-    const formattedValor = formatCurrency(params.valor);
-    const pAbatTotal = Array.isArray(params.p?.abatimentos)
-      ? params.p.abatimentos.reduce(
-          (acc: number, a: any) => acc + parseMonetaryValue(a?.valor ?? 0),
-          0,
-        )
-      : 0;
-    const calc = calculateParcelaDetails(params.p, {
-      sim: params.sim,
-      taxaGlobal: adminSettings.taxaAtrasoDia,
-      hoje: new Date(),
-    });
-    const resolvedValorDividaCustom =
-      params.valorDivida !== undefined
-        ? params.valorDivida
-        : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
-    const formattedValorDivida = formatCurrency(resolvedValorDividaCustom);
-    const menos60 = computeParcelaMenos60Tags(resolvedValorDividaCustom);
-    const formattedData = params.dataStr
-      ? formatDate(params.dataStr)
-      : params.p.dataVencimento
-        ? formatDate(params.p.dataVencimento)
-        : "";
-    const abatimentosTexto = formatAbatimentosWhatsApp(
-      params.p,
-      params.sim,
-      params.client,
-    );
-    const prazoCongelamentoStr = calc.freezeEndDateISO
-      ? formatISOToBR(calc.freezeEndDateISO)
-      : "";
-    const parcelaCongelada = calc.isCongeladoEfetivo;
+  }) => getCustomWhatsAppMessagesShared(adminSettings, params);
 
-    return customList.map((tpl: CustomWhatsAppTemplate) => {
-      const rendered = renderWhatsAppTemplate(tpl.text, {
-        cliente: params.cliente,
-        valor: formattedValor,
-        valorDivida: formattedValorDivida,
-        valorMenos60: menos60.valorMenos60,
-        valor60: menos60.valor60,
-        calculoMenos60: menos60.calculoMenos60,
-        data: formattedData,
-        referencia: itemDesc,
-        dias: params.dias ?? 0,
-        abatimentos: abatimentosTexto,
-        prazoCongelamento: prazoCongelamentoStr,
-      });
-      const finalMessage =
-        (tpl.situacao === "congelado" || parcelaCongelada) &&
-        abatimentosTexto &&
-        !/\{abatimentos\}/i.test(tpl.text)
-          ? `${rendered}\n\n${abatimentosTexto}`
-          : rendered;
-      return {
-        id: tpl.id,
-        label: tpl.label || "Modelo Personalizado",
-        phone: tpl.telefone?.trim() || params.clientPhoneOverride || "",
-        hasCustomPhone: Boolean(tpl.telefone?.trim()),
-        message: finalMessage,
-      };
-    });
-  };
-
-  const normalizeWhatsAppDigits = (phone: string | undefined) => {
-    const digits = String(phone || "").replace(/\D/g, "");
-    if (!digits) return "";
-    return digits.length > 11 && digits.startsWith("55")
-      ? digits
-      : `55${digits}`;
-  };
+  const normalizeWhatsAppDigits = (phone: string | undefined) =>
+    normalizeWhatsAppDigitsShared(phone);
 
   const formatWhatsAppHref = (
     phone: string | undefined,
@@ -3646,32 +3277,7 @@ Nossa política de trabalho, permite congelar seus juros diários por até 7 dia
   const resolveWhatsAppTargetPhone = (
     clientPhone: string | undefined,
     type: Exclude<WaSituacaoType, "personalizado">,
-  ) => {
-    const customOverride = (
-      adminSettings.customWhatsAppTemplates || []
-    ).find(
-      (tpl: CustomWhatsAppTemplate) =>
-        tpl.situacao === type && tpl.text && tpl.text.trim().length > 0,
-    );
-    if (customOverride?.telefone && customOverride.telefone.trim()) {
-      return customOverride.telefone.trim();
-    }
-    const situacaoToKey: Record<
-      Exclude<WaSituacaoType, "personalizado">,
-      WaTemplateKey
-    > = {
-      a_vencer: "msgLembreteAVencer",
-      pre_vencimento: "msgLembretePreVencimento",
-      vence_hoje: "msgLembreteVenceHoje",
-      congelado: "msgLembreteCongelado",
-      vencido: "msgLembreteVencido",
-      confirmacao: "msgLembreteConfirmacao",
-    };
-    const configuredPhone =
-      adminSettings.msgTelefones?.[situacaoToKey[type]]?.trim();
-    if (configuredPhone) return configuredPhone;
-    return clientPhone || "";
-  };
+  ) => resolveWhatsAppTargetPhoneShared(adminSettings, clientPhone, type).phone;
 
   const getClientStatus = (client: any) => {
     if (client.statusManual && client.statusManual !== "automatico") {
@@ -10549,9 +10155,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           },
                           body: JSON.stringify(adminSettings),
                         });
-                        if (res.ok) alert("Configurações salvas com sucesso!");
+                        if (res.ok) {
+                          setLastSavedWaSnapshot(
+                            extractWaSettingsSnapshot(adminSettings),
+                          );
+                          toast.success("Configurações salvas com sucesso!");
+                        } else {
+                          toast.error("Erro ao salvar configurações.");
+                        }
                       } catch (error) {
-                        alert("Erro ao salvar configurações");
+                        toast.error("Erro ao salvar configurações.");
                       }
                     }}
                     className="w-full bg-slate-800 hover:bg-slate-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
@@ -10581,89 +10194,244 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 const selectedSampleClient = waPreviewClientId
                   ? clients.find((c: any) => String(c.id) === waPreviewClientId)
                   : null;
-                const sampleSimList = selectedSampleClient
+                const allSampleSims = selectedSampleClient
                   ? selectedSampleClient.simulacoes ||
                     (selectedSampleClient.simulacao
                       ? [selectedSampleClient.simulacao]
                       : [])
                   : [];
+                const activeSampleSims = allSampleSims.filter(isSimulacaoAtiva);
+                const sampleSimList =
+                  activeSampleSims.length > 0 ? activeSampleSims : allSampleSims;
                 const sampleParcelasWithSim = sampleSimList.flatMap(
                   (s: any) =>
                     (Array.isArray(s?.parcelas) ? s.parcelas : []).map(
                       (par: any) => ({ s, par }),
                     ),
                 );
+                const allSampleParcelasWithSim = allSampleSims.flatMap(
+                  (s: any) =>
+                    (Array.isArray(s?.parcelas) ? s.parcelas : []).map(
+                      (par: any) => ({ s, par }),
+                    ),
+                );
+
+                const keyToSituacao: Record<
+                  WaTemplateKey,
+                  Exclude<WaSituacaoType, "personalizado">
+                > = {
+                  msgLembreteAVencer: "a_vencer",
+                  msgLembretePreVencimento: "pre_vencimento",
+                  msgLembreteVenceHoje: "vence_hoje",
+                  msgLembreteCongelado: "congelado",
+                  msgLembreteVencido: "vencido",
+                  msgLembreteConfirmacao: "confirmacao",
+                };
+
+                const overridingCustomByKey: Partial<
+                  Record<WaTemplateKey, CustomWhatsAppTemplate>
+                > = {};
+                for (const opt of WA_TEMPLATE_OPTIONS) {
+                  const sit = keyToSituacao[opt.key];
+                  const match = customTemplates.find(
+                    (tpl) =>
+                      tpl.situacao === sit &&
+                      tpl.text &&
+                      tpl.text.trim().length > 0,
+                  );
+                  if (match) overridingCustomByKey[opt.key] = match;
+                }
 
                 const renderPreviewFor = (
                   keyOrSituacao: string,
                   templateText: string,
                 ) => {
-                  const isCongelado =
-                    keyOrSituacao === "msgLembreteCongelado" ||
-                    keyOrSituacao === "congelado";
-                  const preferredSample =
-                    (isCongelado
-                      ? sampleParcelasWithSim.find(
-                          (entry: any) =>
-                            isParcelaCongelada(entry.par) &&
-                            Array.isArray(entry.par?.abatimentos) &&
-                            entry.par.abatimentos.length > 0,
-                        ) ||
-                        sampleParcelasWithSim.find(
-                          (entry: any) =>
-                            isParcelaCongelada(entry.par) ||
-                            (Array.isArray(entry.par?.abatimentos) &&
-                              entry.par.abatimentos.length > 0),
-                        )
-                      : null) ||
-                    sampleParcelasWithSim.find(
-                      (entry: any) =>
-                        Array.isArray(entry.par?.abatimentos) &&
-                        entry.par.abatimentos.length > 0,
-                    ) ||
-                    sampleParcelasWithSim[0] ||
-                    null;
+                  const normalizedSituacao: Exclude<
+                    WaSituacaoType,
+                    "personalizado"
+                  > | null =
+                    keyOrSituacao in keyToSituacao
+                      ? keyToSituacao[keyOrSituacao as WaTemplateKey]
+                      : keyOrSituacao === "a_vencer" ||
+                          keyOrSituacao === "pre_vencimento" ||
+                          keyOrSituacao === "vence_hoje" ||
+                          keyOrSituacao === "congelado" ||
+                          keyOrSituacao === "vencido" ||
+                          keyOrSituacao === "confirmacao"
+                        ? keyOrSituacao
+                        : null;
 
+                  const isCongelado = normalizedSituacao === "congelado";
+                  const hojePreview = new Date();
+                  hojePreview.setHours(0, 0, 0, 0);
+                  const antecipadoDias = Math.min(
+                    60,
+                    Math.max(
+                      1,
+                      parseInt(
+                        String(adminSettings.diasLembreteAntecipado || "3"),
+                        10,
+                      ) || 3,
+                    ),
+                  );
+
+                  const pickSampleForSituacao = () => {
+                    if (normalizedSituacao === "confirmacao") {
+                      return (
+                        allSampleParcelasWithSim.find(
+                          (e: any) => e.par?.paga || e.par?.status === "pago",
+                        ) ||
+                        sampleParcelasWithSim[0] ||
+                        allSampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    const unpaid = sampleParcelasWithSim.filter(
+                      (e: any) => !e.par?.paga && e.par?.status !== "pago",
+                    );
+                    if (isCongelado) {
+                      return (
+                        unpaid.find(
+                          (e: any) =>
+                            isParcelaCongelada(e.par) &&
+                            Array.isArray(e.par?.abatimentos) &&
+                            e.par.abatimentos.length > 0,
+                        ) ||
+                        unpaid.find((e: any) => isParcelaCongelada(e.par)) ||
+                        sampleParcelasWithSim.find(
+                          (e: any) =>
+                            Array.isArray(e.par?.abatimentos) &&
+                            e.par.abatimentos.length > 0,
+                        ) ||
+                        unpaid[0] ||
+                        sampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    if (normalizedSituacao === "vencido") {
+                      return (
+                        unpaid.find(
+                          (e: any) =>
+                            !isParcelaCongelada(e.par) &&
+                            e.par?.dataVencimento &&
+                            parseLocalDate(e.par.dataVencimento) < hojePreview,
+                        ) ||
+                        unpaid[0] ||
+                        sampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    if (normalizedSituacao === "vence_hoje") {
+                      return (
+                        unpaid.find(
+                          (e: any) =>
+                            !isParcelaCongelada(e.par) &&
+                            e.par?.dataVencimento &&
+                            parseLocalDate(e.par.dataVencimento).getTime() ===
+                              hojePreview.getTime(),
+                        ) ||
+                        unpaid[0] ||
+                        sampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    if (normalizedSituacao === "pre_vencimento") {
+                      return (
+                        unpaid.find((e: any) => {
+                          if (isParcelaCongelada(e.par) || !e.par?.dataVencimento)
+                            return false;
+                          const diff = Math.round(
+                            (parseLocalDate(e.par.dataVencimento).getTime() -
+                              hojePreview.getTime()) /
+                              (1000 * 60 * 60 * 24),
+                          );
+                          return diff >= 1 && diff <= antecipadoDias;
+                        }) ||
+                        unpaid[0] ||
+                        sampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    if (normalizedSituacao === "a_vencer") {
+                      return (
+                        unpaid.find(
+                          (e: any) =>
+                            !isParcelaCongelada(e.par) &&
+                            e.par?.dataVencimento &&
+                            parseLocalDate(e.par.dataVencimento) > hojePreview,
+                        ) ||
+                        unpaid[0] ||
+                        sampleParcelasWithSim[0] ||
+                        null
+                      );
+                    }
+                    return (
+                      unpaid[0] ||
+                      sampleParcelasWithSim[0] ||
+                      allSampleParcelasWithSim[0] ||
+                      null
+                    );
+                  };
+
+                  const preferredSample = pickSampleForSituacao();
                   const sampleSim =
                     preferredSample?.s || sampleSimList[0] || null;
                   const sampleParcela = preferredSample?.par || null;
                   const previewCliente =
                     selectedSampleClient?.nomeCompleto || "Patricia";
+
                   const sampleCalc = sampleParcela
                     ? calculateParcelaDetails(sampleParcela, {
                         sim: sampleSim,
                         taxaGlobal: adminSettings.taxaAtrasoDia,
-                        hoje: new Date(),
+                        hoje: hojePreview,
                       })
                     : null;
+
                   const previewValorDividaNum = sampleCalc
-                    ? sampleCalc.valorTotalSemAbatimentos
+                    ? normalizedSituacao === "confirmacao"
+                      ? sampleCalc.valorOriginal || Number(sampleParcela?.valor || 0)
+                      : sampleCalc.valorTotalSemAbatimentos
                     : isCongelado
                       ? 1186.8
                       : 350;
+                  const previewValorNum = sampleCalc
+                    ? normalizedSituacao === "confirmacao"
+                      ? Number(sampleParcela?.valor || 0)
+                      : sampleCalc.valorAtualizado
+                    : isCongelado
+                      ? 606.8
+                      : 350;
+
                   const previewValorDivida = formatCurrency(previewValorDividaNum);
                   const previewMenos60 = computeParcelaMenos60Tags(previewValorDividaNum);
-                  const previewValor = sampleCalc
-                    ? formatCurrency(sampleCalc.valorAtualizado)
+                  const previewValor = formatCurrency(previewValorNum);
+
+                  const sampleDataISO =
+                    normalizedSituacao === "confirmacao"
+                      ? sampleParcela?.dataPagamento ||
+                        sampleParcela?.dataVencimento ||
+                        ""
+                      : isCongelado
+                        ? sampleCalc?.freezeStartDateISO ||
+                          sampleParcela?.dataCongelamento ||
+                          sampleParcela?.dataVencimento ||
+                          ""
+                        : sampleParcela?.dataVencimento || "";
+
+                  const previewData = sampleDataISO
+                    ? formatDate(sampleDataISO)
                     : isCongelado
-                      ? "R$ 606,80"
-                      : "R$ 350,00";
-                  const previewData =
-                    sampleCalc?.freezeStartDateISO && isCongelado
-                      ? formatDate(sampleCalc.freezeStartDateISO)
-                      : sampleParcela?.dataCongelamento && isCongelado
-                        ? formatDate(sampleParcela.dataCongelamento)
-                        : sampleParcela?.dataVencimento
-                          ? formatDate(sampleParcela.dataVencimento)
-                          : isCongelado
-                            ? "(07/08/2026) - Sexta-feira"
-                            : "(20/11/2026) - Sexta-Feira";
+                      ? "(07/08/2026) - Sexta-feira"
+                      : "(20/11/2026) - Sexta-Feira";
+
                   const previewReferencia =
                     sampleSim?.prazo === "abater"
                       ? "seu Lembrete de Pagamento"
                       : sampleParcela?.numero
                         ? `sua Parcela ${sampleParcela.numero}`
                         : "seu Lembrete de Pagamento";
+
                   const previewAbatimentos =
                     sampleParcela || selectedSampleClient
                       ? formatAbatimentosWhatsApp(
@@ -10674,19 +10442,59 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       : isCongelado
                         ? "Abatimentos registrados na ficha:\n* (18/09/2026) - Sexta-feira: R$ 130,00\n* (30/09/2026) - Quarta-feira: R$ 200,00\n* (01/10/2026) - Quinta-feira: R$ 100,00\n* (07/11/2026) - Sábado: R$ 150,00\nTotal abatido: R$ 580,00"
                         : "";
-                  const previewPrazoCongelamento =
-                    sampleCalc?.freezeEndDateISO
-                      ? formatISOToBR(sampleCalc.freezeEndDateISO)
+
+                  const previewPrazoCongelamento = sampleCalc?.freezeEndDateISO
+                    ? formatISOToBR(sampleCalc.freezeEndDateISO)
+                    : sampleParcela?.dataCongelamento
+                      ? formatISOToBR(
+                          String(sampleParcela.dataCongelamento).split("T")[0],
+                        )
                       : "14/08/2026";
 
-                  if (
-                    keyOrSituacao === "msgLembreteVencido" &&
-                    !templateText.trim()
-                  ) {
-                    return `Olá, ${previewCliente.split(" ")[0]}. A GM-Empréstimo informa que hoje é dia de abater parte ou o total da sua dívida (${previewReferencia}), referente à data ${previewData}.\n\nO valor é de ${previewValor}.\n\nPor favor, regularize o quanto antes para evitar maiores encargos.`;
+                  const previewDias =
+                    normalizedSituacao === "vencido"
+                      ? sampleCalc?.diasJurosCobrados || 5
+                      : normalizedSituacao === "pre_vencimento" && sampleParcela?.dataVencimento
+                        ? Math.max(
+                            1,
+                            Math.round(
+                              (parseLocalDate(sampleParcela.dataVencimento).getTime() -
+                                hojePreview.getTime()) /
+                                (1000 * 60 * 60 * 24),
+                            ),
+                          )
+                        : normalizedSituacao === "pre_vencimento"
+                          ? antecipadoDias
+                          : antecipadoDias;
+
+                  if (normalizedSituacao === "vencido" && !templateText.trim()) {
+                    const vencParcela = sampleParcela || {
+                      numero: 1,
+                      valor: 350,
+                      dataVencimento: "2026-11-15",
+                      abatimentos: [],
+                    };
+                    return generateVencidaMessageShared(
+                      { ...adminSettings, msgLembreteVencido: "" },
+                      previewCliente,
+                      vencParcela,
+                      previewDias,
+                      previewValorNum,
+                      sampleSim?.prazo,
+                      sampleSim,
+                      selectedSampleClient || undefined,
+                      previewValorDividaNum,
+                    );
                   }
 
-                  const renderedBase = renderWhatsAppTemplate(templateText, {
+                  const effectiveTemplateText =
+                    !templateText.trim() &&
+                    keyOrSituacao in DEFAULT_WHATSAPP_TEMPLATES &&
+                    keyOrSituacao !== "msgLembreteVencido"
+                      ? DEFAULT_WHATSAPP_TEMPLATES[keyOrSituacao as WaTemplateKey]
+                      : templateText;
+
+                  return renderWhatsAppTemplateShared(effectiveTemplateText, {
                     cliente: previewCliente,
                     valor: previewValor,
                     valorDivida: previewValorDivida,
@@ -10695,32 +10503,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     calculoMenos60: previewMenos60.calculoMenos60,
                     data: previewData,
                     referencia: previewReferencia,
-                    dias:
-                      keyOrSituacao === "msgLembreteVencido" ||
-                      keyOrSituacao === "vencido"
-                        ? 5
-                        : Math.min(
-                            60,
-                            Math.max(
-                              1,
-                              parseInt(String(adminSettings.diasLembreteAntecipado || "3"), 10) || 3,
-                            ),
-                          ),
+                    dias: previewDias,
                     abatimentos: previewAbatimentos,
                     prazoCongelamento: previewPrazoCongelamento,
                   });
-                  return isCongelado &&
-                    previewAbatimentos &&
-                    !/\{abatimentos\}/i.test(templateText)
-                    ? `${renderedBase}\n\n${previewAbatimentos}`
-                    : renderedBase;
                 };
 
                 const previewClienteName =
                   selectedSampleClient?.nomeCompleto || "Patricia";
                 const activePreviewText = renderPreviewFor(
                   activeCustomTemplate
-                    ? activeCustomTemplate.situacao
+                    ? activeCustomTemplate.situacao === "personalizado"
+                      ? activeCustomTemplate.id
+                      : activeCustomTemplate.situacao
                     : resolvedBuiltIn!.key,
                   currentTemplateValue,
                 );
@@ -10880,9 +10675,20 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           body: JSON.stringify(payloadToSave),
                         });
                         if (res.ok) {
-                          toast.success(
-                            "Modelos padrão de WhatsApp salvos com sucesso!",
+                          const data = await res.json().catch(() => ({}));
+                          setLastSavedWaSnapshot(
+                            extractWaSettingsSnapshot(payloadToSave),
                           );
+                          if (data.refreshedQueueCount > 0) {
+                            fetchWaSchedule();
+                            toast.success(
+                              `Modelos salvos! ${data.refreshedQueueCount} mensagem(ns) pendente(s) na fila de hoje foram atualizadas.`,
+                            );
+                          } else {
+                            toast.success(
+                              "Modelos padrão de WhatsApp salvos com sucesso!",
+                            );
+                          }
                         } else {
                           toast.error("Erro ao salvar modelos de mensagem.");
                         }
@@ -10893,6 +10699,23 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       }
                     }}
                     isSaving={isSavingWaSettings}
+                    hasUnsavedChanges={hasUnsavedWaChanges}
+                    overridingCustomByKey={overridingCustomByKey}
+                    onUnlinkCustomOverride={(customId) => {
+                      setAdminSettings((prev) => ({
+                        ...prev,
+                        customWhatsAppTemplates: (
+                          prev.customWhatsAppTemplates || []
+                        ).map((t) =>
+                          t.id === customId
+                            ? { ...t, situacao: "personalizado" }
+                            : t,
+                        ),
+                      }));
+                      toast.info(
+                        "Modelo extra desvinculado para menu rápido. Clique em Salvar Alterações para confirmar.",
+                      );
+                    }}
                     previewClientId={waPreviewClientId}
                     onChangePreviewClientId={(cid) =>
                       setWaPreviewClientId(cid)
@@ -14727,6 +14550,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                           {(() => {
                                             const isCongelada = isCongeladaEfetiva;
                                             if (
+                                              p.paga ||
+                                              p.status === "pago" ||
                                               !(
                                                 isVencida ||
                                                 diasAtraso > 0 ||
@@ -14807,7 +14632,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             );
                                           })()}
 
-                                          {isVencendoHoje && !isParcelaCongelada(p) && !isEditing && (() => {
+                                          {isVencendoHoje && !isCongeladaEfetiva && !isEditing && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "vence_hoje");
                                             const msg = buildWhatsAppPaymentMessage({
                                               type: "vence_hoje",
@@ -14817,6 +14642,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               client: selectedClient,
                                               prazo: sim.prazo,
                                               valor: valorAtualizado,
+                                              valorDivida: valorComJurosSemAbatimentos,
                                               dataStr: p.dataVencimento,
                                             });
                                             return (
@@ -14846,7 +14672,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                             );
                                           })()}
 
-                                          {isPreVencimento && !isParcelaCongelada(p) && !isEditing && (() => {
+                                          {isPreVencimento && !isCongeladaEfetiva && !isEditing && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "pre_vencimento");
                                             const msg = buildWhatsAppPaymentMessage({
                                               type: "pre_vencimento",
@@ -14856,6 +14682,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               client: selectedClient,
                                               prazo: sim.prazo,
                                               valor: valorAtualizado,
+                                              valorDivida: valorComJurosSemAbatimentos,
                                               dias: diasParaVencimento,
                                               dataStr: p.dataVencimento,
                                             });
@@ -14885,6 +14712,79 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                               </div>
                                             );
                                           })()}
+
+                                          {!p.paga &&
+                                            p.status !== "pago" &&
+                                            !isCongeladaEfetiva &&
+                                            !isVencida &&
+                                            !isVencendoHoje &&
+                                            !isPreVencimento &&
+                                            !isEditing &&
+                                            (() => {
+                                              const targetPhone =
+                                                resolveWhatsAppTargetPhone(
+                                                  selectedClient.telefone,
+                                                  "a_vencer",
+                                                );
+                                              const msg =
+                                                buildWhatsAppPaymentMessage({
+                                                  type: "a_vencer",
+                                                  cliente:
+                                                    selectedClient.nomeCompleto,
+                                                  p,
+                                                  sim,
+                                                  client: selectedClient,
+                                                  prazo: sim.prazo,
+                                                  valor: valorAtualizado,
+                                                  valorDivida:
+                                                    valorComJurosSemAbatimentos,
+                                                  dias: Math.max(
+                                                    0,
+                                                    diasParaVencimento,
+                                                  ),
+                                                  dataStr: p.dataVencimento,
+                                                });
+                                              return (
+                                                <div className="mt-3 pt-3 border-t border-slate-200 print:hidden flex flex-col sm:flex-row gap-2">
+                                                  <a
+                                                    href={formatWhatsAppHref(
+                                                      targetPhone,
+                                                      msg,
+                                                    )}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) =>
+                                                      handleWhatsAppLinkClick(
+                                                        e,
+                                                        targetPhone,
+                                                        selectedClient.nomeCompleto,
+                                                        msg,
+                                                      )
+                                                    }
+                                                    className="flex-1 flex justify-center items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                                                  >
+                                                    <Phone size={16} />
+                                                    {sim.prazo === "abater"
+                                                      ? "Notificar Lembrete (A Vencer) via WhatsApp"
+                                                      : "Notificar Parcela A Vencer via WhatsApp"}
+                                                  </a>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      openManualWhatsAppSend(
+                                                        selectedClient.nomeCompleto,
+                                                        msg,
+                                                      )
+                                                    }
+                                                    title="Adicionar número manualmente e enviar esta mensagem"
+                                                    className="flex justify-center items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-medium py-2 px-3 rounded-lg transition-colors text-xs shrink-0"
+                                                  >
+                                                    <Send size={14} />
+                                                    Enviar p/ Nº Manual
+                                                  </button>
+                                                </div>
+                                              );
+                                            })()}
 
                                           {p.paga && !isEditing && (() => {
                                             const targetPhone = resolveWhatsAppTargetPhone(selectedClient.telefone, "confirmacao");

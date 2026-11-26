@@ -82,6 +82,9 @@ interface WhatsAppTemplatesControlPanelProps {
   ) => void;
   onLaunchWhatsApp: (phone: string, text: string) => void;
   formatWhatsAppHref: (phone: string, text: string) => string;
+  hasUnsavedChanges?: boolean;
+  overridingCustomByKey?: Partial<Record<WaTemplateKey, CustomWhatsAppTemplate>>;
+  onUnlinkCustomOverride?: (customId: string) => void;
 }
 
 const EDITABLE_VENCIDO_STARTER =
@@ -124,6 +127,9 @@ export const WhatsAppTemplatesControlPanel: React.FC<
   onTriggerPhonePasteOpen,
   onLaunchWhatsApp,
   formatWhatsAppHref,
+  hasUnsavedChanges = false,
+  overridingCustomByKey = {},
+  onUnlinkCustomOverride,
 }) => {
   const [viewMode, setViewMode] = useState<"focused" | "all">("focused");
 
@@ -186,6 +192,16 @@ export const WhatsAppTemplatesControlPanel: React.FC<
     const sep = cur.length > 0 && !cur.endsWith(" ") && !cur.endsWith("\n") ? " " : "";
     onChangeBuiltInText(key, `${cur}${sep}${tag}`);
   };
+
+  const insertTagIntoCustom = (custom: CustomWhatsAppTemplate, tag: string) => {
+    const cur = custom.text ?? "";
+    const sep = cur.length > 0 && !cur.endsWith(" ") && !cur.endsWith("\n") ? " " : "";
+    onUpdateCustomTemplate(custom.id, { text: `${cur}${sep}${tag}` });
+  };
+
+  const activeOverrideCustom = !activeCustomTemplate && resolvedBuiltIn
+    ? overridingCustomByKey[resolvedBuiltIn.key]
+    : undefined;
 
   const currentPhoneVal = activeCustomTemplate
     ? activeCustomTemplate.telefone || ""
@@ -303,14 +319,24 @@ export const WhatsAppTemplatesControlPanel: React.FC<
             Restaurar Todos
           </button>
 
+          {hasUnsavedChanges && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+              Alterações não salvas
+            </span>
+          )}
+
           <button
             type="button"
             disabled={isSaving}
             onClick={onSaveAll}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-lg shadow-xs transition-colors"
+            className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60 rounded-lg shadow-xs transition-colors ${
+              hasUnsavedChanges
+                ? "bg-amber-600 hover:bg-amber-700 ring-2 ring-amber-300"
+                : "bg-emerald-600 hover:bg-emerald-700"
+            }`}
           >
             <Save size={14} />
-            {isSaving ? "Salvando..." : "Salvar Mensagens"}
+            {isSaving ? "Salvando..." : hasUnsavedChanges ? "Salvar Alterações" : "Salvar Mensagens"}
           </button>
         </div>
       </div>
@@ -342,10 +368,8 @@ export const WhatsAppTemplatesControlPanel: React.FC<
               const isCustomized =
                 currentText.trim() !==
                 (DEFAULT_WHATSAPP_TEMPLATES[opt.key] || "").trim();
-              const previewSample =
-                opt.key === "msgLembreteVencido" && !currentText.trim()
-                  ? "Modo automático detalhado ativo (juros diários, regra 40% e histórico de abatimentos)."
-                  : renderTemplatePreview(opt.key, currentText);
+              const overridingCustom = overridingCustomByKey[opt.key];
+              const previewSample = renderTemplatePreview(opt.key, currentText);
 
               return (
                 <div
@@ -354,7 +378,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="text-sm font-bold text-slate-800">
                           {opt.label}
                         </h4>
@@ -375,6 +399,11 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                               ? "Personalizado"
                               : "Padrão"}
                         </span>
+                        {overridingCustom && (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-purple-100 text-purple-800">
+                            Substituído por: {overridingCustom.label}
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-slate-500 mt-0.5">
                         {opt.hint}
@@ -389,6 +418,35 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                       <RotateCcw size={14} />
                     </button>
                   </div>
+
+                  {overridingCustom && (
+                    <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        O modelo extra <strong>{overridingCustom.label}</strong> está vinculado a esta situação e será enviado no lugar deste campo.
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onSelectKey(overridingCustom.id);
+                            setViewMode("focused");
+                          }}
+                          className="px-2 py-1 rounded bg-white border border-amber-300 font-semibold text-amber-900 hover:bg-amber-100"
+                        >
+                          Ver modelo extra
+                        </button>
+                        {onUnlinkCustomOverride && (
+                          <button
+                            type="button"
+                            onClick={() => onUnlinkCustomOverride(overridingCustom.id)}
+                            className="px-2 py-1 rounded bg-amber-600 text-white font-semibold hover:bg-amber-700"
+                          >
+                            Usar este padrão
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap items-center gap-1">
                     {dynamicTags.map((t) => (
@@ -425,7 +483,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                     placeholder={
                       opt.key === "msgLembreteVencido"
                         ? "Em branco = usa o detalhamento automático completo. Digite aqui para definir um texto padrão fixo..."
-                        : "Digite a mensagem padrão usando as tags..."
+                        : "Digite a mensagem padrão usando as tags (em branco = usa o padrão do sistema)..."
                     }
                     onChange={(e) =>
                       onChangeBuiltInText(opt.key, e.target.value)
@@ -433,7 +491,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                     className="w-full px-3 py-2 text-xs text-slate-800 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
                   />
 
-                  <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-lg px-3 py-2 text-[11px] text-slate-700 whitespace-pre-line">
+                  <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-lg px-3 py-2 text-[11px] text-slate-700 whitespace-pre-wrap">
                     <span className="font-semibold text-emerald-900 block mb-0.5">
                       Prévia ({previewClienteName.split(" ")[0]}):
                     </span>
@@ -443,6 +501,85 @@ export const WhatsAppTemplatesControlPanel: React.FC<
               );
             })}
           </div>
+
+          {customTemplates.length > 0 && (
+            <div className="pt-4 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  Modelos Extras Personalizados ({customTemplates.length})
+                </h4>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {customTemplates.map((ct) => {
+                  const previewSample = renderTemplatePreview(
+                    (ct.situacao === "personalizado"
+                      ? ct.id
+                      : ct.situacao) as WaTemplateKey,
+                    ct.text || "",
+                  );
+                  return (
+                    <div
+                      key={ct.id}
+                      className="bg-white border border-emerald-200 rounded-xl p-4 space-y-2.5 shadow-2xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <h5 className="text-sm font-bold text-slate-800 truncate">
+                            {ct.label || "Modelo Personalizado"}
+                          </h5>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-100 text-emerald-800 shrink-0">
+                            {ct.situacao === "personalizado" ? "Menu rápido" : `Substitui: ${ct.situacao}`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteCustomTemplate(ct.id)}
+                          className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                          title="Excluir modelo personalizado"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1">
+                        {dynamicTags.map((t) => (
+                          <button
+                            key={`${ct.id}-${t.tag}`}
+                            type="button"
+                            onClick={() => insertTagIntoCustom(ct, t.tag)}
+                            title={t.desc}
+                            className={`px-2 py-0.5 text-[11px] font-mono font-semibold rounded border transition-colors ${
+                              t.primary
+                                ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+                                : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-yellow-50"
+                            }`}
+                          >
+                            + {t.tag}
+                          </button>
+                        ))}
+                      </div>
+
+                      <textarea
+                        rows={3}
+                        value={ct.text}
+                        onChange={(e) =>
+                          onUpdateCustomTemplate(ct.id, { text: e.target.value })
+                        }
+                        className="w-full px-3 py-2 text-xs text-slate-800 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                      />
+
+                      <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-lg px-3 py-2 text-[11px] text-slate-700 whitespace-pre-wrap">
+                        <span className="font-semibold text-emerald-900 block mb-0.5">
+                          Prévia ({previewClienteName.split(" ")[0]}):
+                        </span>
+                        {previewSample}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         /* Modo Focado: Lista de Tipos à Esquerda + Editor Simples, Tags e Prévia à Direita */
@@ -566,6 +703,31 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                     </span>
                   </div>
                   <p className="text-xs text-slate-600 mt-0.5">{activeHint}</p>
+                  {activeOverrideCustom && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                      <span>
+                        Aviso: o modelo extra <strong>{activeOverrideCustom.label}</strong> está vinculado a esta situação e será enviado no lugar deste padrão.
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSelectKey(activeOverrideCustom.id)}
+                          className="px-2.5 py-1 rounded bg-white border border-amber-300 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                        >
+                          Abrir modelo extra
+                        </button>
+                        {onUnlinkCustomOverride && (
+                          <button
+                            type="button"
+                            onClick={() => onUnlinkCustomOverride(activeOverrideCustom.id)}
+                            className="px-2.5 py-1 rounded bg-amber-600 text-white text-[11px] font-semibold hover:bg-amber-700"
+                          >
+                            Usar este texto padrão
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -785,7 +947,7 @@ export const WhatsAppTemplatesControlPanel: React.FC<
                   </div>
                 </div>
 
-                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-line leading-relaxed">
+                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
                   {previewText || (
                     <span className="text-slate-400 italic">
                       Nenhuma mensagem digitada.
@@ -890,6 +1052,23 @@ export const WhatsAppTemplatesControlPanel: React.FC<
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {hasUnsavedChanges && (
+        <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-xs font-semibold text-amber-900">
+            Você tem alterações não salvas nos modelos de mensagem do WhatsApp. Clique em Salvar para aplicá-las aos envios e à fila automática.
+          </span>
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={onSaveAll}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-60 rounded-lg shadow-xs transition-colors"
+          >
+            <Save size={14} />
+            {isSaving ? "Salvando..." : "Salvar Alterações Agora"}
+          </button>
         </div>
       )}
     </div>

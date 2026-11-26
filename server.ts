@@ -762,20 +762,103 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
         : {}),
     };
 
+    const mergedSettings = normalizeLoadedSettings({
+      ...currentSettings,
+      ...payloadToSave,
+    });
+
+    const waConfigChanged =
+      String(currentSettings.msgLembreteAVencer ?? "") !== String(mergedSettings.msgLembreteAVencer ?? "") ||
+      String(currentSettings.msgLembretePreVencimento ?? "") !== String(mergedSettings.msgLembretePreVencimento ?? "") ||
+      String(currentSettings.msgLembreteVenceHoje ?? "") !== String(mergedSettings.msgLembreteVenceHoje ?? "") ||
+      String(currentSettings.msgLembreteCongelado ?? "") !== String(mergedSettings.msgLembreteCongelado ?? "") ||
+      String(currentSettings.msgLembreteConfirmacao ?? "") !== String(mergedSettings.msgLembreteConfirmacao ?? "") ||
+      String(currentSettings.msgLembreteVencido ?? "") !== String(mergedSettings.msgLembreteVencido ?? "") ||
+      String(currentSettings.diasLembreteAntecipado ?? "3") !== String(mergedSettings.diasLembreteAntecipado ?? "3") ||
+      JSON.stringify(currentSettings.msgTelefones || {}) !== JSON.stringify(mergedSettings.msgTelefones || {}) ||
+      JSON.stringify(currentSettings.customWhatsAppTemplates || []) !== JSON.stringify(mergedSettings.customWhatsAppTemplates || []);
+
     if (!db) {
-      mockSettings = { ...(mockSettings || {}), ...payloadToSave };
+      mockSettings = mergedSettings;
       syncData();
-      broadcastUpdate('UPDATE_SETTINGS');
-      return res.json({ success: true });
+    } else {
+      await setDoc(doc(db, "admin_settings", "1"), sanitizeForFirestore(payloadToSave), { merge: true });
+      invalidateSettingsCache();
+      cachedServerSettings = mergedSettings;
+      lastSettingsFetchTime = Date.now();
     }
 
-    await setDoc(doc(db, "admin_settings", "1"), sanitizeForFirestore(payloadToSave), { merge: true });
-    invalidateSettingsCache();
-    cachedServerSettings = normalizeLoadedSettings({ ...(cachedServerSettings || {}), ...payloadToSave });
-    lastSettingsFetchTime = Date.now();
+    let refreshedQueueCount = 0;
+    if (waConfigChanged) {
+      try {
+        const todayISO = getBrazilTodayISO();
+        const existingLogs = await loadScheduleLogsFromStore();
+        const todayEditableLogs = existingLogs.filter(
+          (l) => l.dateISO === todayISO && (l.status === "pendente" || l.status === "erro"),
+        );
+
+        if (todayEditableLogs.length > 0) {
+          const clients = await loadAllClientsForSchedule();
+          const evalSettings = {
+            ...mergedSettings,
+            autoScheduleConfig: {
+              ...normalizeAutoScheduleConfig(mergedSettings.autoScheduleConfig),
+              enabled: true,
+              enviarPreVencimento: true,
+              preVencimentoModo: "janela" as const,
+              enviarVenceHoje: true,
+              enviarVencido: true,
+              frequenciaVencidoDias: "1" as const,
+              enviarCongelado: true,
+              frequenciaCongeladoDias: "1" as const,
+              incluirEmprestimos: true,
+              incluirLembretesAbater: true,
+            },
+          };
+          const candidates = evaluateAutoScheduleNotifications(clients, evalSettings, todayISO);
+          const candidateById = new Map(candidates.map((c) => [c.id, c]));
+          const refreshedItems: ScheduledWhatsAppNotification[] = [];
+
+          for (const existing of todayEditableLogs) {
+            const candidate = candidateById.get(existing.id);
+            if (!candidate) continue;
+            const changed =
+              existing.message !== candidate.message ||
+              existing.phone !== candidate.phone ||
+              existing.phoneDigits !== candidate.phoneDigits ||
+              Boolean(existing.hasCustomPhone) !== Boolean(candidate.hasCustomPhone) ||
+              existing.valor !== candidate.valor ||
+              existing.valorDivida !== candidate.valorDivida ||
+              existing.dias !== candidate.dias;
+            if (!changed) continue;
+            refreshedItems.push({
+              ...existing,
+              message: candidate.message,
+              phone: candidate.phone,
+              phoneDigits: candidate.phoneDigits,
+              hasCustomPhone: candidate.hasCustomPhone,
+              valor: candidate.valor,
+              valorDivida: candidate.valorDivida,
+              dias: candidate.dias,
+            });
+          }
+
+          if (refreshedItems.length > 0) {
+            await saveScheduleLogsBatchToStore(refreshedItems);
+            refreshedQueueCount = refreshedItems.length;
+            broadcastUpdate("AUTO_SCHEDULE_BULK_UPDATE", {
+              dateISO: todayISO,
+              refreshed: refreshedQueueCount,
+            });
+          }
+        }
+      } catch (refreshErr) {
+        console.warn("Failed to refresh pending WhatsApp queue after settings update:", refreshErr);
+      }
+    }
 
     broadcastUpdate('UPDATE_SETTINGS');
-    res.json({ success: true });
+    res.json({ success: true, refreshedQueueCount });
   } catch (error) {
     console.error("Error updating settings:", error);
     res.status(500).json({ error: "Falha ao atualizar configurações" });

@@ -352,9 +352,8 @@ export const renderWhatsAppTemplateShared = (
     prazoCongelamento?: string;
   },
 ): string => {
-  const firstName = vars.cliente
-    ? String(vars.cliente).trim().split(" ")[0]
-    : "Cliente";
+  const fullName = vars.cliente ? String(vars.cliente).trim().replace(/\s+/g, " ") : "Cliente";
+  const firstName = fullName ? fullName.split(/\s+/)[0] : "Cliente";
   const needsMenos60Fallback =
     vars.valorMenos60 === undefined ||
     vars.valor60 === undefined ||
@@ -370,30 +369,32 @@ export const renderWhatsAppTemplateShared = (
   const resolvedCalculoMenos60 =
     vars.calculoMenos60 ?? fallbackMenos60?.calculoMenos60 ?? "";
 
-  return template
-    .replace(/\{(?:cliente|nome)\}/gi, firstName || "Cliente")
-    .replace(
-      /\{(?:valor_divida|valor_total|divida)\}/gi,
-      vars.valorDivida || vars.valor || "",
-    )
+  const resolvedValorDivida = vars.valorDivida || vars.valor || "";
+  const resolvedValor = vars.valor || "";
+  const resolvedData = vars.data || "";
+  const resolvedReferencia = vars.referencia || "";
+  const resolvedDias =
+    vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0";
+  const resolvedAbatimentos = vars.abatimentos || "";
+  const resolvedPrazoCongelamento = vars.prazoCongelamento || "";
+
+  return String(template || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\{(?:cliente_completo|nome_completo)\}/gi, () => fullName || "Cliente")
+    .replace(/\{(?:cliente|nome)\}/gi, () => firstName || "Cliente")
+    .replace(/\{(?:valor_divida|valor_total|divida)\}/gi, () => resolvedValorDivida)
     .replace(
       /\{(?:valor_menos_60|parcela_menos_60|resultado_menos_60|menos_60)\}/gi,
-      resolvedValorMenos60,
+      () => resolvedValorMenos60,
     )
-    .replace(
-      /\{(?:calculo_menos_60|calculo_60)\}/gi,
-      resolvedCalculoMenos60,
-    )
-    .replace(/\{(?:valor_60|desconto_60)\}/gi, resolvedValor60)
-    .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, vars.valor || "")
-    .replace(/\{data\}/gi, vars.data || "")
-    .replace(/\{referencia\}/gi, vars.referencia || "")
-    .replace(
-      /\{dias\}/gi,
-      vars.dias !== undefined && vars.dias !== null ? String(vars.dias) : "0",
-    )
-    .replace(/\{abatimentos\}/gi, vars.abatimentos || "")
-    .replace(/\{prazo_congelamento\}/gi, vars.prazoCongelamento || "")
+    .replace(/\{(?:calculo_menos_60|calculo_60)\}/gi, () => resolvedCalculoMenos60)
+    .replace(/\{(?:valor_60|desconto_60)\}/gi, () => resolvedValor60)
+    .replace(/\{(?:valor|saldo_devedor|saldo)\}/gi, () => resolvedValor)
+    .replace(/\{data\}/gi, () => resolvedData)
+    .replace(/\{referencia\}/gi, () => resolvedReferencia)
+    .replace(/\{dias\}/gi, () => resolvedDias)
+    .replace(/\{abatimentos\}/gi, () => resolvedAbatimentos)
+    .replace(/\{prazo_congelamento\}/gi, () => resolvedPrazoCongelamento)
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -583,35 +584,16 @@ export const buildWhatsAppPaymentMessageShared = (
   );
   const prazoCongelamentoStr = calc.freezeEndDateISO
     ? formatISOToBR(calc.freezeEndDateISO)
-    : "";
-  const isCongeladoMsg =
-    params.type === "congelado" || calc.isCongeladoEfetivo;
-  const finalizeCongeladoMsg = (tplText: string, rendered: string) => {
-    let out = rendered;
-    if (
-      isCongeladoMsg &&
-      abatimentosTexto &&
-      !/\{abatimentos\}/i.test(tplText)
-    ) {
-      out = `${out}\n\n${abatimentosTexto}`;
-    }
-    if (
-      isCongeladoMsg &&
-      calc.isCongelado7DiasAtivo &&
-      calc.freezeEndDateISO &&
-      !/\{prazo_congelamento\}/i.test(tplText)
-    ) {
-      out = `${out}\n\nPrazo do congelamento (40% - 7 dias corridos): até ${formatISOToBR(calc.freezeEndDateISO)}. Após esse prazo, caso o saldo restante não seja quitado integralmente, os juros diários serão retomados sobre o saldo restante.`;
-    }
-    return out;
-  };
+    : params.p?.dataCongelamento
+      ? formatISOToBR(String(params.p.dataCongelamento).split("T")[0])
+      : "";
 
   const customOverride = (settings.customWhatsAppTemplates || []).find(
     (tpl) =>
       tpl.situacao === params.type && tpl.text && tpl.text.trim().length > 0,
   );
   if (customOverride) {
-    const renderedCustom = renderWhatsAppTemplateShared(customOverride.text, {
+    return renderWhatsAppTemplateShared(customOverride.text, {
       cliente: params.cliente,
       valor: formattedValor,
       valorDivida: formattedValorDivida,
@@ -624,7 +606,6 @@ export const buildWhatsAppPaymentMessageShared = (
       abatimentos: abatimentosTexto,
       prazoCongelamento: prazoCongelamentoStr,
     });
-    return finalizeCongeladoMsg(customOverride.text, renderedCustom);
   }
 
   if (params.type === "vencido") {
@@ -661,7 +642,7 @@ export const buildWhatsAppPaymentMessageShared = (
   };
 
   const selectedTemplate = templateMap[params.type];
-  const renderedMsg = renderWhatsAppTemplateShared(selectedTemplate, {
+  return renderWhatsAppTemplateShared(selectedTemplate, {
     cliente: params.cliente,
     valor: formattedValor,
     valorDivida: formattedValorDivida,
@@ -674,7 +655,88 @@ export const buildWhatsAppPaymentMessageShared = (
     abatimentos: abatimentosTexto,
     prazoCongelamento: prazoCongelamentoStr,
   });
-  return finalizeCongeladoMsg(selectedTemplate, renderedMsg);
+};
+
+export const getCustomWhatsAppMessagesShared = (
+  settings: WhatsAppSettingsLike,
+  params: {
+    cliente: string;
+    p: any;
+    sim?: any;
+    client?: any;
+    prazo?: string;
+    valor: number;
+    valorDivida?: number;
+    dias?: number;
+    dataStr?: string;
+    clientPhoneOverride?: string;
+    hojeDate?: Date;
+  },
+) => {
+  const customList = (settings.customWhatsAppTemplates || []).filter(
+    (t) => t.text && t.text.trim().length > 0,
+  );
+  if (customList.length === 0) return [];
+  const itemDesc =
+    params.prazo === "abater"
+      ? "seu Lembrete de Pagamento"
+      : `sua Parcela ${params.p.numero}`;
+  const formattedValor = formatCurrencyShared(params.valor);
+  const pAbatTotal = Array.isArray(params.p?.abatimentos)
+    ? params.p.abatimentos.reduce(
+        (acc: number, a: any) => acc + parseMonetaryValueShared(a?.valor ?? 0),
+        0,
+      )
+    : 0;
+  const calc = calculateParcelaDetails(params.p, {
+    sim: params.sim,
+    taxaGlobal: settings.taxaAtrasoDia,
+    hoje: params.hojeDate || new Date(),
+  });
+  const resolvedValorDividaCustom =
+    params.valorDivida !== undefined
+      ? params.valorDivida
+      : calc.valorTotalSemAbatimentos || params.valor + pAbatTotal;
+  const formattedValorDivida = formatCurrencyShared(resolvedValorDividaCustom);
+  const menos60 = computeParcelaMenos60Tags(resolvedValorDividaCustom);
+  const formattedData = params.dataStr
+    ? formatDateShared(params.dataStr)
+    : params.p.dataVencimento
+      ? formatDateShared(params.p.dataVencimento)
+      : "";
+  const abatimentosTexto = formatAbatimentosWhatsAppShared(
+    params.p,
+    params.sim,
+    params.client,
+  );
+  const prazoCongelamentoStr = calc.freezeEndDateISO
+    ? formatISOToBR(calc.freezeEndDateISO)
+    : params.p?.dataCongelamento
+      ? formatISOToBR(String(params.p.dataCongelamento).split("T")[0])
+      : "";
+
+  return customList.map((tpl) => {
+    const rendered = renderWhatsAppTemplateShared(tpl.text, {
+      cliente: params.cliente,
+      valor: formattedValor,
+      valorDivida: formattedValorDivida,
+      valorMenos60: menos60.valorMenos60,
+      valor60: menos60.valor60,
+      calculoMenos60: menos60.calculoMenos60,
+      data: formattedData,
+      referencia: itemDesc,
+      dias: params.dias ?? 0,
+      abatimentos: abatimentosTexto,
+      prazoCongelamento: prazoCongelamentoStr,
+    });
+    return {
+      id: tpl.id,
+      label: tpl.label || "Modelo Personalizado",
+      phone: tpl.telefone?.trim() || params.clientPhoneOverride || "",
+      hasCustomPhone: Boolean(tpl.telefone?.trim()),
+      message: rendered,
+    };
+  });
 };
 
 export const normalizeWhatsAppDigitsShared = (
