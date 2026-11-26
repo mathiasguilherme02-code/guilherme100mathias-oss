@@ -1236,7 +1236,14 @@ export default function App() {
           );
         }
       } else {
-        toast.error("Erro ao executar agendamento automático.");
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          toast.error(
+            "Rota de agendamento não encontrada no servidor publicado. Republique o aplicativo e recarregue a página.",
+          );
+        } else {
+          toast.error(errData.error || "Erro ao executar agendamento automático.");
+        }
       }
     } catch (error) {
       toast.error("Erro de conexão ao executar agendamento.");
@@ -1898,10 +1905,18 @@ export default function App() {
           toast.success(
             `Push enviado para ${data.dispatched} lembrete(s) de pagamento pendentes!`,
           );
+        } else if (data.skipped === "no_subscriptions") {
+          toast.warning(
+            "Nenhum dispositivo inscrito para receber notificações push. Ative o Push neste dispositivo primeiro.",
+          );
         } else {
           toast.info("Nenhum lembrete de pagamento pendente para hoje.");
         }
         await fetchPushStatus(adminToken);
+      } else if (res.status === 404) {
+        toast.error(
+          "Rota de disparo de lembretes não encontrada neste servidor. Republique/atualize o aplicativo em produção e recarregue a página.",
+        );
       } else {
         toast.error(data.error || "Falha ao disparar lembretes push.");
       }

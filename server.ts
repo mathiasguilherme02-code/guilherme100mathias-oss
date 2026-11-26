@@ -218,7 +218,7 @@ function sanitizeForFirestore(obj: any): any {
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Enable HTTP compression to speed up API responses (skip SSE stream)
 app.use(compression({
@@ -2804,6 +2804,15 @@ const startAutoScheduleCron = () => {
   setInterval(checkAndRun, 60000);
 };
 
+// Ensure unmatched /api/* requests always return JSON 404 in all environments
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: "Rota não encontrada",
+    method: req.method,
+    path: req.originalUrl,
+  });
+});
+
 // Error handler middleware
 app.use((err: any, req: any, res: any, next: any) => {
   if (err.type === 'entity.too.large') {
@@ -2852,12 +2861,9 @@ if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     }),
   );
 
-  // Never serve HTML fallback for missing JS/CSS/API files (prevents MIME-type crashes on mobile)
+  // Never serve HTML fallback for missing JS/CSS files (prevents MIME-type crashes on mobile)
   app.use("/assets", (_req, res) => {
     res.status(404).type("text/plain").send("Asset not found");
-  });
-  app.use("/api", (_req, res) => {
-    res.status(404).json({ error: "Rota não encontrada" });
   });
 
   app.get("*", (req, res) => {
