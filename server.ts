@@ -1716,6 +1716,37 @@ const saveScheduleLogToStore = async (item: ScheduledWhatsAppNotification) => {
   invalidateScheduleLogsCache();
 };
 
+const saveScheduleLogsBatchToStore = async (items: ScheduledWhatsAppNotification[]) => {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const sanitizedItems = items.map((item) => sanitizeForFirestore(item) as ScheduledWhatsAppNotification);
+  if (!db) {
+    const byId = new Map<string, ScheduledWhatsAppNotification>();
+    for (const s of sanitizedItems) byId.set(s.id, s);
+    mockScheduleLogs = mockScheduleLogs.map((l) => byId.get(l.id) || l);
+    for (const s of sanitizedItems) {
+      if (!mockScheduleLogs.some((l) => l.id === s.id)) {
+        mockScheduleLogs.unshift(s);
+      }
+    }
+    if (mockScheduleLogs.length > 500) {
+      mockScheduleLogs = mockScheduleLogs.slice(0, 500);
+    }
+    syncData();
+    return;
+  }
+
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < sanitizedItems.length; i += CHUNK_SIZE) {
+    const chunk = sanitizedItems.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    for (const item of chunk) {
+      batch.set(doc(db, "whatsapp_schedule_logs", item.id), item, { merge: true });
+    }
+    await batch.commit();
+  }
+  invalidateScheduleLogsCache();
+};
+
 const sendNotificationViaWebhook = async (
   item: ScheduledWhatsAppNotification,
   webhookUrl: string,
@@ -2611,6 +2642,10 @@ app.post("/api/push/send-reminders-now", requireAdmin, async (req, res) => {
   }
 });
 
+app.all("/api/push/send-reminders-now", (_req, res) => {
+  res.status(405).json({ error: "Método não permitido. Utilize POST para disparar lembretes." });
+});
+
 app.get("/api/whatsapp-schedule", requireAdmin, async (req, res) => {
   try {
     const settings = await loadServerSettings();
@@ -2659,6 +2694,184 @@ app.post("/api/whatsapp-schedule/run", requireAdmin, async (req, res) => {
     console.error("Error running manual whatsapp schedule:", error);
     res.status(500).json({ error: error?.message || "Falha ao executar agendamento" });
   }
+});
+
+app.all("/api/whatsapp-schedule/run", (_req, res) => {
+  res.status(405).json({ error: "Método não permitido. Utilize POST para executar o agendamento." });
+});
+
+app.post("/api/whatsapp-schedule/bulk-mark-sent", requireAdmin, async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.body?.ids)
+      ? req.body.ids
+          .filter((v: unknown): v is string => typeof v === "string" && v.trim().length > 0 && v.length <= 256)
+          .slice(0, 1000)
+      : null;
+    const scope = req.body?.scope === "todos" ? "todos" : "hoje";
+    const dateISO =
+      typeof req.body?.dateISO === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.dateISO)
+        ? req.body.dateISO
+        : getBrazilTodayISO();
+    const allowedStatuses = new Set(
+      Array.isArray(req.body?.statuses)
+        ? req.body.statuses.filter((s: unknown) => s === "pendente" || s === "erro")
+        : ["pendente", "erro"],
+    );
+    if (allowedStatuses.size === 0) {
+      allowedStatuses.add("pendente");
+    }
+
+    const logs = await loadScheduleLogsFromStore();
+    const idFilter = rawIds ? new Set(rawIds) : null;
+
+    const targets = logs.filter((item) => {
+      if (idFilter) {
+        return idFilter.has(item.id) && item.status !== "enviado";
+      }
+      if (scope === "hoje" && item.dateISO !== dateISO) {
+        return false;
+      }
+      return allowedStatuses.has(item.status);
+    });
+
+    if (targets.length === 0) {
+      return res.json({ success: true, updatedCount: 0, items: [] });
+    }
+
+    const nowISO = new Date().toISOString();
+    const updatedItems: ScheduledWhatsAppNotification[] = targets.map((item) => ({
+      ...item,
+      status: "enviado",
+      sentAt: nowISO,
+      deliveryMethod: "manual",
+      errorMessage: "",
+    }));
+
+    await saveScheduleLogsBatchToStore(updatedItems);
+    broadcastUpdate("AUTO_SCHEDULE_BULK_UPDATE", {
+      action: "mark_sent",
+      updatedCount: updatedItems.length,
+    });
+    res.json({ success: true, updatedCount: updatedItems.length, items: updatedItems });
+  } catch (error: any) {
+    console.error("Error bulk marking schedule logs as sent:", error);
+    res.status(500).json({ error: error?.message || "Falha ao marcar notificações como enviadas" });
+  }
+});
+
+app.all("/api/whatsapp-schedule/bulk-mark-sent", (_req, res) => {
+  res.status(405).json({ error: "Método não permitido. Utilize POST." });
+});
+
+app.post("/api/whatsapp-schedule/bulk-retry-errors", requireAdmin, async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.body?.ids)
+      ? req.body.ids
+          .filter((v: unknown): v is string => typeof v === "string" && v.trim().length > 0 && v.length <= 256)
+          .slice(0, 1000)
+      : null;
+    const scope = req.body?.scope === "todos" ? "todos" : "hoje";
+    const dateISO =
+      typeof req.body?.dateISO === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.dateISO)
+        ? req.body.dateISO
+        : getBrazilTodayISO();
+
+    const logs = await loadScheduleLogsFromStore();
+    const idFilter = rawIds ? new Set(rawIds) : null;
+    const targets = logs.filter((item) => {
+      if (item.status !== "erro") return false;
+      if (idFilter) return idFilter.has(item.id);
+      if (scope === "hoje" && item.dateISO !== dateISO) return false;
+      return true;
+    });
+
+    if (targets.length === 0) {
+      return res.json({
+        success: true,
+        total: 0,
+        sent: 0,
+        resetToPending: 0,
+        errors: 0,
+        mode: "none",
+      });
+    }
+
+    const settings = await loadServerSettings();
+    const config = normalizeAutoScheduleConfig(settings.autoScheduleConfig);
+    const updatedItems: ScheduledWhatsAppNotification[] = [];
+    let sent = 0;
+    let resetToPending = 0;
+    let errors = 0;
+
+    if (config.modoEnvio === "webhook_api" && config.webhookUrl) {
+      const CONCURRENCY = 5;
+      for (let i = 0; i < targets.length; i += CONCURRENCY) {
+        const chunk = targets.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          chunk.map(async (item) => {
+            const result = await sendNotificationViaWebhook(
+              item,
+              config.webhookUrl,
+              config.webhookToken,
+            );
+            if (result.ok) {
+              sent++;
+              return {
+                ...item,
+                status: "enviado" as const,
+                sentAt: new Date().toISOString(),
+                deliveryMethod: "webhook_api" as const,
+                errorMessage: "",
+              };
+            }
+            errors++;
+            return {
+              ...item,
+              status: "erro" as const,
+              deliveryMethod: "webhook_api" as const,
+              errorMessage: result.error || "Erro ao reenviar",
+            };
+          }),
+        );
+        updatedItems.push(...results);
+      }
+    } else {
+      for (const item of targets) {
+        resetToPending++;
+        updatedItems.push({
+          ...item,
+          status: "pendente",
+          errorMessage: "",
+        });
+      }
+    }
+
+    await saveScheduleLogsBatchToStore(updatedItems);
+    broadcastUpdate("AUTO_SCHEDULE_BULK_UPDATE", {
+      action: "retry_errors",
+      total: targets.length,
+      sent,
+      resetToPending,
+      errors,
+    });
+
+    res.json({
+      success: true,
+      total: targets.length,
+      sent,
+      resetToPending,
+      errors,
+      mode: config.modoEnvio === "webhook_api" && config.webhookUrl ? "webhook_api" : "whatsapp_business",
+      items: updatedItems,
+    });
+  } catch (error: any) {
+    console.error("Error bulk retrying schedule errors:", error);
+    res.status(500).json({ error: error?.message || "Falha ao reprocessar erros da fila" });
+  }
+});
+
+app.all("/api/whatsapp-schedule/bulk-retry-errors", (_req, res) => {
+  res.status(405).json({ error: "Método não permitido. Utilize POST." });
 });
 
 app.patch("/api/whatsapp-schedule/:id", requireAdmin, async (req, res) => {

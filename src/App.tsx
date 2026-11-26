@@ -1156,6 +1156,10 @@ export default function App() {
   );
   const [isLoadingWaSchedule, setIsLoadingWaSchedule] = useState(false);
   const [isRunningWaSchedule, setIsRunningWaSchedule] = useState(false);
+  const [isBulkProcessingWaSchedule, setIsBulkProcessingWaSchedule] = useState<
+    "mark_sent" | "retry_errors" | null
+  >(null);
+  const [confirmBulkMarkSent, setConfirmBulkMarkSent] = useState(false);
   const [isSavingAutoSchedule, setIsSavingAutoSchedule] = useState(false);
   const [showWaSchedulePanel, setShowWaSchedulePanel] = useState(false);
   const [waScheduleStatusFilter, setWaScheduleStatusFilter] = useState<
@@ -1326,6 +1330,117 @@ export default function App() {
       }
     } catch (err) {
       toast.error("Erro ao remover registro.");
+    }
+  };
+
+  const handleBulkMarkWaScheduleSent = async (
+    targetItems: ScheduledWhatsAppNotification[],
+  ) => {
+    if (!adminToken || targetItems.length === 0) return;
+    setIsBulkProcessingWaSchedule("mark_sent");
+    try {
+      const res = await fetch("/api/whatsapp-schedule/bulk-mark-sent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          ids: targetItems.map((item) => item.id),
+          scope: waScheduleDateScope,
+          dateISO: waScheduleTodayISO,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (Array.isArray(data.items) && data.items.length > 0) {
+          const updatedMap = new Map<string, ScheduledWhatsAppNotification>(
+            data.items.map((it: ScheduledWhatsAppNotification) => [it.id, it]),
+          );
+          setWaScheduleLogs((prev) => prev.map((l) => updatedMap.get(l.id) || l));
+        }
+        await fetchWaSchedule();
+        const count = Number(data.updatedCount || targetItems.length);
+        toast.success(
+          count === 1
+            ? "1 notificação marcada como enviada."
+            : `${count} notificações marcadas como enviadas!`,
+        );
+      } else {
+        toast.error(
+          data.error || "Falha ao marcar notificações como enviadas.",
+        );
+      }
+    } catch {
+      toast.error("Erro de conexão ao marcar notificações como enviadas.");
+    } finally {
+      setConfirmBulkMarkSent(false);
+      setIsBulkProcessingWaSchedule(null);
+    }
+  };
+
+  const handleBulkRetryWaScheduleErrors = async (
+    errorItems: ScheduledWhatsAppNotification[],
+  ) => {
+    if (!adminToken || errorItems.length === 0) return;
+    setIsBulkProcessingWaSchedule("retry_errors");
+    try {
+      const res = await fetch("/api/whatsapp-schedule/bulk-retry-errors", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({
+          ids: errorItems.map((item) => item.id),
+          scope: waScheduleDateScope,
+          dateISO: waScheduleTodayISO,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (Array.isArray(data.items) && data.items.length > 0) {
+          const updatedMap = new Map<string, ScheduledWhatsAppNotification>(
+            data.items.map((it: ScheduledWhatsAppNotification) => [it.id, it]),
+          );
+          setWaScheduleLogs((prev) => prev.map((l) => updatedMap.get(l.id) || l));
+        }
+        await fetchWaSchedule();
+        const total = Number(data.total || 0);
+        const sent = Number(data.sent || 0);
+        const resetToPending = Number(data.resetToPending || 0);
+        const errors = Number(data.errors || 0);
+
+        if (total === 0) {
+          toast.info("Nenhum erro encontrado para reprocessar.");
+        } else if (data.mode === "webhook_api") {
+          if (sent > 0 && errors === 0) {
+            toast.success(
+              `${sent} notificação(ões) com erro reenviada(s) com sucesso!`,
+            );
+          } else if (sent > 0) {
+            toast.warning(
+              `Reprocessamento concluído: ${sent} enviada(s) e ${errors} ainda com erro.`,
+            );
+          } else {
+            toast.error(
+              `Nenhuma notificação enviada (${errors} erro(s) persistiram).`,
+            );
+          }
+        } else if (resetToPending > 0) {
+          toast.success(
+            `${resetToPending} item(ns) com erro retornado(s) para Pendentes.`,
+          );
+          setWaScheduleStatusFilter("pendente");
+        }
+      } else {
+        toast.error(data.error || "Falha ao reprocessar erros da fila.");
+      }
+    } catch {
+      toast.error("Erro de conexão ao reprocessar erros.");
+    } finally {
+      setConfirmBulkMarkSent(false);
+      setIsBulkProcessingWaSchedule(null);
     }
   };
 
@@ -16300,13 +16415,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 const autoCfg = normalizeAutoScheduleConfig(
                   adminSettings.autoScheduleConfig,
                 );
-                const visibleScheduleLogs = waScheduleLogs.filter((l) => {
+                const scopedScheduleLogs = waScheduleLogs.filter((l) => {
                   if (
                     waScheduleDateScope === "hoje" &&
                     l.dateISO !== waScheduleTodayISO
                   ) {
                     return false;
                   }
+                  return true;
+                });
+                const visibleScheduleLogs = scopedScheduleLogs.filter((l) => {
                   if (
                     waScheduleStatusFilter !== "all" &&
                     l.status !== waScheduleStatusFilter
@@ -16318,6 +16436,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 const pendingForDispatch = visibleScheduleLogs.filter(
                   (l) => l.status === "pendente",
                 );
+                const errorsInScope = scopedScheduleLogs.filter(
+                  (l) => l.status === "erro",
+                );
+                const bulkMarkSentTargets =
+                  waScheduleStatusFilter === "erro"
+                    ? errorsInScope
+                    : waScheduleStatusFilter === "all"
+                      ? scopedScheduleLogs.filter(
+                          (l) => l.status === "pendente" || l.status === "erro",
+                        )
+                      : scopedScheduleLogs.filter((l) => l.status === "pendente");
                 const situacaoLabel: Record<string, string> = {
                   vence_hoje: "Vence Hoje",
                   pre_vencimento: "Pré-Vencimento",
@@ -16433,7 +16562,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             <div className="flex items-center gap-1 p-0.5 bg-white border border-slate-200 rounded-lg">
                               <button
                                 type="button"
-                                onClick={() => setWaScheduleDateScope("hoje")}
+                                onClick={() => {
+                                  setWaScheduleDateScope("hoje");
+                                  setConfirmBulkMarkSent(false);
+                                }}
                                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                                   waScheduleDateScope === "hoje"
                                     ? "bg-slate-800 text-white"
@@ -16444,7 +16576,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setWaScheduleDateScope("todos")}
+                                onClick={() => {
+                                  setWaScheduleDateScope("todos");
+                                  setConfirmBulkMarkSent(false);
+                                }}
                                 className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                                   waScheduleDateScope === "todos"
                                     ? "bg-slate-800 text-white"
@@ -16457,9 +16592,10 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
 
                             <select
                               value={waScheduleStatusFilter}
-                              onChange={(e) =>
-                                setWaScheduleStatusFilter(e.target.value as any)
-                              }
+                              onChange={(e) => {
+                                setWaScheduleStatusFilter(e.target.value as any);
+                                setConfirmBulkMarkSent(false);
+                              }}
                               className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg outline-none"
                             >
                               <option value="pendente">Pendentes</option>
@@ -16485,19 +16621,89 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             </button>
                           </div>
 
-                          {pendingForDispatch.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                startBatchWaDispatcher(pendingForDispatch)
-                              }
-                              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shadow-xs"
-                            >
-                              <Send size={13} />
-                              Disparo Sequencial ({pendingForDispatch.length}{" "}
-                              pendente{pendingForDispatch.length === 1 ? "" : "s"})
-                            </button>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            {errorsInScope.length > 0 && (
+                              <button
+                                id="btn-bulk-retry-wa-errors"
+                                type="button"
+                                disabled={isBulkProcessingWaSchedule !== null}
+                                onClick={() =>
+                                  handleBulkRetryWaScheduleErrors(errorsInScope)
+                                }
+                                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-800 bg-blue-100 hover:bg-blue-200 border border-blue-200 disabled:opacity-60 rounded-lg transition-colors"
+                                title="Reprocessar todas as notificações com erro neste período"
+                              >
+                                <RotateCcw
+                                  size={13}
+                                  className={
+                                    isBulkProcessingWaSchedule === "retry_errors"
+                                      ? "animate-spin"
+                                      : ""
+                                  }
+                                />
+                                {isBulkProcessingWaSchedule === "retry_errors"
+                                  ? "Reprocessando..."
+                                  : `Reprocessar Erros (${errorsInScope.length})`}
+                              </button>
+                            )}
+
+                            {bulkMarkSentTargets.length > 0 && (
+                              confirmBulkMarkSent ? (
+                                <div className="inline-flex items-center gap-1.5 bg-white border border-emerald-300 rounded-lg p-1 shadow-xs">
+                                  <button
+                                    id="btn-confirm-bulk-mark-sent"
+                                    type="button"
+                                    disabled={isBulkProcessingWaSchedule !== null}
+                                    onClick={() =>
+                                      handleBulkMarkWaScheduleSent(
+                                        bulkMarkSentTargets,
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-md transition-colors"
+                                  >
+                                    <CheckCheck size={13} />
+                                    {isBulkProcessingWaSchedule === "mark_sent"
+                                      ? "Salvando..."
+                                      : `Confirmar (${bulkMarkSentTargets.length})`}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isBulkProcessingWaSchedule !== null}
+                                    onClick={() => setConfirmBulkMarkSent(false)}
+                                    className="px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 rounded-md transition-colors"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  id="btn-bulk-mark-sent"
+                                  type="button"
+                                  disabled={isBulkProcessingWaSchedule !== null}
+                                  onClick={() => setConfirmBulkMarkSent(true)}
+                                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-200 disabled:opacity-60 rounded-lg transition-colors"
+                                  title="Marcar todas as notificações exibidas (pendentes/com erro) como enviadas"
+                                >
+                                  <CheckCheck size={13} />
+                                  Marcar Todas como Enviadas ({bulkMarkSentTargets.length})
+                                </button>
+                              )
+                            )}
+
+                            {pendingForDispatch.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  startBatchWaDispatcher(pendingForDispatch)
+                                }
+                                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] rounded-lg transition-colors shadow-xs"
+                              >
+                                <Send size={13} />
+                                Disparo Sequencial ({pendingForDispatch.length}{" "}
+                                pendente{pendingForDispatch.length === 1 ? "" : "s"})
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {visibleScheduleLogs.length > 0 ? (
