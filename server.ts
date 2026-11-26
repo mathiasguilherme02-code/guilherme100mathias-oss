@@ -55,7 +55,8 @@ try {
   if (existsSync(serviceAccountPath)) {
     serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf8'));
   } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT === 'string' ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT) : process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
+    const rawEnvSa = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
+    serviceAccount = typeof rawEnvSa === 'string' ? JSON.parse(rawEnvSa) : rawEnvSa;
   } else {
     serviceAccount = embeddedFallbackServiceAccount;
   }
@@ -245,16 +246,39 @@ app.use('/api/settings', checkFirebaseConfig);
 
 // --- PRODUTOS API ---
 
+const PRODUTOS_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedProdutosList: any[] | null = null;
+let lastKnownProdutosList: any[] | null = null;
+let lastProdutosFetchTime = 0;
+
+function invalidateProdutosCache() {
+  cachedProdutosList = null;
+  lastProdutosFetchTime = 0;
+}
+
 app.get("/api/produtos", async (req, res) => {
   try {
     if (!db) {
       return res.json(mockProdutos);
     }
+    const now = Date.now();
+    if (cachedProdutosList && now - lastProdutosFetchTime < PRODUTOS_CACHE_TTL_MS) {
+      return res.json(cachedProdutosList);
+    }
     const querySnapshot = await db.collection("produtos").get();
     const produtos = querySnapshot.docs.map((doc: any) => ({ ...doc.data(), id: doc.id }));
+    cachedProdutosList = produtos;
+    lastKnownProdutosList = produtos;
+    lastProdutosFetchTime = now;
     res.json(produtos);
   } catch (error) {
     console.error("Error fetching produtos:", error);
+    if (lastKnownProdutosList) {
+      return res.json(lastKnownProdutosList);
+    }
+    if (Array.isArray(mockProdutos) && mockProdutos.length > 0) {
+      return res.json(mockProdutos);
+    }
     res.status(500).json({ error: "Falha ao buscar produtos" });
   }
 });
@@ -281,6 +305,7 @@ app.post("/api/produtos", requireAdmin, async (req, res) => {
     }
 
     const docRef = await addDoc(collection(db, "produtos"), produto);
+    invalidateProdutosCache();
     res.json({ id: docRef.id, ...produto });
   } catch (error) {
     console.error("Error adding produto:", error);
@@ -311,6 +336,7 @@ app.put("/api/produtos/:id", requireAdmin, async (req, res) => {
     }
 
     await updateDoc(doc(db, "produtos", id), produto);
+    invalidateProdutosCache();
     res.json({ id, ...produto });
   } catch (error) {
     console.error("Error updating produto:", error);
@@ -326,6 +352,7 @@ app.delete("/api/produtos/:id", requireAdmin, async (req, res) => {
       return res.json({ success: true });
     }
     await db.collection("produtos").doc(id).delete();
+    invalidateProdutosCache();
     res.json({ success: true });
   } catch (error) {
     console.error("Error deleting produto:", error);
@@ -1248,6 +1275,7 @@ app.post("/api/chat/:clientId", async (req, res) => {
     }
 
     await setDoc(chatDocRef, updateData, { merge: true });
+    invalidateChatsCache();
 
     broadcastUpdate('CHAT_UPDATE', { clientId, newMessage: true, sender });
     res.json({ id: docRef.id, ...message });
@@ -1282,6 +1310,7 @@ app.put("/api/chat/:clientId/read", async (req, res) => {
       });
       await batch.commit();
     }
+    invalidateChatsCache();
     
     broadcastUpdate('CHAT_READ', { clientId, reader });
     res.json({ success: true });
@@ -1291,18 +1320,38 @@ app.put("/api/chat/:clientId/read", async (req, res) => {
   }
 });
 
+const CHATS_CACHE_TTL_MS = 2 * 60 * 1000;
+let cachedChatsList: any[] | null = null;
+let lastKnownChatsList: any[] | null = null;
+let lastChatsFetchTime = 0;
+
+function invalidateChatsCache() {
+  cachedChatsList = null;
+  lastChatsFetchTime = 0;
+}
+
 // Get all chats summary for admin
 app.get("/api/chats", requireAdmin, async (req, res) => {
   try {
     if (!db) {
       return res.json([]);
     }
+    const now = Date.now();
+    if (cachedChatsList && now - lastChatsFetchTime < CHATS_CACHE_TTL_MS) {
+      return res.json(cachedChatsList);
+    }
     const q = query(collection(db, "chats"), orderBy("lastMessageTimestamp", "desc"));
     const querySnapshot = await getDocs(q);
     const chats = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    cachedChatsList = chats;
+    lastKnownChatsList = chats;
+    lastChatsFetchTime = now;
     res.json(chats);
   } catch (error) {
     console.error("Error fetching chats:", error);
+    if (lastKnownChatsList) {
+      return res.json(lastKnownChatsList);
+    }
     res.status(500).json({ error: "Falha ao buscar chats" });
   }
 });
@@ -1316,6 +1365,7 @@ app.delete("/api/chat/:clientId/messages/:messageId", requireAdmin, async (req, 
     const { clientId, messageId } = req.params;
     
     await deleteDoc(doc(db, "chats", clientId, "messages", messageId));
+    invalidateChatsCache();
     
     broadcastUpdate('CHAT_UPDATE', { clientId });
     res.json({ success: true });
@@ -1347,6 +1397,7 @@ app.delete("/api/chat/:clientId", requireAdmin, async (req, res) => {
     
     // Delete the chat summary document
     await deleteDoc(doc(db, "chats", clientId));
+    invalidateChatsCache();
     
     broadcastUpdate('CHAT_UPDATE', { clientId });
     res.json({ success: true });
@@ -1606,6 +1657,16 @@ const loadAllClientsForSchedule = async (): Promise<any[]> => {
   }
 };
 
+const SCHEDULE_LOGS_CACHE_TTL_MS = 2 * 60 * 1000;
+let cachedScheduleLogs: ScheduledWhatsAppNotification[] | null = null;
+let lastKnownScheduleLogs: ScheduledWhatsAppNotification[] | null = null;
+let lastScheduleLogsFetchTime = 0;
+
+function invalidateScheduleLogsCache() {
+  cachedScheduleLogs = null;
+  lastScheduleLogsFetchTime = 0;
+}
+
 const loadScheduleLogsFromStore = async (): Promise<ScheduledWhatsAppNotification[]> => {
   if (!db) {
     return [...mockScheduleLogs].sort((a, b) =>
@@ -1613,12 +1674,27 @@ const loadScheduleLogsFromStore = async (): Promise<ScheduledWhatsAppNotificatio
       (b.createdAt || "").localeCompare(a.createdAt || "")
     );
   }
-  const snap = await db
-    .collection("whatsapp_schedule_logs")
-    .orderBy("createdAt", "desc")
-    .limit(400)
-    .get();
-  return snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as ScheduledWhatsAppNotification));
+  const now = Date.now();
+  if (cachedScheduleLogs && now - lastScheduleLogsFetchTime < SCHEDULE_LOGS_CACHE_TTL_MS) {
+    return cachedScheduleLogs;
+  }
+  try {
+    const snap = await db
+      .collection("whatsapp_schedule_logs")
+      .orderBy("createdAt", "desc")
+      .limit(400)
+      .get();
+    const list = snap.docs.map((d: any) => ({ ...d.data(), id: d.id } as ScheduledWhatsAppNotification));
+    cachedScheduleLogs = list;
+    lastKnownScheduleLogs = list;
+    lastScheduleLogsFetchTime = now;
+    return list;
+  } catch (err) {
+    if (lastKnownScheduleLogs) {
+      return lastKnownScheduleLogs;
+    }
+    throw err;
+  }
 };
 
 const saveScheduleLogToStore = async (item: ScheduledWhatsAppNotification) => {
@@ -1637,6 +1713,7 @@ const saveScheduleLogToStore = async (item: ScheduledWhatsAppNotification) => {
     return;
   }
   await setDoc(doc(db, "whatsapp_schedule_logs", item.id), sanitized, { merge: true });
+  invalidateScheduleLogsCache();
 };
 
 const sendNotificationViaWebhook = async (
@@ -2675,6 +2752,7 @@ app.delete("/api/whatsapp-schedule/:id", requireAdmin, async (req, res) => {
       return res.json({ success: true });
     }
     await deleteDoc(doc(db, "whatsapp_schedule_logs", id));
+    invalidateScheduleLogsCache();
     res.json({ success: true });
   } catch (error) {
     console.error("Error deleting schedule log:", error);
