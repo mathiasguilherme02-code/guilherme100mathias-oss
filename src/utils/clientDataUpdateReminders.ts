@@ -143,12 +143,16 @@ export const evaluateClientsDueForDataUpdate = (
   });
 };
 
+export const DEFAULT_DATA_UPDATE_TEMPLATE =
+  "Olá, {cliente}! A GM-Empréstimo informa que completou {meses} meses desde {referencia}.\n\nPara manter seu cadastro ativo e atualizado para novas solicitações, acesse a Área do Cliente com seu CPF e clique em *\"Atualizar Cadastro\"*, ou envie seus dados atualizados por aqui.\n\n*GM-Empréstimo*";
+
 export const buildClientDataUpdateWhatsAppMessage = (
   clientName: string,
   status: Pick<
     ClientDataUpdateStatus,
     "referenceDateBR" | "intervalMonths" | "hasExplicitUpdateDate"
   >,
+  customTemplate?: string,
 ): string => {
   const firstName =
     String(clientName || "")
@@ -157,9 +161,14 @@ export const buildClientDataUpdateWhatsAppMessage = (
   const acaoRef = status.hasExplicitUpdateDate
     ? `última atualização cadastral em ${status.referenceDateBR}`
     : `seu cadastro realizado em ${status.referenceDateBR}`;
-  return (
-    `Olá, ${firstName}! A GM-Empréstimo informa que completou ${status.intervalMonths} meses desde ${acaoRef}.\n\n` +
-    `Para manter seu cadastro ativo e atualizado para novas solicitações, acesse a Área do Cliente com seu CPF e clique em *"Atualizar Cadastro"*, ou envie seus dados atualizados por aqui.\n\n` +
-    `*GM-Empréstimo*`
-  );
+  const template =
+    customTemplate && customTemplate.trim().length > 0
+      ? customTemplate
+      : DEFAULT_DATA_UPDATE_TEMPLATE;
+
+  return template
+    .replace(/\{cliente\}|\{nome\}/gi, firstName)
+    .replace(/\{meses\}/gi, String(status.intervalMonths))
+    .replace(/\{referencia\}/gi, acaoRef)
+    .replace(/\{data_ref\}|\{data\}/gi, status.referenceDateBR);
 };

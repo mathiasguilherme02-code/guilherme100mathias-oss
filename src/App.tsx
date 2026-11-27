@@ -100,6 +100,7 @@ import {
   WhatsAppTemplatesControlPanel,
   WaDynamicTagItem,
 } from "./components/WhatsAppTemplatesControlPanel";
+import { CentralizedReminderTemplatesSection } from "./components/CentralizedReminderTemplatesSection";
 import {
   DEFAULT_PUSH_CONFIG,
   normalizePushConfig,
@@ -122,6 +123,7 @@ import {
 } from "./utils/pushNotifications";
 import {
   ClientDataUpdateStatus,
+  DEFAULT_DATA_UPDATE_TEMPLATE,
   evaluateClientDataUpdateStatus,
   evaluateClientsDueForDataUpdate,
   buildClientDataUpdateWhatsAppMessage,
@@ -1110,6 +1112,7 @@ export default function App() {
     diasLembreteAntecipado: "3",
     whatsappAppMode: "business" as "business" | "padrao",
     ...DEFAULT_WHATSAPP_TEMPLATES,
+    msgLembreteRecadastro: DEFAULT_DATA_UPDATE_TEMPLATE,
     msgTelefones: {} as Partial<Record<WaTemplateKey, string>>,
     customWhatsAppTemplates: [] as CustomWhatsAppTemplate[],
     autoScheduleConfig: { ...DEFAULT_AUTO_SCHEDULE_CONFIG } as AutoScheduleConfig,
@@ -1168,6 +1171,9 @@ export default function App() {
       msgLembreteCongelado: String(s?.msgLembreteCongelado ?? ""),
       msgLembreteConfirmacao: String(s?.msgLembreteConfirmacao ?? ""),
       msgLembreteVencido: String(s?.msgLembreteVencido ?? ""),
+      msgLembreteRecadastro: String(
+        s?.msgLembreteRecadastro ?? DEFAULT_DATA_UPDATE_TEMPLATE,
+      ),
       msgTelefones:
         s?.msgTelefones &&
         typeof s.msgTelefones === "object" &&
@@ -2567,6 +2573,7 @@ export default function App() {
                 msgLembreteCongelado: prev.msgLembreteCongelado,
                 msgLembreteConfirmacao: prev.msgLembreteConfirmacao,
                 msgLembreteVencido: prev.msgLembreteVencido,
+                msgLembreteRecadastro: prev.msgLembreteRecadastro,
                 msgTelefones: prev.msgTelefones,
                 customWhatsAppTemplates: prev.customWhatsAppTemplates,
               };
@@ -10802,13 +10809,127 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   currentTemplateValue,
                 );
 
+                const handleSaveReminderTemplates = async () => {
+                  setIsSavingWaSettings(true);
+                  try {
+                    const normalizedDias = String(
+                      Math.min(
+                        60,
+                        Math.max(
+                          1,
+                          parseInt(
+                            String(adminSettings.diasLembreteAntecipado || "3"),
+                            10,
+                          ) || 3,
+                        ),
+                      ),
+                    );
+                    const payloadToSave = {
+                      ...adminSettings,
+                      diasLembreteAntecipado: normalizedDias,
+                    };
+                    setAdminSettings(payloadToSave);
+                    const res = await fetch("/api/settings", {
+                      method: "PUT",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${adminToken}`,
+                      },
+                      body: JSON.stringify(payloadToSave),
+                    });
+                    if (res.ok) {
+                      const data = await res.json().catch(() => ({}));
+                      setLastSavedWaSnapshot(
+                        extractWaSettingsSnapshot(payloadToSave),
+                      );
+                      if (data.refreshedQueueCount > 0) {
+                        fetchWaSchedule();
+                        toast.success(
+                          `Modelos salvos! ${data.refreshedQueueCount} mensagem(ns) pendente(s) na fila de hoje foram atualizadas.`,
+                        );
+                      } else {
+                        toast.success(
+                          "Modelos de texto de lembretes salvos com sucesso!",
+                        );
+                      }
+                    } else {
+                      toast.error("Erro ao salvar modelos de mensagem.");
+                    }
+                  } catch {
+                    toast.error("Erro ao salvar modelos de mensagem.");
+                  } finally {
+                    setIsSavingWaSettings(false);
+                  }
+                };
+
                 return (
-                  <WhatsAppTemplatesControlPanel
-                    templateOptions={WA_TEMPLATE_OPTIONS}
-                    dynamicTags={WA_DYNAMIC_TAGS}
-                    activeKey={activeWaTemplateKey}
-                    onSelectKey={(k) => setActiveWaTemplateKey(k)}
-                    templateRef={waTemplateRef}
+                  <>
+                    <CentralizedReminderTemplatesSection
+                      values={{
+                        msgLembreteAVencer:
+                          adminSettings.msgLembreteAVencer || "",
+                        msgLembretePreVencimento:
+                          adminSettings.msgLembretePreVencimento || "",
+                        msgLembreteVenceHoje:
+                          adminSettings.msgLembreteVenceHoje || "",
+                        msgLembreteCongelado:
+                          adminSettings.msgLembreteCongelado || "",
+                        msgLembreteVencido:
+                          adminSettings.msgLembreteVencido || "",
+                        msgLembreteConfirmacao:
+                          adminSettings.msgLembreteConfirmacao || "",
+                        msgLembreteRecadastro:
+                          adminSettings.msgLembreteRecadastro ??
+                          DEFAULT_DATA_UPDATE_TEMPLATE,
+                      }}
+                      customTemplates={customTemplates}
+                      overridingCustomByKey={overridingCustomByKey}
+                      hasUnsavedChanges={hasUnsavedWaChanges}
+                      isSaving={isSavingWaSettings}
+                      onChangeTemplate={(key, text) =>
+                        setAdminSettings((prev) => ({
+                          ...prev,
+                          [key]: text,
+                        }))
+                      }
+                      onChangeCustomTemplateText={(id, text) =>
+                        setAdminSettings((prev) => ({
+                          ...prev,
+                          customWhatsAppTemplates: (
+                            prev.customWhatsAppTemplates || []
+                          ).map((t) => (t.id === id ? { ...t, text } : t)),
+                        }))
+                      }
+                      onRestoreDefault={(key) => {
+                        const defaultVal =
+                          key === "msgLembreteRecadastro"
+                            ? DEFAULT_DATA_UPDATE_TEMPLATE
+                            : DEFAULT_WHATSAPP_TEMPLATES[key];
+                        setAdminSettings((prev) => ({
+                          ...prev,
+                          [key]: defaultVal,
+                        }));
+                        toast.info("Modelo restaurado para o texto padrão.");
+                      }}
+                      onRestoreAllDefaults={() => {
+                        setAdminSettings((prev) => ({
+                          ...prev,
+                          ...DEFAULT_WHATSAPP_TEMPLATES,
+                          msgLembreteRecadastro: DEFAULT_DATA_UPDATE_TEMPLATE,
+                        }));
+                        toast.info(
+                          "Todos os modelos padrão restaurados! Clique em Salvar Modelos de Texto para confirmar.",
+                        );
+                      }}
+                      onSaveAll={handleSaveReminderTemplates}
+                    />
+
+                    <WhatsAppTemplatesControlPanel
+                      templateOptions={WA_TEMPLATE_OPTIONS}
+                      dynamicTags={WA_DYNAMIC_TAGS}
+                      activeKey={activeWaTemplateKey}
+                      onSelectKey={(k) => setActiveWaTemplateKey(k)}
+                      templateRef={waTemplateRef}
                     values={{
                       msgLembreteAVencer: adminSettings.msgLembreteAVencer || "",
                       msgLembretePreVencimento:
@@ -10928,58 +11049,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         "Campo removido. Clique em Salvar Mensagens para confirmar.",
                       );
                     }}
-                    onSaveAll={async () => {
-                      setIsSavingWaSettings(true);
-                      try {
-                        const normalizedDias = String(
-                          Math.min(
-                            60,
-                            Math.max(
-                              1,
-                              parseInt(
-                                String(adminSettings.diasLembreteAntecipado || "3"),
-                                10,
-                              ) || 3,
-                            ),
-                          ),
-                        );
-                        const payloadToSave = {
-                          ...adminSettings,
-                          diasLembreteAntecipado: normalizedDias,
-                        };
-                        setAdminSettings(payloadToSave);
-                        const res = await fetch("/api/settings", {
-                          method: "PUT",
-                          headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${adminToken}`,
-                          },
-                          body: JSON.stringify(payloadToSave),
-                        });
-                        if (res.ok) {
-                          const data = await res.json().catch(() => ({}));
-                          setLastSavedWaSnapshot(
-                            extractWaSettingsSnapshot(payloadToSave),
-                          );
-                          if (data.refreshedQueueCount > 0) {
-                            fetchWaSchedule();
-                            toast.success(
-                              `Modelos salvos! ${data.refreshedQueueCount} mensagem(ns) pendente(s) na fila de hoje foram atualizadas.`,
-                            );
-                          } else {
-                            toast.success(
-                              "Modelos padrão de WhatsApp salvos com sucesso!",
-                            );
-                          }
-                        } else {
-                          toast.error("Erro ao salvar modelos de mensagem.");
-                        }
-                      } catch {
-                        toast.error("Erro ao salvar modelos de mensagem.");
-                      } finally {
-                        setIsSavingWaSettings(false);
-                      }
-                    }}
+                    onSaveAll={handleSaveReminderTemplates}
                     isSaving={isSavingWaSettings}
                     hasUnsavedChanges={hasUnsavedWaChanges}
                     overridingCustomByKey={overridingCustomByKey}
@@ -11048,6 +11118,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     }
                     formatWhatsAppHref={formatWhatsAppHref}
                   />
+                  </>
                 );
               })()}
 
@@ -12743,6 +12814,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       const waMsg = buildClientDataUpdateWhatsAppMessage(
                         selectedClient.nomeCompleto,
                         upd,
+                        adminSettings.msgLembreteRecadastro,
                       );
                       return (
                         <div
@@ -17312,6 +17384,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                               const waMsg = buildClientDataUpdateWhatsAppMessage(
                                 item.clientName,
                                 item,
+                                adminSettings.msgLembreteRecadastro,
                               );
                               return (
                                 <tr

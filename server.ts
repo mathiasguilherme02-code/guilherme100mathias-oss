@@ -31,6 +31,7 @@ import {
   isTimeInQuietWindow,
 } from './src/utils/pushNotifications';
 import {
+  DEFAULT_DATA_UPDATE_TEMPLATE,
   evaluateClientsDueForDataUpdate,
 } from './src/utils/clientDataUpdateReminders';
 
@@ -554,6 +555,7 @@ const buildDefaultSettings = () => ({
   tipoTaxa: 'mensal',
   diasLembreteAntecipado: '3',
   ...DEFAULT_WHATSAPP_TEMPLATES,
+  msgLembreteRecadastro: DEFAULT_DATA_UPDATE_TEMPLATE,
   msgTelefones: {} as Record<string, string>,
   customWhatsAppTemplates: [] as any[],
   whatsappAppMode: 'business',
@@ -662,6 +664,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       msgLembreteCongelado,
       msgLembreteConfirmacao,
       msgLembreteVencido,
+      msgLembreteRecadastro,
       msgTelefones,
       customWhatsAppTemplates,
       whatsappAppMode,
@@ -738,6 +741,7 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
       ...(msgLembreteCongelado !== undefined ? { msgLembreteCongelado } : {}),
       ...(msgLembreteConfirmacao !== undefined ? { msgLembreteConfirmacao } : {}),
       ...(msgLembreteVencido !== undefined ? { msgLembreteVencido } : {}),
+      ...(msgLembreteRecadastro !== undefined ? { msgLembreteRecadastro } : {}),
       ...(msgTelefones && typeof msgTelefones === 'object' && !Array.isArray(msgTelefones)
         ? {
             msgTelefones: Object.fromEntries(
