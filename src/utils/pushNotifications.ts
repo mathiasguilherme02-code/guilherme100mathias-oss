@@ -2,6 +2,8 @@ export interface PushNotificationConfig {
   enabled: boolean;
   notifyNewClients: boolean;
   notifyPaymentReminders: boolean;
+  notifyClientDataUpdateReminders: boolean;
+  clientDataUpdateMonths: number;
   horarioLembretePush: string;
   incluirPreVencimento: boolean;
   incluirVenceHoje: boolean;
@@ -9,12 +11,15 @@ export interface PushNotificationConfig {
   incluirCongelado7Dias: boolean;
   lastReminderPushDate: string;
   lastReminderPushAt: string;
+  lastDataUpdatePushDate: string;
 }
 
 export const DEFAULT_PUSH_CONFIG: PushNotificationConfig = {
   enabled: true,
   notifyNewClients: true,
   notifyPaymentReminders: true,
+  notifyClientDataUpdateReminders: true,
+  clientDataUpdateMonths: 3,
   horarioLembretePush: "09:00",
   incluirPreVencimento: true,
   incluirVenceHoje: true,
@@ -22,6 +27,7 @@ export const DEFAULT_PUSH_CONFIG: PushNotificationConfig = {
   incluirCongelado7Dias: true,
   lastReminderPushDate: "",
   lastReminderPushAt: "",
+  lastDataUpdatePushDate: "",
 };
 
 export function normalizePushConfig(raw: any): PushNotificationConfig {
@@ -31,6 +37,11 @@ export function normalizePushConfig(raw: any): PushNotificationConfig {
     /^\d{2}:\d{2}$/.test(src.horarioLembretePush)
       ? src.horarioLembretePush
       : DEFAULT_PUSH_CONFIG.horarioLembretePush;
+  const parsedMonths = parseInt(String(src.clientDataUpdateMonths ?? ""), 10);
+  const clientDataUpdateMonths =
+    Number.isFinite(parsedMonths) && parsedMonths >= 1 && parsedMonths <= 24
+      ? parsedMonths
+      : DEFAULT_PUSH_CONFIG.clientDataUpdateMonths;
   return {
     enabled:
       src.enabled !== undefined
@@ -44,6 +55,11 @@ export function normalizePushConfig(raw: any): PushNotificationConfig {
       src.notifyPaymentReminders !== undefined
         ? Boolean(src.notifyPaymentReminders)
         : DEFAULT_PUSH_CONFIG.notifyPaymentReminders,
+    notifyClientDataUpdateReminders:
+      src.notifyClientDataUpdateReminders !== undefined
+        ? Boolean(src.notifyClientDataUpdateReminders)
+        : DEFAULT_PUSH_CONFIG.notifyClientDataUpdateReminders,
+    clientDataUpdateMonths,
     horarioLembretePush: horario,
     incluirPreVencimento:
       src.incluirPreVencimento !== undefined
@@ -68,6 +84,10 @@ export function normalizePushConfig(raw: any): PushNotificationConfig {
     lastReminderPushAt:
       typeof src.lastReminderPushAt === "string"
         ? src.lastReminderPushAt
+        : "",
+    lastDataUpdatePushDate:
+      typeof src.lastDataUpdatePushDate === "string"
+        ? src.lastDataUpdatePushDate
         : "",
   };
 }

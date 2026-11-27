@@ -551,6 +551,53 @@ export const PushNotificationPanel: React.FC<PushNotificationPanelProps> = ({
                 </p>
               )}
             </div>
+
+            <div className="p-2.5 rounded-lg border border-indigo-200 bg-indigo-50/50 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pushConfig.notifyClientDataUpdateReminders}
+                    onChange={(e) =>
+                      onUpdateConfig({
+                        notifyClientDataUpdateReminders: e.target.checked,
+                      })
+                    }
+                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs font-bold text-slate-800">
+                    Atualização Cadastral de Clientes (Recadastro)
+                  </span>
+                </label>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-slate-600">A cada</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={pushConfig.clientDataUpdateMonths}
+                    onChange={(e) => {
+                      const val = Math.min(
+                        24,
+                        Math.max(1, parseInt(e.target.value || "3", 10) || 3),
+                      );
+                      onUpdateConfig({ clientDataUpdateMonths: val });
+                    }}
+                    className="w-14 px-2 py-0.5 text-xs font-bold text-slate-800 bg-white border border-slate-300 rounded outline-none tabular-nums text-center"
+                  />
+                  <span className="text-[11px] text-slate-600">mes(es)</span>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-600 pl-6 leading-relaxed">
+                Lembra o administrador automaticamente quando completar{" "}
+                <strong>{pushConfig.clientDataUpdateMonths} mês(es)</strong> do
+                cadastro do cliente (ou da última atualização confirmada). Ao
+                atualizar os dados ou confirmar na ficha, o ciclo reinicia para
+                os próximos {pushConfig.clientDataUpdateMonths} mês(es).
+              </p>
+            </div>
           </div>
 
           {/* Dispositivos Inscritos */}

@@ -30,6 +30,9 @@ import {
   normalizeQuietHoursConfig,
   isTimeInQuietWindow,
 } from './src/utils/pushNotifications';
+import {
+  evaluateClientsDueForDataUpdate,
+} from './src/utils/clientDataUpdateReminders';
 
 dotenv.config();
 
@@ -697,6 +700,10 @@ app.put("/api/settings", requireAdmin, async (req, res) => {
             pushConfig.lastReminderPushAt !== undefined
               ? pushConfig.lastReminderPushAt
               : currentSettings.pushConfig?.lastReminderPushAt || "",
+          lastDataUpdatePushDate:
+            pushConfig.lastDataUpdatePushDate !== undefined
+              ? pushConfig.lastDataUpdatePushDate
+              : currentSettings.pushConfig?.lastDataUpdatePushDate || "",
         })
       : currentSettings.pushConfig;
 
@@ -1148,8 +1155,30 @@ app.put("/api/clients/:id", async (req, res) => {
        client.arquivos = existingArquivos;
     }
     
+    const prevDataSnapshot = docSnap.exists() ? docSnap.data() : null;
+    let prevDadosObj: any = {};
+    if (prevDataSnapshot?.dados) {
+      if (typeof prevDataSnapshot.dados === "string") {
+        try {
+          prevDadosObj = JSON.parse(prevDataSnapshot.dados);
+        } catch {
+          prevDadosObj = {};
+        }
+      } else if (typeof prevDataSnapshot.dados === "object") {
+        prevDadosObj = prevDataSnapshot.dados;
+      }
+    }
+
+    const existingUpdateDate =
+      prevDadosObj?.dataAtualizacaoDados || prevDataSnapshot?.dataAtualizacaoDados || "";
+
     let updateData = {
-      ...client
+      ...client,
+      ...(client.dataAtualizacaoDados
+        ? { dataAtualizacaoDados: String(client.dataAtualizacaoDados).slice(0, 64) }
+        : existingUpdateDate
+          ? { dataAtualizacaoDados: String(existingUpdateDate).slice(0, 64) }
+          : {}),
     };
     
     // Convert date if present
@@ -1163,7 +1192,7 @@ app.put("/api/clients/:id", async (req, res) => {
     const sanitized = sanitizeForFirestore(updateData);
     
     // we want to nest everything except top level fields in 'dados' to match the existing schema
-    const topLevelFields = ['id', 'nomeCompleto', 'cpf', 'dataCadastro', 'arquivos'];
+    const topLevelFields = ['id', 'nomeCompleto', 'cpf', 'dataCadastro', 'dataAtualizacaoDados', 'arquivos'];
     const dados: any = {};
     const finalData: any = {};
     for (const key of Object.keys(sanitized)) {
@@ -1177,12 +1206,8 @@ app.put("/api/clients/:id", async (req, res) => {
 
     if (docSnap.exists()) {
       try {
-        const prevData = docSnap.data();
-        let prevDados = prevData.dados;
-        if (typeof prevDados === 'string') {
-          try { prevDados = JSON.parse(prevDados); } catch (e) {}
-        }
-        const prevSims = prevDados?.simulacoes || prevData.simulacoes || [];
+        const prevData = prevDataSnapshot;
+        const prevSims = prevDadosObj?.simulacoes || prevData.simulacoes || [];
         const newSims = dados.simulacoes || finalData.simulacoes || [];
         if (prevSims.length > newSims.length || prevSims.some((ps: any, idx: number) => ps.anotacoes && !newSims[idx]?.anotacoes)) {
           const now = new Date();
@@ -1204,10 +1229,82 @@ app.put("/api/clients/:id", async (req, res) => {
     
     invalidateClientsCache();
     broadcastUpdate('UPDATE_CLIENTS');
+    if (!isAdmin) {
+      broadcastUpdate('CLIENT_DATA_UPDATED', {
+        id,
+        nomeCompleto: finalData.nomeCompleto || prevDataSnapshot?.nomeCompleto || "Cliente",
+        cpf: finalData.cpf || prevDataSnapshot?.cpf || "",
+        dataAtualizacaoDados: finalData.dataAtualizacaoDados || new Date().toISOString(),
+        timestamp: new Date().toISOString(),
+      });
+    }
     res.json({ success: true });
   } catch (error) {
     console.error("Error updating client:", error);
     res.status(500).json({ error: "Falha ao atualizar cliente" });
+  }
+});
+
+// Confirm Client Data Update (resets 3-month reminder cycle) (Protected)
+app.post("/api/clients/:id/confirm-data-update", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || typeof id !== "string" || id.includes("/")) {
+      return res.status(400).json({ error: "ID de cliente inválido" });
+    }
+    const nowISO = new Date().toISOString();
+
+    if (!db) {
+      const idx = mockClients.findIndex((c) => c.id === id);
+      if (idx === -1) {
+        return res.status(404).json({ error: "Cliente não encontrado" });
+      }
+      mockClients[idx] = {
+        ...mockClients[idx],
+        dataAtualizacaoDados: nowISO,
+      };
+      syncData();
+      invalidateClientsCache();
+      broadcastUpdate("UPDATE_CLIENTS");
+      return res.json({ success: true, dataAtualizacaoDados: nowISO });
+    }
+
+    const docRef = doc(db, "clients", id);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) {
+      return res.status(404).json({ error: "Cliente não encontrado" });
+    }
+
+    const prevData = docSnap.data();
+    let prevDados: any = {};
+    if (typeof prevData?.dados === "string") {
+      try {
+        prevDados = JSON.parse(prevData.dados);
+      } catch {
+        prevDados = {};
+      }
+    } else if (prevData?.dados && typeof prevData.dados === "object") {
+      prevDados = { ...prevData.dados };
+    }
+
+    await setDoc(
+      docRef,
+      sanitizeForFirestore({
+        dataAtualizacaoDados: nowISO,
+        dados: {
+          ...prevDados,
+          dataAtualizacaoDados: nowISO,
+        },
+      }),
+      { merge: true },
+    );
+
+    invalidateClientsCache();
+    broadcastUpdate("UPDATE_CLIENTS");
+    res.json({ success: true, dataAtualizacaoDados: nowISO });
+  } catch (error) {
+    console.error("Error confirming client data update:", error);
+    res.status(500).json({ error: "Falha ao confirmar atualização de dados do cliente" });
   }
 });
 
@@ -2408,115 +2505,227 @@ const runPaymentReminderPushCheck = async (options: {
     const pushCfg = normalizePushConfig(settings.pushConfig);
     const quietCfg = normalizeQuietHoursConfig(settings.quietHoursConfig);
 
-    if (!options.force && (!pushCfg.enabled || !pushCfg.notifyPaymentReminders)) {
-      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "disabled" };
+    const shouldEvalPayments =
+      Boolean(options.force) || pushCfg.notifyPaymentReminders;
+    const shouldEvalDataUpdates =
+      Boolean(options.force) || pushCfg.notifyClientDataUpdateReminders;
+
+    if (!options.force && (!pushCfg.enabled || (!shouldEvalPayments && !shouldEvalDataUpdates))) {
+      return {
+        alreadyRunning: false,
+        evaluated: 0,
+        dispatched: 0,
+        dataUpdateDispatched: 0,
+        sent: 0,
+        dateISO: targetDateISO,
+        skipped: "disabled",
+      };
     }
 
     if (!options.force && isTimeInQuietWindow(quietCfg, getBrazilTimeHHMM())) {
-      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "quiet_hours" };
+      return {
+        alreadyRunning: false,
+        evaluated: 0,
+        dispatched: 0,
+        dataUpdateDispatched: 0,
+        sent: 0,
+        dateISO: targetDateISO,
+        skipped: "quiet_hours",
+      };
     }
 
     const subs = await loadPushSubscriptionsFromStore();
     if (subs.length === 0) {
-      return { alreadyRunning: false, evaluated: 0, dispatched: 0, sent: 0, dateISO: targetDateISO, skipped: "no_subscriptions" };
+      return {
+        alreadyRunning: false,
+        evaluated: 0,
+        dispatched: 0,
+        dataUpdateDispatched: 0,
+        sent: 0,
+        dateISO: targetDateISO,
+        skipped: "no_subscriptions",
+      };
     }
 
     const clients = await loadAllClientsForSchedule();
-    const evalSettings = {
-      ...settings,
-      autoScheduleConfig: {
-        ...normalizeAutoScheduleConfig(settings.autoScheduleConfig),
-        enabled: true,
-        enviarPreVencimento: pushCfg.incluirPreVencimento,
-        preVencimentoModo: "janela" as const,
-        enviarVenceHoje: pushCfg.incluirVenceHoje,
-        enviarVencido: pushCfg.incluirVencido,
-        frequenciaVencidoDias: "1",
-        enviarCongelado: pushCfg.incluirCongelado7Dias,
-        frequenciaCongeladoDias: "1",
-        incluirEmprestimos: true,
-        incluirLembretesAbater: true,
-      },
-    };
+    const sentKeysForDate = options.force
+      ? new Set<string>()
+      : await loadPushSentKeysForDate(targetDateISO);
 
-    const candidates = evaluateAutoScheduleNotifications(clients, evalSettings, targetDateISO);
-    const sentKeysForDate = options.force ? new Set<string>() : await loadPushSentKeysForDate(targetDateISO);
-
-    const pendingToPush = candidates.filter((item) => !sentKeysForDate.has(`push::${targetDateISO}::${item.id}`));
-    if (pendingToPush.length === 0) {
-      return { alreadyRunning: false, evaluated: candidates.length, dispatched: 0, sent: 0, dateISO: targetDateISO };
-    }
-
-    const situacaoLabels: Record<string, string> = {
-      vence_hoje: "Vence Hoje",
-      pre_vencimento: "Vencimento Próximo",
-      vencido: "Parcela em Atraso",
-      congelado: "Juros Congelados (Prazo 7 dias)",
-    };
-
-    const priorityOrder = (s: string) =>
-      s === "vence_hoje" ? 0 : s === "congelado" ? 1 : s === "vencido" ? 2 : 3;
-    const sorted = [...pendingToPush].sort((a, b) => priorityOrder(a.situacao) - priorityOrder(b.situacao));
-
-    const individualSlice = sorted.slice(0, 3);
     let totalSentDeliveries = 0;
+    const newSentKeys: string[] = [];
 
-    for (const item of individualSlice) {
-      const sitLabel = situacaoLabels[item.situacao] || "Lembrete de Pagamento";
-      const refText = item.parcelaNumero > 0 ? `Parcela ${item.parcelaNumero}` : "Lembrete (Abater)";
-      const res = await sendAdminWebPushNotification(
-        {
-          title: `⏰ ${sitLabel}: ${item.clientName}`,
-          body: `${refText} • Venc.: ${item.dataVencimento} • Valor: ${item.valor}`,
-          tag: `gm-reminder-${targetDateISO}-${item.id}`,
-          type: "payment_reminder",
-          clientId: item.clientId,
-          tab: "lembretes",
-          url: `/?view=admin&tab=lembretes&clientId=${encodeURIComponent(item.clientId)}`,
-          requireInteraction: item.situacao === "vence_hoje" || item.situacao === "congelado",
+    // 1. Lembretes de Pagamento e Vencimentos
+    let candidatesCount = 0;
+    let sortedPayments: any[] = [];
+    if (shouldEvalPayments && (options.force || pushCfg.lastReminderPushDate !== targetDateISO)) {
+      const evalSettings = {
+        ...settings,
+        autoScheduleConfig: {
+          ...normalizeAutoScheduleConfig(settings.autoScheduleConfig),
+          enabled: true,
+          enviarPreVencimento: pushCfg.incluirPreVencimento,
+          preVencimentoModo: "janela" as const,
+          enviarVenceHoje: pushCfg.incluirVenceHoje,
+          enviarVencido: pushCfg.incluirVencido,
+          frequenciaVencidoDias: "1",
+          enviarCongelado: pushCfg.incluirCongelado7Dias,
+          frequenciaCongeladoDias: "1",
+          incluirEmprestimos: true,
+          incluirLembretesAbater: true,
         },
-        undefined,
-        { bypassQuietHours: Boolean(options.force) },
-      );
-      totalSentDeliveries += res.sent;
+      };
+
+      const candidates = evaluateAutoScheduleNotifications(clients, evalSettings, targetDateISO);
+      candidatesCount = candidates.length;
+
+      const pendingToPush = candidates.filter((item) => !sentKeysForDate.has(`push::${targetDateISO}::${item.id}`));
+
+      const situacaoLabels: Record<string, string> = {
+        vence_hoje: "Vence Hoje",
+        pre_vencimento: "Vencimento Próximo",
+        vencido: "Parcela em Atraso",
+        congelado: "Juros Congelados (Prazo 7 dias)",
+      };
+
+      const priorityOrder = (s: string) =>
+        s === "vence_hoje" ? 0 : s === "congelado" ? 1 : s === "vencido" ? 2 : 3;
+      sortedPayments = [...pendingToPush].sort((a, b) => priorityOrder(a.situacao) - priorityOrder(b.situacao));
+
+      if (sortedPayments.length > 0) {
+        const individualSlice = sortedPayments.slice(0, 3);
+
+        for (const item of individualSlice) {
+          const sitLabel = situacaoLabels[item.situacao] || "Lembrete de Pagamento";
+          const refText = item.parcelaNumero > 0 ? `Parcela ${item.parcelaNumero}` : "Lembrete (Abater)";
+          const res = await sendAdminWebPushNotification(
+            {
+              title: `⏰ ${sitLabel}: ${item.clientName}`,
+              body: `${refText} • Venc.: ${item.dataVencimento} • Valor: ${item.valor}`,
+              tag: `gm-reminder-${targetDateISO}-${item.id}`,
+              type: "payment_reminder",
+              clientId: item.clientId,
+              tab: "lembretes",
+              url: `/?view=admin&tab=lembretes&clientId=${encodeURIComponent(item.clientId)}`,
+              requireInteraction: item.situacao === "vence_hoje" || item.situacao === "congelado",
+            },
+            undefined,
+            { bypassQuietHours: Boolean(options.force) },
+          );
+          totalSentDeliveries += res.sent;
+        }
+
+        if (sortedPayments.length > 3) {
+          const extraCount = sortedPayments.length - 3;
+          const venceHojeCount = sortedPayments.filter((i) => i.situacao === "vence_hoje").length;
+          const vencidoCount = sortedPayments.filter((i) => i.situacao === "vencido").length;
+          const congeladoCount = sortedPayments.filter((i) => i.situacao === "congelado").length;
+          const parts = [
+            venceHojeCount > 0 ? `${venceHojeCount} vence hoje` : "",
+            congeladoCount > 0 ? `${congeladoCount} congelado(s)` : "",
+            vencidoCount > 0 ? `${vencidoCount} em atraso` : "",
+          ].filter(Boolean);
+
+          const sumRes = await sendAdminWebPushNotification(
+            {
+              title: `💰 ${sortedPayments.length} Lembretes de Pagamento Pendentes`,
+              body: `Mais ${extraCount} cobrança(s) hoje${parts.length > 0 ? ` (${parts.join(" • ")})` : ""}. Toque para abrir a fila.`,
+              tag: `gm-reminder-summary-${targetDateISO}`,
+              type: "payment_reminder",
+              tab: "lembretes",
+              url: "/?view=admin&tab=lembretes",
+              requireInteraction: true,
+            },
+            undefined,
+            { bypassQuietHours: Boolean(options.force) },
+          );
+          totalSentDeliveries += sumRes.sent;
+        }
+
+        for (const item of sortedPayments) {
+          newSentKeys.push(`push::${targetDateISO}::${item.id}`);
+        }
+      }
     }
 
-    if (sorted.length > 3) {
-      const extraCount = sorted.length - 3;
-      const venceHojeCount = sorted.filter((i) => i.situacao === "vence_hoje").length;
-      const vencidoCount = sorted.filter((i) => i.situacao === "vencido").length;
-      const congeladoCount = sorted.filter((i) => i.situacao === "congelado").length;
-      const parts = [
-        venceHojeCount > 0 ? `${venceHojeCount} vence hoje` : "",
-        congeladoCount > 0 ? `${congeladoCount} congelado(s)` : "",
-        vencidoCount > 0 ? `${vencidoCount} em atraso` : "",
-      ].filter(Boolean);
-
-      const sumRes = await sendAdminWebPushNotification(
-        {
-          title: `💰 ${sorted.length} Lembretes de Pagamento Pendentes`,
-          body: `Mais ${extraCount} cobrança(s) hoje${parts.length > 0 ? ` (${parts.join(" • ")})` : ""}. Toque para abrir a fila.`,
-          tag: `gm-reminder-summary-${targetDateISO}`,
-          type: "payment_reminder",
-          tab: "lembretes",
-          url: "/?view=admin&tab=lembretes",
-          requireInteraction: true,
-        },
-        undefined,
-        { bypassQuietHours: Boolean(options.force) },
+    // 2. Lembretes de Atualização Cadastral dos Clientes (a cada 3 meses / configurado)
+    let dueDataUpdatesForPush: ReturnType<typeof evaluateClientsDueForDataUpdate> = [];
+    if (shouldEvalDataUpdates && (options.force || pushCfg.lastDataUpdatePushDate !== targetDateISO)) {
+      const allDueDataUpdates = evaluateClientsDueForDataUpdate(
+        clients,
+        pushCfg.clientDataUpdateMonths,
+        targetDateISO,
       );
-      totalSentDeliveries += sumRes.sent;
+
+      const isFirstAutomaticSweep = !pushCfg.lastDataUpdatePushDate;
+      dueDataUpdatesForPush = allDueDataUpdates.filter((item) => {
+        const key = `push-data-update::${targetDateISO}::${item.clientId}`;
+        if (sentKeysForDate.has(key)) return false;
+        if (options.force) return true;
+        return (
+          isFirstAutomaticSweep ||
+          item.daysOverdue === 0 ||
+          (item.daysOverdue > 0 && item.daysOverdue % 7 === 0)
+        );
+      });
+
+      if (dueDataUpdatesForPush.length > 0) {
+        const slice = dueDataUpdatesForPush.slice(0, 3);
+        for (const item of slice) {
+          const res = await sendAdminWebPushNotification(
+            {
+              title: `🔄 Atualização Cadastral (${item.intervalMonths} meses): ${item.clientName}`,
+              body: `Último cadastro/atualização em ${item.referenceDateBR}. Solicite novo cadastro do cliente.`,
+              tag: `gm-data-update-${targetDateISO}-${item.clientId}`,
+              type: "payment_reminder",
+              clientId: item.clientId,
+              tab: "lembretes",
+              url: `/?view=admin&tab=lembretes`,
+              requireInteraction: true,
+            },
+            undefined,
+            { bypassQuietHours: Boolean(options.force) },
+          );
+          totalSentDeliveries += res.sent;
+        }
+
+        if (dueDataUpdatesForPush.length > 3) {
+          const sumDataRes = await sendAdminWebPushNotification(
+            {
+              title: `🔄 ${dueDataUpdatesForPush.length} Cliente(s) para Atualização de Dados`,
+              body: `Completaram ${pushCfg.clientDataUpdateMonths} meses desde o cadastro/atualização. Toque para conferir e solicitar recadastro.`,
+              tag: `gm-data-update-summary-${targetDateISO}`,
+              type: "payment_reminder",
+              tab: "lembretes",
+              url: "/?view=admin&tab=lembretes",
+              requireInteraction: true,
+            },
+            undefined,
+            { bypassQuietHours: Boolean(options.force) },
+          );
+          totalSentDeliveries += sumDataRes.sent;
+        }
+
+        for (const item of dueDataUpdatesForPush) {
+          newSentKeys.push(`push-data-update::${targetDateISO}::${item.clientId}`);
+        }
+      }
     }
 
-    await markPushKeysAsSent(
-      sorted.map((item) => `push::${targetDateISO}::${item.id}`),
-      targetDateISO,
-    );
+    if (newSentKeys.length > 0) {
+      await markPushKeysAsSent(newSentKeys, targetDateISO);
+    }
 
     const updatedPushConfig: PushNotificationConfig = {
       ...pushCfg,
-      lastReminderPushDate: targetDateISO,
-      lastReminderPushAt: new Date().toISOString(),
+      lastReminderPushDate: shouldEvalPayments ? targetDateISO : pushCfg.lastReminderPushDate,
+      lastReminderPushAt:
+        sortedPayments.length > 0 || dueDataUpdatesForPush.length > 0
+          ? new Date().toISOString()
+          : pushCfg.lastReminderPushAt,
+      lastDataUpdatePushDate: shouldEvalDataUpdates
+        ? targetDateISO
+        : pushCfg.lastDataUpdatePushDate,
     };
     if (!db) {
       mockSettings = { ...(mockSettings || {}), pushConfig: updatedPushConfig };
@@ -2533,8 +2742,9 @@ const runPaymentReminderPushCheck = async (options: {
     return {
       alreadyRunning: false,
       dateISO: targetDateISO,
-      evaluated: candidates.length,
-      dispatched: sorted.length,
+      evaluated: candidatesCount,
+      dispatched: sortedPayments.length,
+      dataUpdateDispatched: dueDataUpdatesForPush.length,
       sent: totalSentDeliveries,
     };
   } finally {
@@ -2627,6 +2837,7 @@ app.put("/api/push/config", requireAdmin, async (req, res) => {
       ...(req.body || {}),
       lastReminderPushDate: currentSettings.pushConfig?.lastReminderPushDate || "",
       lastReminderPushAt: currentSettings.pushConfig?.lastReminderPushAt || "",
+      lastDataUpdatePushDate: currentSettings.pushConfig?.lastDataUpdatePushDate || "",
     });
     if (!db) {
       mockSettings = { ...(mockSettings || {}), pushConfig: merged };
@@ -3077,10 +3288,14 @@ const startAutoScheduleCron = () => {
       const alreadyAttemptedRecently =
         lastAutoPushAttemptDate === todayISO && nowMs - lastAutoPushAttemptAt < 15 * 60 * 1000;
 
+      const needsPaymentPush =
+        pushCfg.notifyPaymentReminders && pushCfg.lastReminderPushDate !== todayISO;
+      const needsDataUpdatePush =
+        pushCfg.notifyClientDataUpdateReminders && pushCfg.lastDataUpdatePushDate !== todayISO;
+
       if (
         pushCfg.enabled &&
-        pushCfg.notifyPaymentReminders &&
-        pushCfg.lastReminderPushDate !== todayISO &&
+        (needsPaymentPush || needsDataUpdatePush) &&
         nowTime >= pushCfg.horarioLembretePush &&
         !alreadyAttemptedRecently
       ) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import {
   User,
@@ -120,10 +120,21 @@ import {
   BrowserPushDiagnostics,
   checkBrowserPushDiagnostics,
 } from "./utils/pushNotifications";
+import {
+  ClientDataUpdateStatus,
+  evaluateClientDataUpdateStatus,
+  evaluateClientsDueForDataUpdate,
+  buildClientDataUpdateWhatsAppMessage,
+} from "./utils/clientDataUpdateReminders";
 
 export interface AdminNotification {
   id: string;
-  type: "new_client" | "new_loan" | "info";
+  type:
+    | "new_client"
+    | "new_loan"
+    | "info"
+    | "data_update"
+    | "data_update_summary";
   title: string;
   message: string;
   clientId?: string;
@@ -1589,6 +1600,8 @@ export default function App() {
       failed: number;
       at: string;
     } | null>(null);
+  const [confirmingDataUpdateClientId, setConfirmingDataUpdateClientId] =
+    useState<string | null>(null);
 
   const runBrowserPushDiagnostics = async (showToast = false) => {
     setIsVerifyingPushPermission(true);
@@ -2058,16 +2071,25 @@ export default function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        if (data.dispatched > 0) {
-          toast.success(
-            `Push enviado para ${data.dispatched} lembrete(s) de pagamento pendentes!`,
-          );
+        const paymentDispatched = Number(data.dispatched || 0);
+        const dataUpdateDispatched = Number(data.dataUpdateDispatched || 0);
+        if (paymentDispatched > 0 || dataUpdateDispatched > 0) {
+          const parts: string[] = [];
+          if (paymentDispatched > 0) {
+            parts.push(`${paymentDispatched} de pagamento`);
+          }
+          if (dataUpdateDispatched > 0) {
+            parts.push(`${dataUpdateDispatched} de atualização cadastral`);
+          }
+          toast.success(`Push enviado: ${parts.join(" e ")}!`);
         } else if (data.skipped === "no_subscriptions") {
           toast.warning(
             "Nenhum dispositivo inscrito para receber notificações push. Ative o Push neste dispositivo primeiro.",
           );
         } else {
-          toast.info("Nenhum lembrete de pagamento pendente para hoje.");
+          toast.info(
+            "Nenhum lembrete de pagamento ou atualização cadastral pendente para hoje.",
+          );
         }
         await fetchPushStatus(adminToken);
       } else if (res.status === 404) {
@@ -2081,6 +2103,163 @@ export default function App() {
       toast.error("Erro de conexão ao disparar lembretes push.");
     } finally {
       setIsSendingPushReminders(false);
+    }
+  };
+
+  const dueDataUpdateClients = useMemo(
+    () =>
+      evaluateClientsDueForDataUpdate(
+        clients,
+        pushConfig.clientDataUpdateMonths || 3,
+      ),
+    [clients, pushConfig.clientDataUpdateMonths],
+  );
+
+  useEffect(() => {
+    if (!adminToken) return;
+    if (!pushConfig.notifyClientDataUpdateReminders) return;
+    if (dueDataUpdateClients.length === 0) return;
+
+    let notifiedMap: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem("gm_data_update_notified_cycles");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          notifiedMap = parsed;
+        }
+      }
+    } catch {}
+
+    const newlyDue = dueDataUpdateClients.filter(
+      (item) => notifiedMap[item.clientId] !== item.cycleKey,
+    );
+    if (newlyDue.length === 0) return;
+
+    const updatedMap = { ...notifiedMap };
+    newlyDue.forEach((item) => {
+      updatedMap[item.clientId] = item.cycleKey;
+    });
+    try {
+      localStorage.setItem(
+        "gm_data_update_notified_cycles",
+        JSON.stringify(updatedMap),
+      );
+    } catch {}
+
+    const nowIso = new Date().toISOString();
+    const newNotifications: AdminNotification[] = [];
+
+    if (newlyDue.length > 3) {
+      newNotifications.push({
+        id: `data-update-summary-${getBrazilTodayISO()}-${newlyDue.length}`,
+        type: "data_update_summary",
+        title: `Atualização Cadastral (${pushConfig.clientDataUpdateMonths || 3} meses)`,
+        message: `${newlyDue.length} cliente(s) completaram ${pushConfig.clientDataUpdateMonths || 3} meses desde o cadastro/última atualização e precisam recadastrar.`,
+        timestamp: nowIso,
+        read: false,
+      });
+    }
+
+    newlyDue.slice(0, 5).forEach((item) => {
+      newNotifications.push({
+        id: `data-update-${item.clientId}-${item.cycleKey}`,
+        type: "data_update",
+        title: `Atualizar Dados (${item.intervalMonths} meses)`,
+        message:
+          item.daysOverdue === 0
+            ? `${item.clientName} completou ${item.intervalMonths} meses hoje (${item.nextDueBR}). Solicite a atualização cadastral.`
+            : `${item.clientName} completou ${item.intervalMonths} meses em ${item.nextDueBR} (${item.daysOverdue}d).`,
+        clientId: item.clientId,
+        clientName: item.clientName,
+        cpf: item.clientCpf,
+        timestamp: nowIso,
+        read: false,
+      });
+    });
+
+    setAdminNotifications((prev) => {
+      const existingIds = new Set(prev.map((n) => n.id));
+      const uniqueNew = newNotifications.filter((n) => !existingIds.has(n.id));
+      if (uniqueNew.length === 0) return prev;
+      const merged = [...uniqueNew, ...prev].slice(0, 50);
+      try {
+        localStorage.setItem("gm_admin_notifications", JSON.stringify(merged));
+      } catch {}
+      return merged;
+    });
+
+    if (newlyDue.length <= 3) {
+      const first = newlyDue[0];
+      toast.info(
+        newlyDue.length === 1
+          ? `🔄 Lembrete de Recadastro (${first.intervalMonths} meses): ${first.clientName}`
+          : `🔄 ${newlyDue.length} clientes completaram ${first.intervalMonths} meses para atualização cadastral`,
+        {
+          id: `data-update-toast-${first.clientId}-${first.cycleKey}`,
+          description:
+            newlyDue.length === 1
+              ? `Referência: ${first.referenceDateBR}. Confirme a atualização ou envie um lembrete ao cliente.`
+              : `Acesse "Lembretes Agendados" para visualizar todos e enviar lembretes.`,
+          duration: 12000,
+          action: {
+            label: "Ver Lembretes",
+            onClick: () => {
+              setView("admin");
+              setAdminTab("lembretes");
+              setSelectedClient(null);
+            },
+          },
+        },
+      );
+    }
+  }, [
+    adminToken,
+    dueDataUpdateClients,
+    pushConfig.notifyClientDataUpdateReminders,
+    pushConfig.clientDataUpdateMonths,
+  ]);
+
+  const handleConfirmClientDataUpdate = async (clientId: string) => {
+    if (!adminToken || !clientId) return;
+    setConfirmingDataUpdateClientId(clientId);
+    try {
+      const res = await fetch(
+        `/api/clients/${encodeURIComponent(clientId)}/confirm-data-update`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${adminToken}`,
+          },
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(
+          data.error || "Não foi possível confirmar a atualização cadastral.",
+        );
+        return;
+      }
+      const updatedDate = data.dataAtualizacaoDados || getLocalISODateTime();
+      setClients((prev) =>
+        prev.map((c) =>
+          c.id === clientId ? { ...c, dataAtualizacaoDados: updatedDate } : c,
+        ),
+      );
+      setSelectedClient((prev: any) =>
+        prev && prev.id === clientId
+          ? { ...prev, dataAtualizacaoDados: updatedDate }
+          : prev,
+      );
+      const months = pushConfig.clientDataUpdateMonths || 3;
+      toast.success(
+        `Atualização cadastral confirmada! Próximo lembrete em ${months} mês(es).`,
+      );
+    } catch {
+      toast.error("Erro de conexão ao confirmar atualização cadastral.");
+    } finally {
+      setConfirmingDataUpdateClientId(null);
     }
   };
 
@@ -2654,6 +2833,39 @@ export default function App() {
                 },
               });
             }
+          }
+        } else if (data.type === "CLIENT_DATA_UPDATED") {
+          window.dispatchEvent(new CustomEvent("app:update_clients"));
+          if (adminToken && data.payload?.clientName) {
+            const updatedAtIso =
+              data.payload.dataAtualizacaoDados || new Date().toISOString();
+            const notif: AdminNotification = {
+              id: `client-updated-${data.payload.clientId || Date.now()}-${Date.now()}`,
+              type: "info",
+              title: "Dados Cadastrais Atualizados",
+              message: `${data.payload.clientName} atualizou o próprio cadastro. Novo ciclo de ${pushConfigRef.current.clientDataUpdateMonths || 3} meses iniciado.`,
+              clientId: data.payload.clientId,
+              clientName: data.payload.clientName,
+              timestamp: updatedAtIso,
+              read: false,
+            };
+            setAdminNotifications((prev) => {
+              const updated = [notif, ...prev].slice(0, 50);
+              try {
+                localStorage.setItem(
+                  "gm_admin_notifications",
+                  JSON.stringify(updated),
+                );
+              } catch {}
+              return updated;
+            });
+            toast.success(
+              `✅ ${data.payload.clientName} atualizou os dados cadastrais!`,
+              {
+                description: `Ciclo de ${pushConfigRef.current.clientDataUpdateMonths || 3} meses reiniciado.`,
+                duration: 8000,
+              },
+            );
           }
         } else if (data.type === "CHAT_UPDATE" || data.type === "CHAT_READ") {
           if (data.type === "CHAT_UPDATE" && data.payload?.newMessage) {
@@ -3860,10 +4072,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         );
       };
 
+      const editDataTimestamp = getLocalISODateTime();
       const newClient = isEditingClientData
         ? {
             ...selectedClient,
             ...formData,
+            dataAtualizacaoDados: editDataTimestamp,
             arquivos:
               fileUrls.length > 0
                 ? [...(formData.arquivos || []), ...fileUrls]
@@ -3872,7 +4086,8 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
         : {
             ...formData,
             id: generateUUID(),
-            dataCadastro: getLocalISODateTime(),
+            dataCadastro: editDataTimestamp,
+            dataAtualizacaoDados: editDataTimestamp,
             arquivos: fileUrls,
             simulacoes: simulacao.valorSolicitado
               ? [
@@ -3900,6 +4115,7 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
           clientToSave = {
             ...latestClient,
             ...formData,
+            dataAtualizacaoDados: editDataTimestamp,
             arquivos:
               fileUrls.length > 0
                 ? [...(latestClient.arquivos || []), ...fileUrls]
@@ -6627,6 +6843,49 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
               </button>
             </div>
           </div>
+
+          {(() => {
+            const clientUpdateStatus = evaluateClientDataUpdateStatus(
+              selectedClient,
+              pushConfig.clientDataUpdateMonths || 3,
+            );
+            if (!clientUpdateStatus?.isDue) return null;
+            return (
+              <div className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <RefreshCw size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-indigo-950">
+                      Hora de atualizar seu cadastro ({clientUpdateStatus.intervalMonths} meses)
+                    </h3>
+                    <p className="text-xs text-indigo-800 mt-0.5 leading-relaxed">
+                      Já se passaram {clientUpdateStatus.intervalMonths} meses desde{" "}
+                      {clientUpdateStatus.hasExplicitUpdateDate
+                        ? `sua última atualização em ${clientUpdateStatus.referenceDateBR}`
+                        : `seu cadastro em ${clientUpdateStatus.referenceDateBR}`}
+                      . Revise seu telefone, endereço e dados clicando em{" "}
+                      <strong>Atualizar Cadastro</strong>.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormData(selectedClient);
+                    setCategorizedFiles({});
+                    setIsEditingClientData(true);
+                    setView("form");
+                  }}
+                  className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-xs font-bold transition-colors shadow-sm shrink-0"
+                >
+                  <Edit2 size={14} />
+                  Atualizar Cadastro Agora
+                </button>
+              </div>
+            );
+          })()}
 
           <div className="space-y-8">
             {clientSimulacoes.length === 0 ? (
@@ -9706,7 +9965,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                 localStorage.setItem("gm_admin_notifications", JSON.stringify(updated));
                               } catch (err) {}
 
-                              if (n.clientId) {
+                              if (n.type === "data_update_summary") {
+                                setAdminTab("lembretes");
+                                setSelectedClient(null);
+                                setIsNotificationOpen(false);
+                              } else if (n.clientId) {
                                 const client = clients.find((c) => c.id === n.clientId);
                                 if (client) {
                                   setAdminTab("clientes");
@@ -9721,7 +9984,16 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                           >
                             <div className="flex items-start justify-between gap-2">
                               <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                                <span className={`inline-block w-2 h-2 rounded-full ${!n.read ? "bg-yellow-500" : "bg-slate-300"}`}></span>
+                                <span
+                                  className={`inline-block w-2 h-2 rounded-full ${
+                                    !n.read
+                                      ? n.type === "data_update" ||
+                                        n.type === "data_update_summary"
+                                        ? "bg-indigo-500"
+                                        : "bg-yellow-500"
+                                      : "bg-slate-300"
+                                  }`}
+                                ></span>
                                 {n.title}
                               </span>
                               <span className="text-[10px] text-slate-400 whitespace-nowrap">
@@ -9734,10 +10006,12 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             <p className="text-xs text-slate-600 mt-1 line-clamp-2">
                               {n.message}
                             </p>
-                            {n.clientId && (
+                            {(n.clientId || n.type === "data_update_summary") && (
                               <div className="mt-2 flex items-center justify-between">
                                 <span className="text-[11px] text-yellow-700 font-semibold hover:underline">
-                                  Ver ficha cadastral &rarr;
+                                  {n.type === "data_update_summary"
+                                    ? "Abrir lembretes cadastrais →"
+                                    : "Ver ficha cadastral →"}
                                 </span>
                                 {!n.read && (
                                   <span className="text-[9px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
@@ -9931,9 +10205,17 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 setAdminTab("lembretes");
                 setSelectedClient(null);
               }}
-              className={`pb-3 px-4 text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${adminTab === "lembretes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
+              className={`pb-3 px-4 text-sm font-medium transition-colors relative whitespace-nowrap shrink-0 flex items-center gap-1.5 ${adminTab === "lembretes" ? "border-b-2 border-yellow-500 text-yellow-600" : "text-slate-500 hover:text-slate-700"}`}
             >
-              Lembretes Agendados
+              <span>Lembretes Agendados</span>
+              {dueDataUpdateClients.length > 0 && (
+                <span
+                  className="bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none tabular-nums"
+                  title={`${dueDataUpdateClients.length} cliente(s) para atualização cadastral`}
+                >
+                  {dueDataUpdateClients.length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => {
@@ -12300,9 +12582,32 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       );
                     })()}
                   </div>
-                  <p className="text-slate-300">
+                  <p className="text-slate-300 text-sm">
                     CPF: {selectedClient.cpf} | Cadastrado em:{" "}
                     {selectedClient.dataCadastro}
+                    {(() => {
+                      const upd = evaluateClientDataUpdateStatus(
+                        selectedClient,
+                        pushConfig.clientDataUpdateMonths || 3,
+                      );
+                      if (!upd) return null;
+                      return (
+                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs">
+                          <span className="text-slate-400">|</span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-semibold ${
+                              upd.isDue
+                                ? "bg-indigo-500/30 text-indigo-100 border border-indigo-400/50"
+                                : "bg-slate-700 text-slate-200"
+                            }`}
+                          >
+                            {upd.isDue
+                              ? `Recadastro pendente (${upd.intervalMonths}m • ref. ${upd.referenceDateBR})`
+                              : `Próximo recadastro: ${upd.nextDueBR}`}
+                          </span>
+                        </span>
+                      );
+                    })()}
                   </p>
                 </div>
                 <div className="flex gap-3 print:hidden">
@@ -12426,6 +12731,92 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       <span className="font-medium text-slate-500">CEP:</span>{" "}
                       {selectedClient.cep}
                     </p>
+                    {(() => {
+                      const upd = evaluateClientDataUpdateStatus(
+                        selectedClient,
+                        pushConfig.clientDataUpdateMonths || 3,
+                      );
+                      if (!upd) return null;
+                      const digits = normalizeWhatsAppDigitsShared(
+                        selectedClient.telefone,
+                      );
+                      const waMsg = buildClientDataUpdateWhatsAppMessage(
+                        selectedClient.nomeCompleto,
+                        upd,
+                      );
+                      return (
+                        <div
+                          className={`mt-3 p-3 rounded-xl border ${
+                            upd.isDue
+                              ? "bg-indigo-50 border-indigo-200"
+                              : "bg-slate-50 border-slate-200"
+                          } space-y-2`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs">
+                              <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                                <RefreshCw
+                                  size={13}
+                                  className={
+                                    upd.isDue
+                                      ? "text-indigo-600"
+                                      : "text-slate-500"
+                                  }
+                                />
+                                <span>
+                                  {upd.isDue
+                                    ? `Atualização cadastral pendente (${upd.intervalMonths} meses)`
+                                    : `Ciclo cadastral de ${upd.intervalMonths} meses em dia`}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-600 mt-0.5 tabular-nums">
+                                {upd.hasExplicitUpdateDate
+                                  ? `Última atualização confirmada: ${upd.referenceDateBR}`
+                                  : `Sem atualização após cadastro (${upd.referenceDateBR})`}
+                                {" • "}
+                                {upd.isDue
+                                  ? upd.daysOverdue === 0
+                                    ? "Completou hoje"
+                                    : `Vencido há ${upd.daysOverdue} dia(s)`
+                                  : `Próximo lembrete: ${upd.nextDueBR}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleConfirmClientDataUpdate(selectedClient.id)
+                              }
+                              disabled={
+                                confirmingDataUpdateClientId ===
+                                selectedClient.id
+                              }
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-colors disabled:opacity-60"
+                            >
+                              <CheckCircle2 size={13} />
+                              {confirmingDataUpdateClientId === selectedClient.id
+                                ? "Confirmando..."
+                                : "Confirmar Atualização Hoje"}
+                            </button>
+                            {digits.length >= 10 && (
+                              <a
+                                href={formatWhatsAppHref(
+                                  selectedClient.telefone,
+                                  waMsg,
+                                )}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#25D366] hover:bg-[#128C7E] text-white transition-colors"
+                              >
+                                <Send size={12} />
+                                Solicitar Recadastro (WhatsApp)
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <h3 className="text-lg font-semibold text-slate-800 mb-4 mt-8 border-b pb-2">
@@ -15339,6 +15730,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                       <option value="reprovado">Reprovado</option>
                       <option value="cancelado_pelo_cliente">Cancelado</option>
                       <option value="sem_pendencias">Sem Pendências</option>
+                      <option value="atualizacao_3m">
+                        Atualização de Dados ({pushConfig.clientDataUpdateMonths || 3} meses)
+                      </option>
                     </select>
                   </div>
                   <div className="w-full sm:w-auto md:w-40">
@@ -15416,32 +15810,40 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   .filter((c) => {
                     // 1. Status Filter
                     if (statusFilter !== "todos") {
-                      const status = getClientStatus(c);
-                      if (statusFilter === "qualquer_atraso") {
-                        if (
-                          ![
-                            "atrasado",
-                            "muito_atrasado",
-                            "inadimplente_antigo",
-                          ].includes(status)
-                        )
+                      if (statusFilter === "atualizacao_3m") {
+                        const upd = evaluateClientDataUpdateStatus(
+                          c,
+                          pushConfig.clientDataUpdateMonths || 3,
+                        );
+                        if (!upd || !upd.isDue) return false;
+                      } else {
+                        const status = getClientStatus(c);
+                        if (statusFilter === "qualquer_atraso") {
+                          if (
+                            ![
+                              "atrasado",
+                              "muito_atrasado",
+                              "inadimplente_antigo",
+                            ].includes(status)
+                          )
+                            return false;
+                        } else if (statusFilter === "congeladas") {
+                          const isCongeladas =
+                            status === "congeladas" ||
+                            (c.simulacoes || [c.simulacao || {}]).some(
+                              (s: any) =>
+                                isSimulacaoAtiva(s) &&
+                                (s.parcelas || []).some(
+                                  (p: any) =>
+                                    !p.paga &&
+                                    p.status !== "pago" &&
+                                    p.jurosCongelados,
+                                ),
+                            );
+                          if (!isCongeladas) return false;
+                        } else if (status !== statusFilter) {
                           return false;
-                      } else if (statusFilter === "congeladas") {
-                        const isCongeladas =
-                          status === "congeladas" ||
-                          (c.simulacoes || [c.simulacao || {}]).some(
-                            (s: any) =>
-                              isSimulacaoAtiva(s) &&
-                              (s.parcelas || []).some(
-                                (p: any) =>
-                                  !p.paga &&
-                                  p.status !== "pago" &&
-                                  p.jurosCongelados,
-                              ),
-                          );
-                        if (!isCongeladas) return false;
-                      } else if (status !== statusFilter) {
-                        return false;
+                        }
                       }
                     }
 
@@ -15615,6 +16017,21 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                                       );
                                     }
                                     return null;
+                                  })()}
+                                  {(() => {
+                                    const upd = evaluateClientDataUpdateStatus(
+                                      client,
+                                      pushConfig.clientDataUpdateMonths || 3,
+                                    );
+                                    if (!upd?.isDue) return null;
+                                    return (
+                                      <span
+                                        className="bg-indigo-100 text-indigo-800 border border-indigo-200 px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap"
+                                        title={`Cadastro/última atualização em ${upd.referenceDateBR}. Lembrete venceu em ${upd.nextDueBR}.`}
+                                      >
+                                        Recadastro ({upd.intervalMonths}m)
+                                      </span>
+                                    );
                                   })()}
                                 </div>
                               </td>
@@ -16828,6 +17245,165 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                             <strong>Executar Agendamento Agora</strong> para verificar os vencimentos de hoje.
                           </div>
                         )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Lembretes de Atualização Cadastral (A cada X meses) */}
+              {(() => {
+                const intervalMonths = pushConfig.clientDataUpdateMonths || 3;
+                return (
+                  <div className="mb-6 border border-indigo-200 bg-indigo-50/60 rounded-2xl p-4 print:hidden">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 mt-0.5">
+                          <RefreshCw size={18} />
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-800">
+                              Lembretes de Atualização Cadastral (A cada {intervalMonths} mes(es))
+                            </h3>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                                dueDataUpdateClients.length > 0
+                                  ? "bg-indigo-100 text-indigo-800 border-indigo-300"
+                                  : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                              }`}
+                            >
+                              {dueDataUpdateClients.length > 0
+                                ? `${dueDataUpdateClients.length} pendente(s)`
+                                : "Todos em dia"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-0.5">
+                            Clientes que completaram {intervalMonths} mes(es) desde o cadastro ou última atualização confirmada. Ao confirmar, o ciclo reinicia por mais {intervalMonths} mes(es).
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdminTab("configuracoes");
+                          setSelectedClient(null);
+                        }}
+                        className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 bg-white border border-indigo-200 px-3 py-1.5 rounded-lg transition-colors self-start lg:self-auto shrink-0"
+                      >
+                        Configurar Intervalo
+                      </button>
+                    </div>
+
+                    {dueDataUpdateClients.length > 0 && (
+                      <div className="mt-4 bg-white border border-indigo-200 rounded-xl overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                              <th className="py-2.5 px-3 font-semibold">Cliente / CPF</th>
+                              <th className="py-2.5 px-3 font-semibold">Referência / Prazo</th>
+                              <th className="py-2.5 px-3 font-semibold">Situação</th>
+                              <th className="py-2.5 px-3 font-semibold text-right">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {dueDataUpdateClients.map((item: ClientDataUpdateStatus) => {
+                              const phoneDigits = normalizeWhatsAppDigitsShared(item.phone);
+                              const waMsg = buildClientDataUpdateWhatsAppMessage(
+                                item.clientName,
+                                item,
+                              );
+                              return (
+                                <tr
+                                  key={item.clientId}
+                                  className="hover:bg-slate-50/80 transition-colors"
+                                >
+                                  <td className="py-2.5 px-3 align-middle">
+                                    <div className="font-semibold text-slate-800">
+                                      {item.clientName}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 tabular-nums">
+                                      {item.clientCpf || "CPF não informado"}
+                                      {item.phone ? ` • ${item.phone}` : ""}
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3 align-middle tabular-nums">
+                                    <div className="text-slate-700 font-medium">
+                                      {item.hasExplicitUpdateDate
+                                        ? `Última atualização: ${item.referenceDateBR}`
+                                        : `Cadastro inicial: ${item.referenceDateBR}`}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500">
+                                      Completou {item.intervalMonths} meses em{" "}
+                                      <strong>{item.nextDueBR}</strong>
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3 align-middle">
+                                    <span
+                                      className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+                                        item.daysOverdue === 0
+                                          ? "bg-amber-100 text-amber-800 border-amber-200"
+                                          : "bg-indigo-100 text-indigo-800 border-indigo-200"
+                                      }`}
+                                    >
+                                      {item.daysOverdue === 0
+                                        ? "Completa hoje"
+                                        : `Vencido há ${item.daysOverdue}d (${item.monthsElapsed}m)`}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 align-middle text-right whitespace-nowrap">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      {phoneDigits.length >= 10 && (
+                                        <a
+                                          href={formatWhatsAppHref(item.phone, waMsg)}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-white bg-[#25D366] hover:bg-[#128C7E] transition-colors"
+                                          title="Solicitar atualização cadastral via WhatsApp"
+                                        >
+                                          <Send size={11} />
+                                          WhatsApp
+                                        </a>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const target = clients.find(
+                                            (c) => c.id === item.clientId,
+                                          );
+                                          if (target) {
+                                            setAdminTab("clientes");
+                                            handleSelectClient(target);
+                                          }
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors"
+                                      >
+                                        <Eye size={11} />
+                                        Ver Ficha
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleConfirmClientDataUpdate(item.clientId)
+                                        }
+                                        disabled={
+                                          confirmingDataUpdateClientId === item.clientId
+                                        }
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors disabled:opacity-60"
+                                        title="Confirmar que os dados do cliente foram revisados/atualizados hoje"
+                                      >
+                                        <CheckCircle2 size={11} />
+                                        {confirmingDataUpdateClientId === item.clientId
+                                          ? "Confirmando..."
+                                          : "Confirmar Atualização"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
