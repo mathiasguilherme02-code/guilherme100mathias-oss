@@ -3336,11 +3336,42 @@ app.use((err: any, req: any, res: any, next: any) => {
 // Vite middleware for development
 if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   async function startVite() {
+    if (!process.env.DISABLE_HMR) {
+      process.env.DISABLE_HMR = "true";
+    }
+    const hmrDisabled = process.env.DISABLE_HMR === "true";
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ...(hmrDisabled ? { hmr: false, ws: false } : {}),
+      },
       appType: "spa",
     });
+    if (hmrDisabled) {
+      app.get("/@vite/client", async (_req, res, next) => {
+        try {
+          const transformed = await vite.transformRequest("/@vite/client");
+          if (transformed?.code) {
+            const patched = transformed.code
+              .replace(
+                "await wsTransport.connect(handlers);",
+                "/* HMR WebSocket disabled */",
+              )
+              .replace(
+                "wsTransport.send(data);",
+                "/* HMR WebSocket disabled */",
+              );
+            res.setHeader("Content-Type", "application/javascript");
+            res.setHeader("Cache-Control", "no-cache");
+            return res.send(patched);
+          }
+        } catch {
+          // fallback to standard vite middleware
+        }
+        return next();
+      });
+    }
     app.use(vite.middlewares);
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
