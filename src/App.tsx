@@ -60,6 +60,8 @@ import {
   VolumeX,
   Monitor,
   Moon,
+  BarChart3,
+  FileSpreadsheet,
 } from "lucide-react";
 import {
   DEFAULT_WHATSAPP_TEMPLATES,
@@ -101,6 +103,8 @@ import {
   WaDynamicTagItem,
 } from "./components/WhatsAppTemplatesControlPanel";
 import { CentralizedReminderTemplatesSection } from "./components/CentralizedReminderTemplatesSection";
+import { DelinquencyEvolutionChart } from "./components/DelinquencyEvolutionChart";
+import { exportClientsToExcel } from "./utils/clientsExcelExport";
 import {
   DEFAULT_PUSH_CONFIG,
   normalizePushConfig,
@@ -632,6 +636,8 @@ export default function App() {
     | "produtos"
     | "configuracoes"
   >("clientes");
+  const [showClientesDelinquencyChart, setShowClientesDelinquencyChart] =
+    useState(false);
   //
 
   const [produtos, setProdutos] = useState<Produto[]>([]);
@@ -15774,6 +15780,19 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                     <RefreshCw size={15} className={isRefreshingClients ? "animate-spin" : ""} />
                     <span>Atualizar</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowClientesDelinquencyChart((prev) => !prev)}
+                    title="Exibir ou ocultar gráfico de evolução mensal da inadimplência"
+                    className={`px-3 py-2 border rounded-lg text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+                      showClientesDelinquencyChart
+                        ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                        : "border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700"
+                    }`}
+                  >
+                    <BarChart3 size={15} />
+                    <span>Inadimplência</span>
+                  </button>
                   <div className="w-full sm:w-auto md:w-56">
                     <select
                       value={statusFilter}
@@ -15856,6 +15875,14 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </div>
                 </div>
               </div>
+              {showClientesDelinquencyChart && (
+                <div className="p-6 bg-slate-50/70 border-b border-slate-200">
+                  <DelinquencyEvolutionChart
+                    clients={clients}
+                    taxaAtrasoDia={adminSettings.taxaAtrasoDia}
+                  />
+                </div>
+              )}
               {(() => {
                 const searchMatchedClients = clients
                   .filter((c) => c.id !== "admin-transactions")
@@ -15969,6 +15996,9 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                 const displayedClients = showingFallbackSearchMatches
                   ? searchMatchedClients
                   : filteredClients;
+                const registeredClientsCount = clients.filter(
+                  (c) => c.id !== "admin-transactions",
+                ).length;
 
                 return (
                   <>
@@ -15993,6 +16023,66 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                         </button>
                       </div>
                     )}
+                    <div className="px-6 py-3 bg-slate-50/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs font-medium text-slate-600">
+                        {displayedClients.length === registeredClientsCount ? (
+                          <span>
+                            <strong className="text-slate-800">
+                              {registeredClientsCount}
+                            </strong>{" "}
+                            {registeredClientsCount === 1
+                              ? "cliente cadastrado"
+                              : "clientes cadastrados"}
+                          </span>
+                        ) : (
+                          <span>
+                            Exibindo{" "}
+                            <strong className="text-slate-800">
+                              {displayedClients.length}
+                            </strong>{" "}
+                            de{" "}
+                            <strong className="text-slate-800">
+                              {registeredClientsCount}
+                            </strong>{" "}
+                            clientes cadastrados
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="export-clients-xlsx-btn"
+                        disabled={registeredClientsCount === 0}
+                        onClick={() => {
+                          try {
+                            const exportedCount = exportClientsToExcel(clients, {
+                              taxaAtrasoDia: adminSettings.taxaAtrasoDia,
+                              getClientStatusLabel: (c) =>
+                                getStatusDisplay(getClientStatus(c)).label,
+                              getClientMaxDiasAtraso,
+                            });
+                            if (exportedCount === 0) {
+                              toast.info(
+                                "Não há clientes cadastrados para exportar.",
+                              );
+                            } else {
+                              toast.success(
+                                `${exportedCount} cliente(s) exportado(s) para Excel (XLSX).`,
+                              );
+                            }
+                          } catch (err) {
+                            console.error("Erro ao exportar Excel:", err);
+                            toast.error(
+                              "Não foi possível gerar o arquivo Excel.",
+                            );
+                          }
+                        }}
+                        title="Exportar lista completa de clientes cadastrados para Excel (XLSX)"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
+                      >
+                        <FileSpreadsheet size={16} />
+                        <span>Exportar Excel (XLSX)</span>
+                      </button>
+                    </div>
                     {displayedClients.length > 0 ? (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
@@ -18535,6 +18625,11 @@ ${missingRequired.map((c) => `- ${c.label}`).join("\\n")}`,
                   </form>
                 </div>
               </div>
+
+              <DelinquencyEvolutionChart
+                clients={clients}
+                taxaAtrasoDia={adminSettings.taxaAtrasoDia}
+              />
 
               <div className="bg-white rounded-2xl shadow-xl p-6">
                 <h3 className="text-lg font-bold text-slate-800 mb-4">
